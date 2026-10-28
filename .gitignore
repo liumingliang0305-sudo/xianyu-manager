@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+
+# 本地数据和凭证：cookie 等同于账号密码，绝对不能提交
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.sqlite3
+cookies*.json
+logs/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
