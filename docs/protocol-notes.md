@@ -158,7 +158,10 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 网页端不显示开关的时候（`canOpenLongLogin` 为 false）不提交，免得发出网页端不会发的请求。
 
 2026-10-29 实测：当天扫码登录的账号查出来是 `canOpenLongLogin: false`、`hasLongTokenLogin: false`，凭证里也没有长登录标记。
-🔍 为什么不能开还不知道：可能是账号本身不支持，也可能和登录方式（纯 HTTP 扫码、`umidTag=SERVER`）有关。下次扫码时 `xianyu login` 会打印结果。
+同一天用新代码重新扫码（落到 `/im` 后马上查）也一样是 `canOpenLongLogin: false`，所以没有提交 `setLoginSettings.do`，
+新凭证里还是没有 `havana_lgc_exp` / `cookie3_bak_exp`，也没有 `sdkSilent`。
+🔍 为什么不能开还不知道：可能是账号本身不支持，也可能和登录方式（纯 HTTP 扫码、`umidTag=SERVER`、没走登录框的
+`keepLoginConfirm` 弹窗）有关。可以在浏览器里正常登录一次 goofish.com，看右上角个人信息弹窗里有没有"保存登录信息"开关来区分。
 
 ### 免密续期
 
@@ -174,7 +177,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 
 - 网页端每打开一个页面就调一次（`main.js`，成功后刷新页面），靠 `sdkSilent` 限频；
 - ✅ 没有长登录标记时不发请求：2026-10-29 在上面那个凭证上调 `silent_renew`，直接返回"没有开启保持登录"，一个请求都没发；
-- 🔍 真正调 `silentHasLogin.do` 还没在线上验证过，要先有开了保持登录的凭证。
+- 🔍 真正调 `silentHasLogin.do` 还没在线上验证过，要先有开了保持登录的凭证（上面的账号两次登录都开不了）。
 - `hasLogin.do` 是登录框（`mini_login.htm`）自己用的"已登录 / 快速进入"检查，插件和 Ydisks 现在的续期都不调它，我们也不用。
 - goofish-cli 不走接口：用 Playwright 打开首页，弹出登录框时点"快速进入"。
 
