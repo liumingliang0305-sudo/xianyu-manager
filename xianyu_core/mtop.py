@@ -109,9 +109,15 @@ class MtopClient:
         version: str = "1.0",
         spm_cnt: str = "a21ybx.home.0.0",
         extra_params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """调用一个 mtop 接口，成功时返回响应里的 `data`，失败抛 XianyuError 的子类。"""
-        return await self._call(api, data, version, spm_cnt, extra_params, retry_token=True)
+        """调用一个 mtop 接口，成功时返回响应里的 `data`，失败抛 XianyuError 的子类。
+
+        `extra_params` 覆盖或补充 URL 参数，`headers` 覆盖默认请求头（卖家工作台的接口要用）。
+        """
+        return await self._call(
+            api, data, version, spm_cnt, extra_params, headers, retry_token=True
+        )
 
     async def _call(
         self,
@@ -120,6 +126,7 @@ class MtopClient:
         version: str,
         spm_cnt: str,
         extra_params: dict[str, str] | None,
+        headers: dict[str, str] | None,
         *,
         retry_token: bool,
     ) -> dict[str, Any]:
@@ -145,7 +152,7 @@ class MtopClient:
             f"{MTOP_HOST}/h5/{api.lower()}/{version}/",
             params=params,
             data={"data": data_str},
-            headers=MTOP_HEADERS,
+            headers={**MTOP_HEADERS, **(headers or {})},
         )
         raw = self._parse(api, resp)
         codes = ret_codes(raw.get("ret"))
@@ -157,7 +164,7 @@ class MtopClient:
             if retry_token and self._m_h5_tk() != used_tk:
                 log.debug("[%s] token 已更新，重签后重试一次", api)
                 return await self._call(
-                    api, data, version, spm_cnt, extra_params, retry_token=False
+                    api, data, version, spm_cnt, extra_params, headers, retry_token=False
                 )
             raise AuthRequiredError(f"[{api}] 令牌失效且平台没有下发新令牌", ret=codes, raw=raw)
         raise _classify(api, codes, raw)

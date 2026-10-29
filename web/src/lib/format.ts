@@ -1,10 +1,10 @@
-import type { Item } from "@/lib/api"
+import type { Item, OrderStatus } from "@/lib/api"
 
-/** 35800 → "¥358"，1050 → "¥10.5" */
+/** 35800 → "¥358"，1050 → "¥10.5"，-139 → "-¥1.39" */
 export function yuan(cents: number | null | undefined): string {
   if (cents == null) return "-"
-  const text = (cents / 100).toFixed(2).replace(/\.?0+$/, "")
-  return `¥${text}`
+  const text = (Math.abs(cents) / 100).toFixed(2).replace(/\.?0+$/, "")
+  return `${cents < 0 ? "-" : ""}¥${text}`
 }
 
 /** 用户输入的元（字符串）→ 分；不合法返回 null。和后端 yuan_to_cent 规则一致：最多两位小数。 */
@@ -50,6 +50,16 @@ export const STATE_LABEL: Record<ItemState, string> = {
   gone: "不在主页",
 }
 
+export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
+  unpaid: "待付款",
+  to_ship: "待发货",
+  shipped: "已发货",
+  done: "交易成功",
+  closed: "已关闭",
+  refund: "退款中",
+  other: "其他",
+}
+
 // 阿里图床只认这几档尺寸，别的（比如 96）会返回 1×1 的空图。2026-10-29 实测
 const THUMB_SIZES = [80, 120, 160, 200, 240, 300, 400]
 
@@ -65,4 +75,9 @@ export function thumb(url: string, size = 160): string {
 
 export function itemUrl(itemId: string): string {
   return `https://www.goofish.com/item?id=${itemId}`
+}
+
+/** 网页版的订单详情页（卖家视角） */
+export function orderUrl(orderId: string): string {
+  return `https://www.goofish.com/order-detail?orderId=${orderId}&role=seller`
 }

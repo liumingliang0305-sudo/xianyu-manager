@@ -116,3 +116,84 @@ def test_serves_built_frontend_with_spa_fallback(tmp_path, accounts):
         assert client.get("/favicon.svg").text == "<svg/>"
         assert client.get("/api/nope").status_code == 404
         assert "secret" not in client.get("/..%2Fsecret.txt").text
+
+
+def orders_url(path=""):
+    return f"/api/accounts/{UNB}/orders{path}"
+
+
+def test_orders_sync_list_and_detail(client):
+    assert client.get(orders_url()).json() == {"orders": [], "last_synced_at": None}
+    result = client.post(orders_url("/sync")).json()
+    assert sorted(result["added"]) == ["5001", "5002"]
+
+    body = client.get(orders_url()).json()
+    assert [o["order_id"] for o in body["orders"]] == ["5002", "5001"]
+    assert "raw" not in body["orders"][0]
+    assert [o["order_id"] for o in client.get(orders_url("?status=done")).json()["orders"]] == [
+        "5001"
+    ]
+
+    detail = client.get(orders_url("/5002/detail")).json()
+    assert detail["amount_cent"] == 36800
+    assert detail["fields"][0] == {"title": "订单编号", "value": "5002"}
+    assert "raw" not in detail
+
+
+def test_order_price_flow(client, platform):
+    fields = client.get(orders_url("/5002/price-fields")).json()["fields"]
+    assert [(f["key"], f["price_cent"]) for f in fields] == [
+        ("modifyFee", 35800),
+        ("newTransportFee", 1000),
+    ]
+
+    resp = client.post(orders_url("/5002/price"), json={"fees": {"modifyFee": "3"}})
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "price_guard"
+
+    resp = client.post(orders_url("/5002/price"), json={"fees": {"modifyFee": "abc"}})
+    assert resp.status_code == 400
+
+    resp = client.post(
+        orders_url("/5002/price"), json={"fees": {"modifyFee": "299", "newTransportFee": "0"}}
+    )
+    assert resp.json() == {"old_price_cent": 36800, "price_cent": 29900}
+    assert platform.orders["5002"]["post"] == 0
+
+    ops = client.get(f"/api/accounts/{UNB}/order-ops?order_id=5002").json()["ops"]
+    assert [(op["detail"]["to"], op["ok"]) for op in ops] == [(29900, True)]
+
+
+def test_order_price_not_allowed_is_400(client):
+    resp = client.post(orders_url("/5001/price"), json={"fees": {"modifyFee": "1"}})
+    assert resp.status_code == 400
+    assert "待付款" in resp.json()["message"]
+
+
+def test_add_and_remove_order(client, platform):
+    platform.orders["5003000000001"] = {
+        "item_id": "1001",
+        "status": "等待卖家发货",
+        "price": 35800,
+        "post": 0,
+        "created": 1761900000000,
+    }
+    resp = client.post(
+        orders_url(), json={"order": "https://www.goofish.com/order-detail?orderId=5003000000001"}
+    )
+    body = resp.json()
+    assert body["added"] is True
+    assert (body["order"]["order_id"], body["order"]["status"]) == ("5003000000001", "to_ship")
+    assert client.post(orders_url(), json={"order": "5003000000001"}).json()["added"] is False
+
+    assert client.post(orders_url(), json={"order": "abc"}).status_code == 400
+    assert client.delete(orders_url("/5003000000001")).json() == {"ok": True}
+    assert client.delete(orders_url("/5003000000001")).status_code == 400
+    assert client.get(orders_url()).json()["orders"] == []
+
+
+def test_sync_without_list_permission(client, platform):
+    platform.fail["mtop.taobao.idle.trade.merchant.sold.get"] = "PERMISSION_EXCEPTION::无权限访问"
+    result = client.post(orders_url("/sync")).json()
+    assert result["source"] == "detail"
+    assert result["updated"] == []

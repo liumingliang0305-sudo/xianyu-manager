@@ -15,7 +15,10 @@
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
 - [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
-- [ ] 业务功能：订单、消息、自动回复、自动发货……
+- [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
+- [x] 订单管理：按订单号添加、刷新进行中的订单、按状态查看、实时详情、改价、改动记录（[app/orders.py](app/orders.py)，后台"订单"页）
+- [ ] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），等即时消息做好后从交易消息里记
+- [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 ## 快速上手
 
@@ -40,6 +43,21 @@ uv run xym items down <商品ID>      # 下架
 uv run xym items delete <商品ID>    # 删除，平台上不可恢复
 uv run xym items log               # 通过本系统做过的改动，成功失败都有记录
 ```
+
+订单管理（卖出的订单）。个人卖家在网页端拿不到卖出订单列表，要在闲鱼 App「我卖出的」里点进订单、复制订单编号，一笔笔添加：
+
+```bash
+uv run xym orders add <订单号或订单链接>       # 添加，会拉一次详情确认是你卖出的订单
+uv run xym orders sync                       # 刷新本地还没结束的订单；专业卖家会从卖家工作台整页同步
+uv run xym orders list --status to_ship      # 看本地库里的订单；状态有 unpaid / to_ship / shipped / done / closed / refund / other
+uv run xym orders show <订单ID>               # 实时详情：进度、金额明细（含软件服务费、预估到手）、订单信息
+uv run xym orders price <订单ID>              # 待付款订单：先列出能改的价格项（商品价格、运费）
+uv run xym orders price <订单ID> modifyFee=99 # 改价，没写的项保持原值；总价降一半以上或涨一倍以上要加 --force
+uv run xym orders log                        # 本系统对订单做过的改动
+uv run xym orders remove <订单ID>             # 从本地列表移除，不动平台上的订单
+```
+
+发货还没做：网页版闲鱼也不支持发货，要在闲鱼 App 里操作。
 
 ### 管理后台
 
@@ -89,19 +107,22 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   credential.py    账号凭证（cookie）的读写
   auth/qr_login.py 扫码登录
   item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
+  order.py         订单接口：卖出的订单列表（卖家工作台）、订单详情、改价（price render → adjust）
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回
-  db.py            本地 SQLite（data/xianyu.db）：items、item_ops 两张表
+  db.py            本地 SQLite（data/xianyu.db）：items、item_ops、orders、order_ops 四张表
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
+  orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
-  （以后）订单、消息、自动化……
+  （以后）消息、自动化……
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
+  src/features/orders/ 订单管理页：添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
 ```

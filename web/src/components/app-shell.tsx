@@ -37,7 +37,7 @@ interface NavEntry {
 
 const NAV: NavEntry[] = [
   { to: "/items", label: "商品", icon: PackageIcon },
-  { to: "/orders", label: "订单", icon: ShoppingCartIcon, soon: true },
+  { to: "/orders", label: "订单", icon: ShoppingCartIcon },
   { to: "/messages", label: "消息", icon: MessageSquareIcon, soon: true },
 ]
 

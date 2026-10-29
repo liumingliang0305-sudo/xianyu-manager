@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from app import db
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts
 from app.items import ItemService, PriceGuardError
+from app.orders import OrderService
 from xianyu_core.errors import AuthRequiredError, RiskControlError, XianyuError
 from xianyu_core.item import yuan_to_cent
 
@@ -55,6 +56,15 @@ class DescIn(BaseModel):
     desc: str
 
 
+class OrderAddIn(BaseModel):
+    order: str  # 订单号，或者订单详情页的链接
+
+
+class OrderPriceIn(BaseModel):
+    fees: dict[str, str]  # 价格项 key → 新金额（元），没传的项保持原值
+    force: bool = False
+
+
 def create_app(
     *,
     db_path: str | Path = db.DEFAULT_PATH,
@@ -70,6 +80,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         conn = db.connect(db_path)
         app.state.items = ItemService(conn, accounts, interval=interval)
+        app.state.orders = OrderService(conn, accounts, interval=interval)
         try:
             yield
         finally:
@@ -82,6 +93,9 @@ def create_app(
 
     def items(request: Request) -> ItemService:
         return request.app.state.items
+
+    def orders(request: Request) -> OrderService:
+        return request.app.state.orders
 
     def account(account_id: str) -> str:
         return accounts.resolve(account_id)
@@ -162,6 +176,73 @@ def create_app(
         request: Request, account_id: str, item_id: str | None = None, limit: int = 50
     ) -> dict[str, Any]:
         ops = items(request).history(account(account_id), item_id, limit=min(limit, 500))
+        return {"ops": [asdict(op) for op in ops]}
+
+    @app.get("/api/accounts/{account_id}/orders")
+    async def list_orders(
+        request: Request, account_id: str, status: str | None = None
+    ) -> dict[str, Any]:
+        records = orders(request).list(account(account_id), status=status)
+        return {
+            "orders": [asdict(r) for r in records],
+            "last_synced_at": max((r.synced_at for r in records), default=None),
+        }
+
+    @app.post("/api/accounts/{account_id}/orders")
+    async def add_order(request: Request, account_id: str, body: OrderAddIn) -> dict[str, Any]:
+        account_id = account(account_id)
+        async with locks[account_id]:
+            record, added = await orders(request).add(account_id, body.order)
+        return {"order": asdict(record), "added": added}
+
+    @app.delete("/api/accounts/{account_id}/orders/{order_id}")
+    async def remove_order(request: Request, account_id: str, order_id: str) -> dict[str, Any]:
+        if not orders(request).remove(account(account_id), order_id):
+            raise ValueError(f"本地没有订单 {order_id}")
+        return {"ok": True}
+
+    @app.post("/api/accounts/{account_id}/orders/sync")
+    async def sync_orders(request: Request, account_id: str) -> dict[str, Any]:
+        account_id = account(account_id)
+        async with locks[account_id]:
+            result = await orders(request).sync(account_id)
+        return asdict(result)
+
+    @app.get("/api/accounts/{account_id}/orders/{order_id}/detail")
+    async def order_detail(request: Request, account_id: str, order_id: str) -> dict[str, Any]:
+        account_id = account(account_id)
+        async with locks[account_id]:
+            detail = await orders(request).fetch_detail(account_id, order_id)
+        data = asdict(detail)
+        data.pop("raw")
+        return data
+
+    @app.get("/api/accounts/{account_id}/orders/{order_id}/price-fields")
+    async def order_price_fields(
+        request: Request, account_id: str, order_id: str
+    ) -> dict[str, Any]:
+        account_id = account(account_id)
+        async with locks[account_id]:
+            fields = await orders(request).price_fields(account_id, order_id)
+        return {"fields": [asdict(f) for f in fields]}
+
+    @app.post("/api/accounts/{account_id}/orders/{order_id}/price")
+    async def change_order_price(
+        request: Request, account_id: str, order_id: str, body: OrderPriceIn
+    ) -> dict[str, Any]:
+        account_id = account(account_id)
+        fees = {key: yuan_to_cent(value) for key, value in body.fees.items()}
+        async with locks[account_id]:
+            old, new = await orders(request).change_price(
+                account_id, order_id, fees, force=body.force
+            )
+        return {"old_price_cent": old, "price_cent": new}
+
+    @app.get("/api/accounts/{account_id}/order-ops")
+    async def order_ops(
+        request: Request, account_id: str, order_id: str | None = None, limit: int = 50
+    ) -> dict[str, Any]:
+        ops = orders(request).history(account(account_id), order_id, limit=min(limit, 500))
         return {"ops": [asdict(op) for op in ops]}
 
     if web_dist and (web_dist / "index.html").is_file():

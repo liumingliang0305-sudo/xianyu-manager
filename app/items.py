@@ -25,6 +25,17 @@ class PriceGuardError(ValueError):
     """改价幅度超过保护线。确认没输错的话加 force=True。"""
 
 
+def check_price_change(old: int, new: int, max_change: float) -> None:
+    """`max_change` 是 0.5 时，降价超过一半或涨价超过一倍抛 PriceGuardError。订单改价也用。"""
+    if old <= 0:
+        return
+    low, high = old * (1 - max_change), old / (1 - max_change)
+    if not low <= new <= high:
+        raise PriceGuardError(
+            f"价格从 {cent_to_yuan(old)} 元改到 {cent_to_yuan(new)} 元，变化超过保护线"
+        )
+
+
 @dataclass
 class ItemRecord:
     account_id: str
@@ -250,13 +261,7 @@ class ItemService:
     # ---- 内部 ----
 
     def _check_price(self, old: int, new: int) -> None:
-        if old <= 0:
-            return
-        low, high = old * (1 - self._max_change), old / (1 - self._max_change)
-        if not low <= new <= high:
-            raise PriceGuardError(
-                f"价格从 {cent_to_yuan(old)} 元改到 {cent_to_yuan(new)} 元，变化超过保护线"
-            )
+        check_price_change(old, new, self._max_change)
 
     async def _record(
         self,

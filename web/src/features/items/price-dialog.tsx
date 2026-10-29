@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils"
 
 import { useChangePrice } from "./queries"
 
-function YuanInput({
+export function YuanInput({
   id,
   value,
   onChange,

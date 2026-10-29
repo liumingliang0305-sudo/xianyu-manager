@@ -40,6 +40,39 @@ CREATE TABLE IF NOT EXISTS item_ops (
     created_at REAL    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS item_ops_item ON item_ops (account_id, item_id);
+
+-- 卖出的订单
+CREATE TABLE IF NOT EXISTS orders (
+    account_id    TEXT    NOT NULL,
+    order_id      TEXT    NOT NULL,
+    item_id       TEXT    NOT NULL DEFAULT '',
+    title         TEXT    NOT NULL DEFAULT '',
+    pic_url       TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL,          -- 归一后的状态，见 xianyu_core/order.py
+    status_text   TEXT    NOT NULL DEFAULT '', -- 平台原文
+    price_cent    INTEGER,                   -- 订单金额
+    quantity      INTEGER NOT NULL DEFAULT 1,
+    buyer_id      TEXT    NOT NULL DEFAULT '',
+    buyer_nick    TEXT    NOT NULL DEFAULT '',
+    created_at    REAL,                      -- 下单时间
+    raw           TEXT    NOT NULL DEFAULT '{}', -- 平台最近一次返回的原始数据（JSON）
+    first_seen_at REAL    NOT NULL,
+    synced_at     REAL    NOT NULL,
+    PRIMARY KEY (account_id, order_id)
+);
+
+-- 通过本系统对订单做过的改动
+CREATE TABLE IF NOT EXISTS order_ops (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT    NOT NULL,
+    order_id   TEXT    NOT NULL,
+    action     TEXT    NOT NULL,             -- price
+    detail     TEXT    NOT NULL,             -- JSON：改前改后
+    ok         INTEGER NOT NULL,
+    error      TEXT,
+    created_at REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS order_ops_order ON order_ops (account_id, order_id);
 """
 
 

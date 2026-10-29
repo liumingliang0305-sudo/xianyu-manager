@@ -55,6 +55,88 @@ export interface SyncResult {
   gone: string[]
 }
 
+/** 后端按平台的状态文字归类，认不出的是 other */
+export type OrderStatus = "unpaid" | "to_ship" | "shipped" | "done" | "closed" | "refund" | "other"
+
+export interface Order {
+  account_id: string
+  order_id: string
+  item_id: string
+  title: string
+  pic_url: string
+  status: OrderStatus
+  status_text: string
+  price_cent: number | null
+  quantity: number
+  buyer_id: string
+  buyer_nick: string
+  created_at: number | null
+  first_seen_at: number
+  synced_at: number
+}
+
+export interface OrderDetail {
+  order_id: string
+  item_id: string
+  status: OrderStatus
+  status_title: string
+  status_desc: string
+  steps: { title: string; done: boolean; time: number | null }[]
+  title: string
+  pic_url: string
+  sku: string
+  quantity: number
+  amount_title: string
+  amount_cent: number | null
+  /** 金额明细，含平台扣的软件服务费（负数） */
+  bills: { title: string; cent: number | null }[]
+  /** 卖家视角的"预估到手" */
+  income_title: string
+  income_cent: number | null
+  fields: { title: string; value: string }[]
+  receiver_name: string
+  receiver_phone: string
+  receiver_address: string
+  /** 平台给卖家显示的按钮，比如"修改价格" */
+  actions: string[]
+  /** 当前账号是不是卖家；平台没给时是 null */
+  seller: boolean | null
+  buyer_id: string
+  buyer_nick: string
+  created_at: number | null
+}
+
+/** 订单改价里的一项（商品价格、运费……），key 是提交时的字段名 */
+export interface PriceField {
+  key: string
+  name: string
+  price_cent: number | null
+}
+
+export interface OrderOp {
+  id: number
+  account_id: string
+  order_id: string
+  action: "price"
+  detail: {
+    from?: number
+    to?: number
+    fields?: { key: string; name: string; from: number | null; to: number }[]
+  }
+  ok: boolean
+  error: string | null
+  created_at: number
+}
+
+export interface OrderSyncResult {
+  /** list：从卖家工作台整页拉的（专业卖家）；detail：逐个刷新了本地还没结束的订单 */
+  source: "list" | "detail"
+  added: string[]
+  updated: string[]
+  changed: string[]
+  failed: string[]
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -86,6 +168,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const itemsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/items`
+const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)}/orders`
 
 export const api = {
   accounts: () => request<{ accounts: Account[] }>("/accounts").then((r) => r.accounts),
@@ -129,6 +212,44 @@ export const api = {
   ops: (account: string, itemId?: string) =>
     request<{ ops: ItemOp[] }>(
       `/accounts/${encodeURIComponent(account)}/item-ops${itemId ? `?item_id=${itemId}` : ""}`,
+    ).then((r) => r.ops),
+
+  orders: (account: string) =>
+    request<{ orders: Order[]; last_synced_at: number | null }>(ordersPath(account)),
+
+  addOrder: (account: string, order: string) =>
+    request<{ order: Order; added: boolean }>(ordersPath(account), {
+      method: "POST",
+      body: JSON.stringify({ order }),
+    }),
+
+  removeOrder: (account: string, orderId: string) =>
+    request<{ ok: true }>(`${ordersPath(account)}/${orderId}`, { method: "DELETE" }),
+
+  syncOrders: (account: string) =>
+    request<OrderSyncResult>(`${ordersPath(account)}/sync`, { method: "POST" }),
+
+  orderDetail: (account: string, orderId: string) =>
+    request<OrderDetail>(`${ordersPath(account)}/${orderId}/detail`),
+
+  orderPriceFields: (account: string, orderId: string) =>
+    request<{ fields: PriceField[] }>(`${ordersPath(account)}/${orderId}/price-fields`).then(
+      (r) => r.fields,
+    ),
+
+  changeOrderPrice: (
+    account: string,
+    orderId: string,
+    body: { fees: Record<string, string>; force?: boolean },
+  ) =>
+    request<{ old_price_cent: number; price_cent: number }>(
+      `${ordersPath(account)}/${orderId}/price`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  orderOps: (account: string, orderId?: string) =>
+    request<{ ops: OrderOp[] }>(
+      `/accounts/${encodeURIComponent(account)}/order-ops${orderId ? `?order_id=${orderId}` : ""}`,
     ).then((r) => r.ops),
 }
 

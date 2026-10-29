@@ -77,6 +77,65 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 两次编辑前后比对 editDetail，除 `priceInCent` 外所有字段（图片、描述、标签、地址、邮费、类目）都没变，
 说明直接带回 editDetail 里的标签是可行的。
 
+## 订单
+
+> 来源：2026-10-29 读网页端 xy-site 0.0.179 的 `p_order-detail-index.js`、`p_im-index.js`、`p_bought-index.js`，
+> 卖家工作台 seller-workbench 0.1.68，以及 Ydisks-Xianyu-Helper（Apache-2.0）的 `internal/xianyu/mtop/`。
+> ✅ 是用个人卖家账号实测过的（只读）；🔍 是网页端代码里看到的调用，没在线上调过；📦 只在开源实现里见过。
+
+网页版主站只有"我买到的"（`mtop.idle.web.trade.bought.list`），**没有卖出的订单列表**；卖出的订单在卖家工作台
+`seller.goofish.com/?site=COMMONPRO#/seller-trade/order-manage`，工作台是微前端，订单页的代码是动态加载的，没读到。
+发货在网页版也没有入口（订单卡片上的"发货"按钮是弹二维码让去 App）。
+
+**2026-10-29 用个人卖家账号实测（只读）：个人卖家在网页端拿不到卖出的订单列表。**
+- `merchant.sold.get` 返回 `PERMISSION_EXCEPTION::无权限访问`。工作台加载时先调
+  `mtop.alibaba.idle.seller.platform.user.business.identity.get`（`{}`）查商家身份 ✅，这个账号返回 `data: []`，
+  工作台前端遇到空列表就跳 `/no-permission`。也就是说卖家工作台只对"闲鱼专业卖家"开放；
+- 网页版个人中心的"我卖出的"是灰的，跳 App（`fleamarket://SoldItems`）；手机 H5 的"我发布的"
+  （`moyu-project-idle-my-publish` 0.0.167）里也只有商品管理的接口，没有卖出订单；
+- 消息页：`mtop.taobao.idlemessage.pc.session.sync` v3.0、`{fetchNum: 50}` ✅ 返回最近 50 个会话
+  （`hasMore` 为真时更早的要靠长连接推送），`session.itemInfo.itemId` 和 `itemInfo.sellerInfo.userId` 能分出
+  自己是卖家的会话。`mtop.idle.trade.pc.message.headinfo` ✅（`{itemId, sessionId, sessionType: 1}`，
+  `valueType=string`）返回聊天窗口顶部的卡片：没有订单时 `template: "common"`，`commonData` 只有
+  `itemId`、`itemPreInfo`、`supportPCTrade`；按网页端代码，有订单时 `commonData` 里有 `orderId` 和
+  `orderDetailUrl`，`right.data.btnList` 是订单按钮。实测查了 11 个自己当卖家的会话（含已卖出商品的 3 个），
+  都没有订单。
+- "我买到的" `mtop.idle.web.trade.bought.list` ✅（`{pageNumber, orderStatus: "ALL"}`，`valueType=string`；
+  `orderStatus` 还可以是 `NOT_PAY` / `NOT_SHIP` / `SHIPPED` / `NOT_RATE` / `REFUND`）：返回 `items[]`（`commonData`、
+  `head`、`content`、`tail`）、`nextPage`、`lastEndRow`，`totalCount` 总是 0。`commonData` 有 `orderId`、`itemId`、
+  `seller`、`tradeStatusEnum`（见过 `trade_success`、`refund_success`）等。实测里 `seller` 全是 false，只有买到的订单；
+- 照着它试了 `mtop.idle.web.trade.sold.list`、`.sell.list`、`.seller.list`，都是 `FAIL_SYS_API_NOT_FOUNDED`。
+  App 里"我卖出的"是原生页面，走 App 端签名的接口，网页这套签名调不了。
+
+| 接口 | 版本 | 请求体 | 说明 |
+|---|---|---|---|
+| `mtop.taobao.idle.trade.merchant.sold.get` 📦 | 1.0 | `{pageNumber, rowsPerPage, orderIds: "", queryCode: "ALL", orderSearchParam: "{}"}` | 卖出的订单。和别的接口不一样：URL 参数 `type=json`、`valueType=string`，请求头 `idle_site_biz_code: COMMONPRO`，Origin / Referer 是 seller.goofish.com。返回 `data.module.items[]` 和 `nextPage`；每条里 `commonData` 有 `orderId`、`itemId`、`orderStatus`（中文）、`inRefund`，`buyerInfoVO.buyerId`，金额在 `priceVO`。标题、图片、下单时间的字段名 Ydisks 也是猜的 |
+| `mtop.idle.web.trade.order.detail` ✅ | 1.0 | `{tid: 订单号}`，`valueType=string` | 订单详情，买卖双方共用，见下 |
+| `mtop.taobao.idle.trade.order.modify.price.render` 🔍 | 1.0 | `{bizOrderId}` | 改价弹窗的初值：`modifyPriceRenderList[]`，每项 `{key, name, price}`，`price` 是元。Ydisks 里 key 是 `modifyFee`（商品价）和 `newTransportFee`（运费） |
+| `mtop.taobao.idle.trade.user.adjust.price` 🔍 | 1.0 | `{<key>: 分的字符串, ..., orderId}` | 改价。网页端把弹窗里每一项都提交，没改的用初值，元 ×100 转成分 |
+| `mtop.taobao.idle.trade.order.close.reason.get` 🔍 | 1.0 | `{bizOrderId}` | 关闭订单的可选原因 `closeReasons[]`（还没做） |
+| `mtop.taobao.idle.trade.close.by.seller` 🔍 | **2.0** | `{tid, closeReason, bizOrderId}` | 卖家关闭订单（还没做） |
+| `mtop.taobao.idle.trade.seller.delay.confirm` 🔍 | 1.0 | `{delayTime: 秒数字符串, orderId}` | 卖家给买家延长收货（还没做） |
+| `mtop.taobao.idle.logistic.consign.dummy` 📦 | 1.0 | `{orderId, tradeText, picList, newUnconsign: true}` | 虚拟商品"确认发货"（还没做） |
+
+### 订单详情的返回
+
+2026-10-29 用一笔真实的已完成订单（卖家视角）核对过，`OrderDetail.parse` 全部字段都对得上：
+- 顶层：`seller`（布尔，当前账号是不是卖家，用来拒绝误加买到的订单）、`peerUserId`（对方 ID）、`itemId`、`orderId`、
+  `status`（数字，交易成功是 4）、`commonInfo.createTime`（毫秒）、`utArgs`（`orderStatus`、
+  `orderStatusName` 比如"买家已确认收货，交易成功"、`orderMainTitle`）、`bottomBarVO.buttonList[]`（`name`、`tradeAction`，
+  已完成订单是 查看评价 / 查看钱款 / 删除订单）；
+- `components[]` 按 `render` 分块：`orderStatusVO`（`orderStatusInfo.title`、`descRichText`（已完成时是空数组）、
+  `orderStatusNodeList[]` 的 `title`/`completed`/`time`）、`userGuideVO`、`orderInfoVO`；
+- `orderInfoVO`：`itemInfo`（`title`、`itemMainPictCdnUrl`、`buyAmount`、`price`）；`priceInfo.amount`（`title` 是"成交价"、`value`），
+  `billList[]`（`code` 有 `ITEM_TOTAL_FEE`、`POST_FEE`），`softwareBill`（"软件服务费"，负数），`expectBill`（"预估到手"）；
+  `orderInfoList[]` 是 订单编号 / 交易快照 / 支付宝交易号 / 收货地址 / 买家昵称 / 下单时间 / 付款时间 / 发货时间 / 成交时间；
+- 已完成的订单**没有** `addressInfoVO`，地址在 `orderInfoList` 的"收货地址"里。按网页端代码，没发货的订单才有
+  `addressInfoVO`（`name`、`phoneNumber`、`address`）。
+
+订单状态只给中文文字，`xianyu_core.order.order_status` 按关键词归成 unpaid / to_ship / shipped / done / closed / refund，
+认不出的算 other。
+
 ## 登录态续期
 
 - `passport.goofish.com/newlogin/hasLogin.do`、`silentHasLogin.do`
@@ -106,9 +165,9 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `mtop.idle.pc.idleitem.publish` | 发布商品 |
 | `mtop.taobao.idle.kgraph.property.recommend` | 类目和属性推荐 |
 | `mtop.taobao.idle.item.polish` / `mtop.idle.item.polish` | 擦亮 |
-| `mtop.taobao.idle.trade.merchant.sold.get` | 卖出的订单 |
-| `mtop.idle.web.trade.order.detail` | 订单详情 |
-| `mtop.taobao.idle.trade.user.adjust.price` | 改价 |
+| `mtop.taobao.idle.trade.merchant.sold.get` | 卖出的订单。见上面"订单" |
+| `mtop.idle.web.trade.order.detail` | 订单详情。见上面"订单" |
+| `mtop.taobao.idle.trade.user.adjust.price` | 订单改价。见上面"订单" |
 | `mtop.taobao.idle.logistic.consign.dummy` | 虚拟发货 |
 | `mtop.taobao.idle.rate.create` | 评价 |
 | `mtop.taobao.idle.merchant.rate.list` | 评价列表 |
