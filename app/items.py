@@ -186,6 +186,8 @@ class ItemService:
         force: bool = False,
     ) -> int:
         """改售价（可同时改原价），返回改之前的售价。"""
+        if price_cent <= 0:
+            raise ValueError("售价必须大于 0")
         async with self._accounts.mtop(account_id) as mtop:
             api = ItemApi(mtop)
             detail = await api.edit_detail(item_id)
@@ -248,15 +250,12 @@ class ItemService:
     # ---- 内部 ----
 
     def _check_price(self, old: int, new: int) -> None:
-        if new <= 0:
-            raise PriceGuardError("售价必须大于 0")
         if old <= 0:
             return
         low, high = old * (1 - self._max_change), old / (1 - self._max_change)
         if not low <= new <= high:
             raise PriceGuardError(
-                f"价格从 {cent_to_yuan(old)} 元改到 {cent_to_yuan(new)} 元，变化超过保护线，"
-                "确认没输错请加 force"
+                f"价格从 {cent_to_yuan(old)} 元改到 {cent_to_yuan(new)} 元，变化超过保护线"
             )
 
     async def _record(

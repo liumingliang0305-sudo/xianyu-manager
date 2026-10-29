@@ -14,11 +14,12 @@
 - [ ] 限流和风控熔断
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
 - [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
+- [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
 - [ ] 业务功能：订单、消息、自动回复、自动发货……
 
 ## 快速上手
 
-需要 [uv](https://docs.astral.sh/uv/)，Python 3.12 以上。
+需要 [uv](https://docs.astral.sh/uv/) 和 Python 3.12 以上；管理后台的前端还要 Node.js 20 以上。
 
 ```bash
 uv sync                                      # 安装依赖
@@ -38,6 +39,27 @@ uv run xym items desc <商品ID> 描述.txt
 uv run xym items down <商品ID>      # 下架
 uv run xym items delete <商品ID>    # 删除，平台上不可恢复
 uv run xym items log               # 通过本系统做过的改动，成功失败都有记录
+```
+
+### 管理后台
+
+后台接口没有登录鉴权，只监听本机（127.0.0.1）。
+
+平时用：先打包一次前端，之后只要起后台，浏览器打开 http://127.0.0.1:8000 。
+
+```bash
+npm --prefix web install && npm --prefix web run build   # 第一次，或前端代码更新后
+uv run xym serve                                          # 接口和打包好的页面都在 8000 端口
+```
+
+改前端时：开两个终端，一个跑接口，一个跑 Vite 开发服务器（改代码自动刷新，`/api` 会转给 8000 端口），打开 http://localhost:5173 。
+
+```bash
+uv run xym serve
+```
+
+```bash
+npm --prefix web run dev
 ```
 
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
@@ -70,10 +92,14 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回
   db.py            本地 SQLite（data/xianyu.db）：items、item_ops 两张表
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
+  api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
   （以后）订单、消息、自动化……
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网）
-web/             管理后台
+web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
+  src/lib/api.ts       后端接口和类型
+  src/components/ui/   shadcn/ui 组件（npx shadcn@latest add 生成，可以直接改）
+  src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
 ```

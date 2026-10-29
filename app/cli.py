@@ -8,6 +8,7 @@ uv run xym items desc <商品ID> <文本文件> [-y]
 uv run xym items down <商品ID> [-y]              下架
 uv run xym items delete <商品ID> [-y]            删除，平台上不可恢复
 uv run xym items log [商品ID]                     本系统做过的改动
+uv run xym serve [--port 8000]                  启动管理后台，只监听本机
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
 """
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from app import db
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts
-from app.items import ItemRecord, ItemService
+from app.items import ItemRecord, ItemService, PriceGuardError
 from xianyu_core.errors import XianyuError
 from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
 
@@ -105,9 +106,12 @@ async def run(args: argparse.Namespace) -> int:
             question += f"、原价改成 {_yuan(orig)}"
         if not _confirm(question + "？", args.yes):
             return 1
-        old = await service.change_price(
-            account, args.item_id, price, orig_price_cent=orig, force=args.force
-        )
+        try:
+            old = await service.change_price(
+                account, args.item_id, price, orig_price_cent=orig, force=args.force
+            )
+        except PriceGuardError as exc:
+            raise PriceGuardError(f"{exc}，确认没输错请加 --force") from exc
         print(f"已改价：{_yuan(old)} → {_yuan(price)}")
     elif cmd == "desc":
         text = Path(args.file).read_text(encoding="utf-8").strip()
@@ -139,6 +143,23 @@ async def run(args: argparse.Namespace) -> int:
             if op.action == "price":
                 change = f" {_yuan(op.detail.get('from'))} → {_yuan(op.detail.get('to'))}"
             print(f"{when}  {op.item_id}  {op.action}{change}  {result}")
+    return 0
+
+
+def serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from app.api import WEB_DIST, create_app
+
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"警告：接口没有登录鉴权，监听 {args.host} 意味着别人也能操作你的闲鱼账号",
+            file=sys.stderr,
+        )
+    if not (WEB_DIST / "index.html").is_file():
+        print("没有找到 web/dist，只启动接口。前端开发用 cd web && npm run dev", file=sys.stderr)
+    app = create_app(db_path=args.db, accounts_dir=args.accounts)
+    uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
@@ -183,11 +204,17 @@ def main(argv: list[str] | None = None) -> int:
     p = items.add_parser("log", help="本系统做过的改动")
     p.add_argument("item_id", nargs="?")
 
+    p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
+    p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")
+    p.add_argument("--port", type=int, default=8000)
+
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    if args.command == "serve":
+        return serve(args)
     try:
         return asyncio.run(run(args))
     except (XianyuError, AccountNotFoundError, ValueError) as exc:
