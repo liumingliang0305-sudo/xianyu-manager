@@ -157,7 +157,7 @@ def serve(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     if not (WEB_DIST / "index.html").is_file():
-        print("没有找到 web/dist，只启动接口。前端开发用 cd web && npm run dev", file=sys.stderr)
+        print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
     app = create_app(db_path=args.db, accounts_dir=args.accounts)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

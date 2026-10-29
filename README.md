@@ -45,11 +45,13 @@ uv run xym items log               # 通过本系统做过的改动，成功失�
 
 后台接口没有登录鉴权，只监听本机（127.0.0.1）。
 
+前端用 pnpm，版本固定在 `web/package.json` 的 `packageManager` 里。没装过的话先运行一次 `corepack enable pnpm`（Node 自带的 corepack 会按这个版本下载 pnpm）。
+
 平时用：先打包一次前端，之后只要起后台，浏览器打开 http://127.0.0.1:8000 。
 
 ```bash
-npm --prefix web install && npm --prefix web run build   # 第一次，或前端代码更新后
-uv run xym serve                                          # 接口和打包好的页面都在 8000 端口
+pnpm -C web install && pnpm -C web build   # 第一次，或前端代码更新后
+uv run xym serve                            # 接口和打包好的页面都在 8000 端口
 ```
 
 改前端时：开两个终端，一个跑接口，一个跑 Vite 开发服务器（改代码自动刷新，`/api` 会转给 8000 端口），打开 http://localhost:5173 。
@@ -59,7 +61,7 @@ uv run xym serve
 ```
 
 ```bash
-npm --prefix web run dev
+pnpm -C web dev
 ```
 
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
@@ -98,7 +100,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型
-  src/components/ui/   shadcn/ui 组件（npx shadcn@latest add 生成，可以直接改）
+  src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
