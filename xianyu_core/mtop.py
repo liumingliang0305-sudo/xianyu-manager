@@ -2,7 +2,7 @@
 
 - 响应里的 Set-Cookie 会自动进 cookie jar，`credential` 属性随时拿到最新 cookie；
 - 平台说 token 过期并下发了新 `_m_h5_tk` 时，用新 token 重签一次；
-- 风控错误一律抛 RiskControlError，不重试。
+- 风控错误一律抛 RiskControlError，不重试；传了 guard 时顺手熔断这个账号（见 guard.py）。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import logging
 import re
 import struct
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -27,6 +27,9 @@ from xianyu_core.errors import (
     XianyuError,
 )
 from xianyu_core.sign import h5_token, mtop_sign
+
+if TYPE_CHECKING:
+    from xianyu_core.guard import AccountGuard
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +93,9 @@ class MtopClient:
         *,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        guard: AccountGuard | None = None,
     ):
+        self._guard = guard  # 限流和熔断，不传就不管
         # 传入 client 时共用它的 cookie jar（扫码登录就是这样用的），关闭由调用方负责
         self._owns_client = client is None
         self._client = client or new_client(
@@ -115,9 +120,16 @@ class MtopClient:
 
         `extra_params` 覆盖或补充 URL 参数，`headers` 覆盖默认请求头（卖家工作台的接口要用）。
         """
-        return await self._call(
-            api, data, version, spm_cnt, extra_params, headers, retry_token=True
-        )
+        if self._guard:
+            await self._guard.acquire(api)
+        try:
+            return await self._call(
+                api, data, version, spm_cnt, extra_params, headers, retry_token=True
+            )
+        except RiskControlError as exc:
+            if self._guard:
+                self._guard.trip(str(exc))
+            raise
 
     async def _call(
         self,

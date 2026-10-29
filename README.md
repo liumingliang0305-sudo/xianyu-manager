@@ -11,7 +11,7 @@
 - [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)）
 - [ ] 登录后开启"保持登录"、cookie 定时续期
 - [ ] 即时消息（WebSocket + MessagePack）
-- [ ] 限流和风控熔断
+- [x] 限流和风控熔断：每个账号改动 3 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
 - [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
@@ -59,6 +59,13 @@ uv run xym orders remove <订单ID>             # 从本地列表移除，不动
 
 发货还没做：网页版闲鱼也不支持发货，要在闲鱼 App 里操作。
 
+所有请求都有限流（每个账号改动 3 次/分钟、读 30 次/分钟）。碰到风控（滑块、"被挤爆啦"）时账号自动暂停 30 分钟，
+期间不发任何请求。先到闲鱼 App 或网页完成验证，再提前解除：
+
+```bash
+uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验证，解除"
+```
+
 ### 管理后台
 
 后台接口没有登录鉴权，只监听本机（127.0.0.1）。
@@ -104,6 +111,7 @@ async with MtopClient(credential) as mtop:
 xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   sign.py          mtop 签名
   mtop.py          mtop 请求客户端，按错误码抛 AuthRequired / RiskControl 等异常
+  guard.py         按账号的限流和风控熔断，熔断状态存在 data/guard.json
   credential.py    账号凭证（cookie）的读写
   auth/qr_login.py 扫码登录
   item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除

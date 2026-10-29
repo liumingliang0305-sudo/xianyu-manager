@@ -16,6 +16,7 @@ uv run xym orders price <订单ID> [项=金额 ...] [--force] [-y]
                                                 不带金额时列出能改的价格项
 uv run xym orders log [订单ID]                    本系统对订单做过的改动
 uv run xym orders remove <订单ID> [-y]           从本地列表移除，不动平台上的订单
+uv run xym accounts unblock [-y]                手动解除风控熔断（先在闲鱼 App 完成验证）
 uv run xym serve [--port 8000]                  启动管理后台，只监听本机
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
@@ -31,10 +32,10 @@ import time
 from pathlib import Path
 
 from app import db
-from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts
+from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
 from app.items import ItemRecord, ItemService, PriceGuardError
 from app.orders import OrderRecord, OrderService
-from xianyu_core.errors import XianyuError
+from xianyu_core.errors import CircuitOpenError, XianyuError
 from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
 from xianyu_core.order import STATUS_TEXT as ORDER_STATUS_TEXT
 
@@ -109,11 +110,29 @@ def _parse_fees(pairs: list[str]) -> dict[str, int]:
 async def run(args: argparse.Namespace) -> int:
     if args.command == "orders":
         return await run_orders(args)
+    if args.command == "accounts":
+        return run_accounts(args)
     return await run_items(args)
 
 
+def run_accounts(args: argparse.Namespace) -> int:
+    guard = make_guard(args.db)
+    account = Accounts(args.accounts, guard=guard).resolve(args.account)
+    block = guard.block(account)
+    if not block:
+        print(f"账号 {account} 没有在熔断期")
+        return 0
+    print(f"账号 {account} 熔断中：{_time(block.since)} 起，{_time(block.until)} 自动恢复")
+    print(f"原因：{block.reason}")
+    if not _confirm("确认已经在闲鱼 App 或网页上完成验证，现在解除？", args.yes):
+        return 1
+    guard.unblock(account)
+    print("已解除")
+    return 0
+
+
 async def run_orders(args: argparse.Namespace) -> int:
-    accounts = Accounts(args.accounts)
+    accounts = Accounts(args.accounts, guard=make_guard(args.db))
     account = accounts.resolve(args.account)
     service = OrderService(db.connect(args.db), accounts)
     cmd = args.orders_command
@@ -206,7 +225,7 @@ async def run_orders(args: argparse.Namespace) -> int:
 
 
 async def run_items(args: argparse.Namespace) -> int:
-    accounts = Accounts(args.accounts)
+    accounts = Accounts(args.accounts, guard=make_guard(args.db))
     account = accounts.resolve(args.account)
     service = ItemService(db.connect(args.db), accounts)
     cmd = args.items_command
@@ -367,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
     p = orders.add_parser("log", help="本系统对订单做过的改动")
     p.add_argument("order_id", nargs="?")
 
+    accounts_cmd = sub.add_parser("accounts", help="账号").add_subparsers(
+        dest="accounts_command", required=True
+    )
+    p = accounts_cmd.add_parser("unblock", help="手动解除风控熔断")
+    p.add_argument("-y", "--yes", action="store_true", help="不再确认")
+
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
     p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")
     p.add_argument("--port", type=int, default=8000)
@@ -382,6 +407,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(run(args))
     except (XianyuError, AccountNotFoundError, ValueError) as exc:
         print(f"失败：{exc}", file=sys.stderr)
+        if isinstance(exc, CircuitOpenError):
+            print(
+                "先到闲鱼 App 或网页完成验证；完成后可以用 xym accounts unblock 提前解除",
+                file=sys.stderr,
+            )
         return 1
     except KeyboardInterrupt:
         return 130

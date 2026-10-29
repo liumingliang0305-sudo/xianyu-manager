@@ -197,3 +197,31 @@ def test_sync_without_list_permission(client, platform):
     result = client.post(orders_url("/sync")).json()
     assert result["source"] == "detail"
     assert result["updated"] == []
+
+
+def test_risk_control_trips_breaker_until_unblocked(client, platform):
+    platform.fail["mtop.idle.pc.idleitem.editDetail"] = "RGV587_ERROR::SM::哎哟喂,被挤爆啦"
+    assert client.post(items_url("/1001/price"), json={"price": "299"}).json()["code"] == (
+        "risk_control"
+    )
+
+    sent = len(platform.calls)
+    resp = client.get(items_url("/1001/detail"))
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "circuit_open"
+    assert len(platform.calls) == sent  # 熔断期间一个请求都没发
+
+    [acc] = client.get("/api/accounts").json()["accounts"]
+    assert "RGV587" in acc["block"]["reason"]
+    assert client.delete(f"/api/accounts/{UNB}/block").json() == {"ok": True}
+    assert client.get("/api/accounts").json()["accounts"][0]["block"] is None
+    assert client.get(items_url("/1001/detail")).status_code == 200
+
+
+def test_writes_are_rate_limited(client, platform):
+    for price in ("300", "310", "320"):
+        assert client.post(items_url("/1001/price"), json={"price": price}).status_code == 200
+    resp = client.post(items_url("/1001/price"), json={"price": "330"})
+    assert resp.status_code == 429
+    assert resp.json()["code"] == "rate_limited"
+    assert platform.items["1001"]["price"] == 32000

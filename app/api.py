@@ -3,7 +3,8 @@
 约定：
 - 金额：响应里一律是分（`*_cent`，整数）；请求里的价格是元的字符串（"49"、"12.5"），服务端校验换算；
 - 出错时返回 `{"code": ..., "message": ...}`，`code` 见 ERRORS；
-- 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖。
+- 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖；
+- 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态和命令行共用。
 """
 
 from __future__ import annotations
@@ -23,10 +24,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import db
-from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts
+from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
 from app.items import ItemService, PriceGuardError
 from app.orders import OrderService
-from xianyu_core.errors import AuthRequiredError, RiskControlError, XianyuError
+from xianyu_core.errors import (
+    AuthRequiredError,
+    CircuitOpenError,
+    RateLimitedError,
+    RiskControlError,
+    XianyuError,
+)
+from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -37,6 +45,8 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountNotFoundError, 404, "account_not_found"),
     (AuthRequiredError, 401, "auth_required"),
     (RiskControlError, 503, "risk_control"),
+    (CircuitOpenError, 503, "circuit_open"),
+    (RateLimitedError, 429, "rate_limited"),
     (XianyuError, 502, "platform_error"),
     (ValueError, 400, "invalid"),
 ]
@@ -72,8 +82,9 @@ def create_app(
     transport: httpx.AsyncBaseTransport | None = None,
     interval: float = 1.5,
     web_dist: Path | None = WEB_DIST,
+    guard: Guard | None = None,
 ) -> FastAPI:
-    accounts = Accounts(accounts_dir, transport=transport)
+    accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard(db_path))
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @asynccontextmanager
@@ -102,12 +113,23 @@ def create_app(
 
     @app.get("/api/accounts")
     async def list_accounts() -> dict[str, Any]:
+        guard = accounts.guard
         return {
             "accounts": [
-                {"id": account_id, "saved_at": accounts.load(account_id).saved_at}
+                {
+                    "id": account_id,
+                    "saved_at": accounts.load(account_id).saved_at,
+                    "block": _block(guard.block(account_id)) if guard else None,
+                }
                 for account_id in accounts.ids()
             ]
         }
+
+    @app.delete("/api/accounts/{account_id}/block")
+    async def unblock_account(account_id: str) -> dict[str, Any]:
+        """手动解除熔断。应该先在闲鱼 App 或网页上完成验证再解除。"""
+        account_id = account(account_id)
+        return {"ok": bool(accounts.guard and accounts.guard.unblock(account_id))}
 
     @app.get("/api/accounts/{account_id}/items")
     async def list_items(
@@ -248,6 +270,10 @@ def create_app(
     if web_dist and (web_dist / "index.html").is_file():
         _mount_web(app, web_dist)
     return app
+
+
+def _block(block: Block | None) -> dict[str, Any] | None:
+    return asdict(block) if block else None
 
 
 def _error_handler(status: int, code: str):

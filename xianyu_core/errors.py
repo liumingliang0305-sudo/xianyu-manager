@@ -50,3 +50,23 @@ class VerificationRequiredError(QRLoginError):
     def __init__(self, message: str, *, verification_url: str = "", **kwargs: Any):
         super().__init__(message, status="CONFIRMED", **kwargs)
         self.verification_url = verification_url
+
+
+class RateLimitedError(XianyuError):
+    """本地限流：这个账号请求太频繁，请求没有发出去。`retry_after` 秒后再试。"""
+
+    def __init__(self, message: str, *, retry_after: float, **kwargs: Any):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
+
+
+class CircuitOpenError(XianyuError):
+    """账号触发风控后处在熔断期，请求没有发出去。
+
+    到 `until`（秒级时间戳）自动恢复，也可以手动解除。
+    """
+
+    def __init__(self, message: str, *, until: float, reason: str = "", **kwargs: Any):
+        super().__init__(message, **kwargs)
+        self.until = until
+        self.reason = reason

@@ -1,8 +1,16 @@
 // 后端接口（app/api.py）。金额：响应里是分（*_cent），请求里的价格是元的字符串。
 
+/** 风控熔断：从 since 到 until（秒级时间戳）这个账号不发任何请求 */
+export interface AccountBlock {
+  since: number
+  until: number
+  reason: string
+}
+
 export interface Account {
   id: string
   saved_at: number | null
+  block: AccountBlock | null
 }
 
 export interface Item {
@@ -173,6 +181,11 @@ const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)
 export const api = {
   accounts: () => request<{ accounts: Account[] }>("/accounts").then((r) => r.accounts),
 
+  unblock: (account: string) =>
+    request<{ ok: boolean }>(`/accounts/${encodeURIComponent(account)}/block`, {
+      method: "DELETE",
+    }),
+
   items: (account: string) =>
     request<{ items: Item[]; last_synced_at: number | null }>(
       `${itemsPath(account)}?include_gone=true`,
@@ -260,7 +273,9 @@ export function errorMessage(error: unknown): string {
     case "auth_required":
       return "闲鱼登录已失效，请在终端运行 uv run xianyu login 重新扫码"
     case "risk_control":
-      return "触发了闲鱼风控，先暂停操作，到闲鱼 App 或网页完成验证后再试"
+      return "触发了闲鱼风控，账号已自动暂停请求。先到闲鱼 App 或网页完成验证"
+    case "circuit_open":
+      return `${error.message}。在闲鱼 App 或网页完成验证后，可以在页面顶部提前解除`
     default:
       return error.message
   }

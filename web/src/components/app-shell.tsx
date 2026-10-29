@@ -13,6 +13,7 @@ import { useTheme } from "next-themes"
 import type { ComponentType, ReactNode } from "react"
 import { NavLink, Outlet } from "react-router"
 
+import { GuardBanner } from "@/components/guard-banner"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -169,7 +170,12 @@ function Content() {
     )
   }
   // 换账号时整页重新挂载，各页面的筛选和弹窗状态不会串到别的账号
-  return <Outlet key={account} />
+  return (
+    <>
+      <GuardBanner />
+      <Outlet key={account} />
+    </>
+  )
 }
 
 export function AppShell() {

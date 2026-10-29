@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ThemeProvider } from "next-themes"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
@@ -11,7 +11,16 @@ import { ApiError } from "@/lib/api"
 import App from "./App"
 import "./index.css"
 
-const queryClient = new QueryClient({
+// 碰到风控或熔断时重新拉账号列表，页面顶部的熔断提示马上出来
+const refreshBlocks = (error: unknown) => {
+  if (error instanceof ApiError && ["risk_control", "circuit_open"].includes(error.code)) {
+    queryClient.invalidateQueries({ queryKey: ["accounts"] })
+  }
+}
+
+const queryClient: QueryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: refreshBlocks }),
+  mutationCache: new MutationCache({ onError: refreshBlocks }),
   defaultOptions: {
     queries: {
       // 商品详情会实时请求闲鱼，切回窗口时不要自动重新拉
