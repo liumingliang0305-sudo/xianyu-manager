@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from xianyu_core.constants import COOKIE_DOMAIN, LOGIN_COOKIES
+from xianyu_core.constants import COOKIE_DOMAIN, KEEP_LOGIN_COOKIES, LOGIN_COOKIES
 from xianyu_core.sign import h5_token
 
 
@@ -32,6 +32,12 @@ class Credential:
     @property
     def h5_token(self) -> str:
         return h5_token(self.cookies.get("_m_h5_tk"))
+
+    @property
+    def keep_login_until(self) -> float | None:
+        """保持登录（长登录）的到期时间，秒级时间戳。没开保持登录时是 None。"""
+        times = [cookie_time(self.cookies.get(name)) for name in KEEP_LOGIN_COOKIES]
+        return max((t for t in times if t), default=None)
 
     def missing_login_cookies(self) -> list[str]:
         return [name for name in LOGIN_COOKIES if not self.cookies.get(name)]
@@ -71,6 +77,14 @@ class Credential:
             if sep and name:
                 cookies[name] = value
         return cls(cookies=cookies)
+
+
+def cookie_time(value: str | None) -> float | None:
+    """毫秒时间戳形式的 cookie 值（havana_lgc_exp、sdkSilent 等）→ 秒。没有或不是数字时是 None。"""
+    try:
+        return int(value) / 1000 if value else None
+    except ValueError:
+        return None
 
 
 def cookies_to_jar(cookies: dict[str, str], jar: httpx.Cookies) -> None:

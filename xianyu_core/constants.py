@@ -25,3 +25,6 @@ BROWSER_HEADERS = {
 
 # 判定"已登录"至少要有的 cookie：unb 是用户 ID，cookie2 是会话，_m_h5_tk 用来签名
 LOGIN_COOKIES = ("unb", "cookie2", "_m_h5_tk")
+
+# 开了"保持登录"才有的长登录标记，值是到期的毫秒时间戳。免密续期靠它们
+KEEP_LOGIN_COOKIES = ("havana_lgc_exp", "cookie3_bak_exp")

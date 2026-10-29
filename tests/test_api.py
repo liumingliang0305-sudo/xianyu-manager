@@ -1,9 +1,10 @@
 import httpx
 import pytest
-from fakes import UNB
+from fakes import UNB, keep_login_cookies
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from xianyu_core.credential import Credential
 
 
 @pytest.fixture
@@ -81,6 +82,45 @@ def test_platform_errors_map_to_codes(client, platform, ret, status, code):
     resp = client.post(items_url("/1001/price"), json={"price": "299"})
     assert resp.status_code == status
     assert resp.json()["code"] == code
+
+
+def login_checks(platform):
+    return sum(api == "mtop.taobao.idlemessage.pc.loginuser.get" for api, _ in platform.calls)
+
+
+def test_accounts_carry_login_status_and_reuse_it(client, platform):
+    login = client.get("/api/accounts").json()["accounts"][0]["login"]
+    assert login["state"] == "valid"
+    assert login["renewed"] is False
+    assert login_checks(platform) == 1
+
+    client.get("/api/accounts")
+    assert login_checks(platform) == 1  # 刚确认过，不再请求平台
+
+    # 别的接口碰到会话失效（续期也没成功），账号列表直接反映出来
+    platform.session_expired = True
+    assert client.post(items_url("/sync"), json={}).status_code == 401
+    login = client.get("/api/accounts").json()["accounts"][0]["login"]
+    assert login["state"] == "expired"
+    assert "保持登录" in login["message"]
+    assert login_checks(platform) == 1
+
+
+def test_check_endpoint_rechecks_and_renews(client, accounts, platform):
+    Credential(
+        cookies={"unb": UNB, "_m_h5_tk": "tok_1", "cookie2": "old", **keep_login_cookies()}
+    ).save(accounts.path(UNB))
+    client.get("/api/accounts")
+    platform.session_expired = True
+
+    body = client.post(f"/api/accounts/{UNB}/check").json()
+
+    assert body["id"] == UNB
+    assert body["login"]["state"] == "valid"
+    assert body["login"]["renewed"] is True
+    assert body["login"]["keep_login_until"] is not None
+    assert platform.renews == 1
+    assert login_checks(platform) == 3  # 第一次确认、过期、续期后重试
 
 
 def test_unknown_account_is_404(client):

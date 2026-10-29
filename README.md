@@ -9,7 +9,8 @@
 - [x] 底座方案：Python 自建 `xianyu_core`，结构参考 goofish-cli
 - [x] mtop 签名和请求客户端（[xianyu_core/mtop.py](xianyu_core/mtop.py)）
 - [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)）
-- [ ] 登录后开启"保持登录"、cookie 定时续期
+- [x] 登录态续期：扫码后开启"保持登录"，会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。线上还没走通一次真正的续期，见[协议笔记](docs/protocol-notes.md#登录态续期)
+- [ ] 定时续期：网页端每打开一个页面就续一次，我们现在只在会话过期时续
 - [ ] 即时消息（WebSocket + MessagePack）
 - [ ] 限流和风控熔断
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
@@ -27,13 +28,14 @@
 ```bash
 uv sync                                      # 安装依赖
 uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫
-uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效
+uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效，会话过期时先试免密续期
 uv run pytest                                # 跑测试
 ```
 
 商品管理用 `xym`（业务层命令）。只有一个账号时不用指定，多个账号加 `--account <unb>`：
 
 ```bash
+uv run xym accounts check          # 各账号登录态；会话过期时先试免密续期，不行就提示重新扫码
 uv run xym items sync --stats      # 把主页上的商品同步到 data/xianyu.db，--stats 顺带拉浏览、收藏数
 uv run xym items list              # 看本地库里的商品，--status online/sold 过滤，--all 含已下架
 uv run xym items show <商品ID>      # 实时详情
@@ -95,7 +97,7 @@ async with QRLogin() as login:
 
 async with MtopClient(credential) as mtop:
     user = await mtop.call("mtop.taobao.idlemessage.pc.loginuser.get")
-    credential = mtop.credential  # 响应里续期过的 cookie，记得存回去
+    credential = mtop.credential  # 响应里续期过的 cookie（含免密续期），记得存回去
 ```
 
 ## 目录结构
@@ -103,14 +105,15 @@ async with MtopClient(credential) as mtop:
 ```
 xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   sign.py          mtop 签名
-  mtop.py          mtop 请求客户端，按错误码抛 AuthRequired / RiskControl 等异常
+  mtop.py          mtop 请求客户端，按错误码抛 AuthRequired / RiskControl 等异常，会话过期时先试免密续期
   credential.py    账号凭证（cookie）的读写
-  auth/qr_login.py 扫码登录
+  renew.py         登录态续期：保持登录开关、免密续期（silentHasLogin）
+  auth/qr_login.py 扫码登录，登录后开启保持登录
   item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
   order.py         订单接口：卖出的订单列表（卖家工作台）、订单详情、改价（price render → adjust）
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
-  accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回
+  accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回，顺手记下登录态
   db.py            本地 SQLite（data/xianyu.db）：items、item_ops、orders、order_ops 四张表
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录

@@ -1,8 +1,22 @@
 // 后端接口（app/api.py）。金额：响应里是分（*_cent），请求里的价格是元的字符串。
 
+/** valid 有效；expired 免密续期也没成功，要重新扫码；risk 触发风控；error 网络或平台出错，没判断出来 */
+export type LoginState = "valid" | "expired" | "risk" | "error"
+
+export interface LoginStatus {
+  state: LoginState
+  checked_at: number
+  /** 这次检查时做了免密续期 */
+  renewed: boolean
+  message: string
+  /** 保持登录到期时间（秒），没开保持登录是 null */
+  keep_login_until: number | null
+}
+
 export interface Account {
   id: string
   saved_at: number | null
+  login: LoginStatus
 }
 
 export interface Item {
@@ -172,6 +186,9 @@ const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)
 
 export const api = {
   accounts: () => request<{ accounts: Account[] }>("/accounts").then((r) => r.accounts),
+
+  checkAccount: (account: string) =>
+    request<Account>(`/accounts/${encodeURIComponent(account)}/check`, { method: "POST" }),
 
   items: (account: string) =>
     request<{ items: Item[]; last_synced_at: number | null }>(

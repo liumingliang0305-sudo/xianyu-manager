@@ -1,6 +1,7 @@
 """测试共用的假平台。"""
 
 import json
+import time
 from urllib.parse import parse_qs
 
 import httpx
@@ -8,8 +9,20 @@ import httpx
 UNB = "42"
 
 
+RENEW_OK = {"content": {"data": {"processFinished": True, "resultCode": 100}}}
+SHARED = "Domain=.goofish.com; Path=/"
+
+
+def keep_login_cookies(hours: float = 24) -> dict[str, str]:
+    """开了保持登录的账号才有的长登录标记，hours 小时后到期（负数是已经过期）。"""
+    return {"havana_lgc_exp": str(int((time.time() + hours * 3600) * 1000))}
+
+
 class FakePlatform:
-    """按接口名模拟商品和订单相关的 mtop 接口，状态存在 self.items、self.orders 里。"""
+    """按接口名模拟商品和订单相关的 mtop 接口，状态存在 self.items、self.orders 里。
+
+    `session_expired` 为 True 时 mtop 接口都返回会话过期，免密续期成功后恢复。
+    """
 
     def __init__(self, items, orders=None):
         # item_id → {"title", "price": 分, "status"}
@@ -20,13 +33,20 @@ class FakePlatform:
         self.calls: list[tuple[str, dict]] = []
         self.headers: list[httpx.Headers] = []
         self.fail: dict[str, str] = {}  # 接口名 → 要返回的错误码
+        self.session_expired = False
+        self.renew_ok = True
+        self.renews = 0  # silentHasLogin 被调了几次
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == "passport.goofish.com":
+            return self.passport(request)
         api = request.url.params["api"]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         data = json.loads(form["data"])
         self.calls.append((api, data))
         self.headers.append(request.headers)
+        if self.session_expired:
+            return httpx.Response(200, json={"ret": ["FAIL_SYS_SESSION_EXPIRED::Session过期"]})
         if api in self.fail:
             return httpx.Response(200, json={"ret": [self.fail[api]]})
         handler = getattr(self, api.replace(".", "_"))
@@ -39,6 +59,19 @@ class FakePlatform:
             json={"ret": ["SUCCESS::调用成功"], "data": body},
             headers={"set-cookie": "_m_h5_tk=renewed_1; Domain=.goofish.com; Path=/"},
         )
+
+    def passport(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/newlogin/silentHasLogin.do"
+        self.renews += 1
+        if not self.renew_ok:
+            return httpx.Response(200, json={"content": {"data": {"resultCode": 0}}})
+        self.session_expired = False
+        return httpx.Response(
+            200, json=RENEW_OK, headers={"set-cookie": f"cookie2=renewed; {SHARED}"}
+        )
+
+    def mtop_taobao_idlemessage_pc_loginuser_get(self, data):
+        return {"userId": int(UNB)}
 
     def mtop_idle_web_xyh_item_list(self, data):
         cards = [

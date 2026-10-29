@@ -100,14 +100,27 @@ def create_app(
     def account(account_id: str) -> str:
         return accounts.resolve(account_id)
 
+    async def account_info(account_id: str, *, recheck: bool = False) -> dict[str, Any]:
+        """账号和它的登录态。记下的登录态还能用就不请求平台。"""
+        status = None if recheck else accounts.login_status(account_id)
+        if status is None:
+            async with locks[account_id]:
+                status = None if recheck else accounts.login_status(account_id)
+                status = status or await accounts.check(account_id)
+        return {
+            "id": account_id,
+            "saved_at": accounts.load(account_id).saved_at,
+            "login": asdict(status),
+        }
+
     @app.get("/api/accounts")
     async def list_accounts() -> dict[str, Any]:
-        return {
-            "accounts": [
-                {"id": account_id, "saved_at": accounts.load(account_id).saved_at}
-                for account_id in accounts.ids()
-            ]
-        }
+        return {"accounts": [await account_info(account_id) for account_id in accounts.ids()]}
+
+    @app.post("/api/accounts/{account_id}/check")
+    async def check_account(account_id: str) -> dict[str, Any]:
+        """马上确认一次登录态（会话过期时会先试免密续期）。"""
+        return await account_info(account(account_id), recheck=True)
 
     @app.get("/api/accounts/{account_id}/items")
     async def list_items(

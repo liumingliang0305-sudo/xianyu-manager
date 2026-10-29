@@ -5,7 +5,8 @@
 2. 打开 `mini_login.htm`，从页面里的 `window.viewData.loginFormData` 取登录表单参数；
 3. `generate.do` 取二维码，返回 `t`、`ck` 和二维码内容；
 4. `query.do` 轮询：NEW → SCANED → CONFIRMED，也可能 EXPIRED / CANCELED；
-5. 确认后访问一次 `/im`，平台会在跳转链上下发完整的登录 cookie。
+5. 确认后访问一次 `/im`，平台会在跳转链上下发完整的登录 cookie；
+6. 打开"保持登录"（见 renew.py），会话过期后才能免密续期。失败只记日志，不影响登录。
 
 确认时如果响应带 `iframeRedirect`，说明平台要求额外身份验证，这里不自动处理，
 抛 VerificationRequiredError 交给人工。
@@ -37,6 +38,7 @@ from xianyu_core.constants import PASSPORT_HOST, USER_AGENT, WEB_HOST
 from xianyu_core.credential import Credential, jar_to_cookies
 from xianyu_core.errors import QRLoginError, VerificationRequiredError, XianyuError
 from xianyu_core.mtop import MtopClient
+from xianyu_core.renew import KeepLoginSettings, enable_keep_login
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +140,8 @@ class QRLogin:
         self._client = new_client(transport=transport)
         self._form: dict[str, str] = {}
         self.qr: QRCode | None = None
+        # 登录完成后保持登录的状态；请求出错时是 None
+        self.keep_login: KeepLoginSettings | None = None
 
     async def start(self) -> QRCode:
         """准备登录会话并取一张新二维码。可以重复调用来换码。"""
@@ -225,7 +229,9 @@ class QRLogin:
         # 只是为了让 jar 里先有 _m_h5_tk，和浏览器先打开首页一样。接口本身返回什么不重要：
         # 实测（2026-10-28）这个接口会报"缺少业务参数 piUrl"，但令牌已经在第一跳下发了
         try:
-            await MtopClient(client=self._client).call(H5_TOKEN_API, {"bizScene": "home"})
+            await MtopClient(client=self._client, auto_renew=False).call(
+                H5_TOKEN_API, {"bizScene": "home"}
+            )
         except (XianyuError, httpx.HTTPError) as exc:
             if not jar_to_cookies(self._client.cookies).get("_m_h5_tk"):
                 log.warning("登录前没拿到 _m_h5_tk，继续取码：%s", exc)
@@ -261,10 +267,22 @@ class QRLogin:
             raise QRLoginError(
                 "扫码已确认，但没有拿到账号 cookie（unb）", status=QRStatus.CONFIRMED
             )
-        if not credential.cookies.get("_m_h5_tk"):
+        await self._enable_keep_login()
+        if not jar_to_cookies(self._client.cookies).get("_m_h5_tk"):
             await self._bootstrap_h5_token()
-            credential = Credential(cookies=jar_to_cookies(self._client.cookies))
-        return credential
+        return Credential(cookies=jar_to_cookies(self._client.cookies))
+
+    async def _enable_keep_login(self) -> None:
+        try:
+            settings = await enable_keep_login(self._client)
+        except (XianyuError, httpx.HTTPError) as exc:
+            log.warning("登录成功了，但开启保持登录失败：%s", exc)
+            return
+        self.keep_login = settings
+        if not settings.can_open:
+            log.warning("登录成功了，但平台不给这次登录开保持登录（canOpenLongLogin=false）")
+        elif not settings.enabled:
+            log.warning("登录成功了，但平台没有确认开启保持登录")
 
     async def aclose(self) -> None:
         await self._client.aclose()
