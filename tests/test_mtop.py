@@ -46,6 +46,23 @@ def test_call_signs_request_and_returns_data():
     assert "_m_h5_tk=tok123_999" in req.headers["cookie"]
 
 
+def test_emoji_is_utf16_escaped_like_web_and_signed_as_sent():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"ret": ["SUCCESS::调用成功"], "data": {}})
+
+    async def go():
+        async with make_client(handler, {"_m_h5_tk": "tok123_999"}) as mtop:
+            await mtop.call(API, {"desc": "九成新😀"})
+
+    run(go())
+    body = form_of(seen[0])
+    assert body["data"] == '{"desc":"九成新\\ud83d\\ude00"}'
+    assert seen[0].url.params["sign"] == mtop_sign("tok123", seen[0].url.params["t"], body["data"])
+
+
 def test_token_expired_resigns_once_with_new_token():
     seen = []
 

@@ -12,7 +12,9 @@
 - [ ] 登录后开启"保持登录"、cookie 定时续期
 - [ ] 即时消息（WebSocket + MessagePack）
 - [ ] 限流和风控熔断
-- [ ] 业务功能（待定）
+- [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
+- [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
+- [ ] 业务功能：订单、消息、自动回复、自动发货……
 
 ## 快速上手
 
@@ -23,6 +25,19 @@ uv sync                                      # 安装依赖
 uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫
 uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效
 uv run pytest                                # 跑测试
+```
+
+商品管理用 `xym`（业务层命令）。只有一个账号时不用指定，多个账号加 `--account <unb>`：
+
+```bash
+uv run xym items sync --stats      # 把主页上的商品同步到 data/xianyu.db，--stats 顺带拉浏览、收藏数
+uv run xym items list              # 看本地库里的商品，--status online/sold 过滤，--all 含已下架
+uv run xym items show <商品ID>      # 实时详情
+uv run xym items price <商品ID> 299 # 改价，会先确认；降价超过一半或涨价超过一倍要加 --force
+uv run xym items desc <商品ID> 描述.txt
+uv run xym items down <商品ID>      # 下架
+uv run xym items delete <商品ID>    # 删除，平台上不可恢复
+uv run xym items log               # 通过本系统做过的改动，成功失败都有记录
 ```
 
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
@@ -41,7 +56,7 @@ async with MtopClient(credential) as mtop:
     credential = mtop.credential  # 响应里续期过的 cookie，记得存回去
 ```
 
-## 计划的目录结构
+## 目录结构
 
 ```
 xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
@@ -49,9 +64,15 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   mtop.py          mtop 请求客户端，按错误码抛 AuthRequired / RiskControl 等异常
   credential.py    账号凭证（cookie）的读写
   auth/qr_login.py 扫码登录
+  item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
   cli.py           调试命令 xianyu login / whoami
+app/             业务层：只通过 xianyu_core 和闲鱼通信
+  accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回
+  db.py            本地 SQLite（data/xianyu.db）：items、item_ops 两张表
+  items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
+  cli.py           业务命令 xym
+  （以后）订单、消息、自动化……
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网）
-app/             业务层：账号、商品、订单、消息、自动化……
 web/             管理后台
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档

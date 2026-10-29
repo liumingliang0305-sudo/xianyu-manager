@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import struct
 import time
 from typing import Any
 
@@ -46,6 +48,24 @@ MTOP_HEADERS = {
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
 }
+
+
+_ASTRAL = re.compile(r"[\U00010000-\U0010FFFF]")
+
+
+def _utf16_escape(match: re.Match[str]) -> str:
+    units = struct.unpack("<2H", match.group().encode("utf-16-le"))
+    return "".join(f"\\u{unit:04x}" for unit in units)
+
+
+def encode_data(data: dict[str, Any] | None) -> str:
+    """mtop 请求体里那串 JSON。签名和请求体必须用同一串。
+
+    中文不转义，和浏览器 JSON.stringify 一致；emoji 这类 BMP 以外的字符写成
+    `\\ud83d\\ude00` 形式，网页端的 mtop 中间件也是这么做的（商品描述里常有 emoji）。
+    """
+    raw = json.dumps(data or {}, separators=(",", ":"), ensure_ascii=False)
+    return _ASTRAL.sub(_utf16_escape, raw)
 
 
 def ret_codes(ret: Any) -> list[str]:
@@ -103,8 +123,7 @@ class MtopClient:
         *,
         retry_token: bool,
     ) -> dict[str, Any]:
-        # 签名和请求体必须是同一串 JSON；不转义中文，和浏览器 JSON.stringify 一致
-        data_str = json.dumps(data or {}, separators=(",", ":"), ensure_ascii=False)
+        data_str = encode_data(data)
         t = str(int(time.time() * 1000))
         used_tk = self._m_h5_tk()
         params = {
