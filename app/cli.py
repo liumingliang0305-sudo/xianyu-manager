@@ -1,5 +1,7 @@
 """业务命令行。
 
+uv run xym accounts check                       检查各账号登录态，会话过期时先试免密续期
+uv run xym accounts unblock [-y]                手动解除风控熔断（先在闲鱼 App 完成验证）
 uv run xym items sync [--stats]                 从平台同步我的商品到本地库
 uv run xym items list [--all] [--status sold]   看本地库里的商品
 uv run xym items show <商品ID>                   拉一次实时详情
@@ -16,7 +18,6 @@ uv run xym orders price <订单ID> [项=金额 ...] [--force] [-y]
                                                 不带金额时列出能改的价格项
 uv run xym orders log [订单ID]                    本系统对订单做过的改动
 uv run xym orders remove <订单ID> [-y]           从本地列表移除，不动平台上的订单
-uv run xym accounts unblock [-y]                手动解除风控熔断（先在闲鱼 App 完成验证）
 uv run xym serve [--port 8000]                  启动管理后台，只监听本机
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
@@ -32,7 +33,14 @@ import time
 from pathlib import Path
 
 from app import db
-from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
+from app.accounts import (
+    DEFAULT_DIR,
+    AccountNotFoundError,
+    Accounts,
+    LoginState,
+    LoginStatus,
+    make_guard,
+)
 from app.items import ItemRecord, ItemService, PriceGuardError
 from app.orders import OrderRecord, OrderService
 from xianyu_core.errors import CircuitOpenError, XianyuError
@@ -40,6 +48,12 @@ from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
 from xianyu_core.order import STATUS_TEXT as ORDER_STATUS_TEXT
 
 STATUS_ARG = {"online": 0, "sold": 1}
+LOGIN_TEXT = {
+    LoginState.VALID: "有效",
+    LoginState.EXPIRED: "已失效",
+    LoginState.RISK: "触发风控",
+    LoginState.ERROR: "没查出来",
+}
 
 
 def _yuan(cents: int | None) -> str:
@@ -108,14 +122,16 @@ def _parse_fees(pairs: list[str]) -> dict[str, int]:
 
 
 async def run(args: argparse.Namespace) -> int:
+    if args.command == "accounts":
+        if args.accounts_command == "unblock":
+            return unblock_account(args)
+        return await check_accounts(args)
     if args.command == "orders":
         return await run_orders(args)
-    if args.command == "accounts":
-        return run_accounts(args)
     return await run_items(args)
 
 
-def run_accounts(args: argparse.Namespace) -> int:
+def unblock_account(args: argparse.Namespace) -> int:
     guard = make_guard(args.db)
     account = Accounts(args.accounts, guard=guard).resolve(args.account)
     block = guard.block(account)
@@ -301,6 +317,35 @@ async def run_items(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_login(account_id: str, status: LoginStatus) -> None:
+    note = "（刚做了免密续期）" if status.renewed else ""
+    print(f"{account_id}  {LOGIN_TEXT[status.state]}{note}")
+    if status.keep_login_until:
+        until = time.strftime("%Y-%m-%d %H:%M", time.localtime(status.keep_login_until))
+        print(f"  保持登录到 {until}")
+    else:
+        print("  没有开启保持登录，会话过期后要重新扫码")
+    if status.message:
+        print(f"  {status.message}")
+    if status.state is LoginState.EXPIRED:
+        print("  运行 uv run xianyu login 重新扫码")
+    elif status.state is LoginState.RISK:
+        print("  先暂停操作，到闲鱼 App 或网页完成验证后再检查")
+
+
+async def check_accounts(args: argparse.Namespace) -> int:
+    accounts = Accounts(args.accounts, guard=make_guard(args.db))
+    ids = [accounts.resolve(args.account)] if args.account else accounts.ids()
+    if not ids:
+        raise AccountNotFoundError(f"{accounts.root} 下没有账号，先用 xianyu login 登录")
+    ok = True
+    for account_id in ids:
+        status = await accounts.check(account_id)
+        _print_login(account_id, status)
+        ok = ok and status.state is LoginState.VALID
+    return 0 if ok else 1
+
+
 def serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -325,6 +370,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--accounts", type=Path, default=DEFAULT_DIR, help="凭证目录")
     parser.add_argument("--db", type=Path, default=db.DEFAULT_PATH, help="本地数据库文件")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    accounts = sub.add_parser("accounts", help="账号").add_subparsers(
+        dest="accounts_command", required=True
+    )
+    accounts.add_parser("check", help="检查登录态，会话过期时先试免密续期")
+    p = accounts.add_parser("unblock", help="手动解除风控熔断")
+    p.add_argument("-y", "--yes", action="store_true", help="不再确认")
 
     items = sub.add_parser("items", help="商品管理").add_subparsers(
         dest="items_command", required=True
@@ -385,12 +437,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p = orders.add_parser("log", help="本系统对订单做过的改动")
     p.add_argument("order_id", nargs="?")
-
-    accounts_cmd = sub.add_parser("accounts", help="账号").add_subparsers(
-        dest="accounts_command", required=True
-    )
-    p = accounts_cmd.add_parser("unblock", help="手动解除风控熔断")
-    p.add_argument("-y", "--yes", action="store_true", help="不再确认")
 
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
     p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")

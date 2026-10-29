@@ -2,7 +2,8 @@
 
 - 响应里的 Set-Cookie 会自动进 cookie jar，`credential` 属性随时拿到最新 cookie；
 - 平台说 token 过期并下发了新 `_m_h5_tk` 时，用新 token 重签一次；
-- 风控错误一律抛 RiskControlError，不重试；传了 guard 时顺手熔断这个账号（见 guard.py）。
+- 会话过期时先试一次免密续期（见 renew.py），成功就重签重试一次，不行再抛 AuthRequiredError；
+- 风控错误一律抛 RiskControlError，不重试，也不续期；传了 guard 时顺手熔断这个账号（见 guard.py）。
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from xianyu_core.errors import (
     SignError,
     XianyuError,
 )
+from xianyu_core.renew import RenewResult, silent_renew
 from xianyu_core.sign import h5_token, mtop_sign
 
 if TYPE_CHECKING:
@@ -37,7 +39,7 @@ log = logging.getLogger(__name__)
 TOKEN_CODES = frozenset(
     {"FAIL_SYS_TOKEN_EXOIRED", "FAIL_SYS_TOKEN_EXPIRED", "FAIL_SYS_TOKEN_EMPTY"}
 )
-# 会话层失效：重签没用，要重新登录
+# 会话层失效：重签没用，要免密续期或重新登录
 SESSION_CODES = frozenset({"FAIL_SYS_SESSION_EXPIRED", "FAIL_SYS_ILLEGAL_ACCESS"})
 RISK_CODES = frozenset({"RGV587_ERROR", "FAIL_SYS_USER_VALIDATE"})
 SIGN_CODES = frozenset({"FAIL_SYS_ILLEGAL_REQUEST", "FAIL_SYS_SIGN_ERROR"})
@@ -85,6 +87,8 @@ class MtopClient:
         async with MtopClient(credential) as mtop:
             user = await mtop.call("mtop.taobao.idlemessage.pc.loginuser.get")
             credential = mtop.credential   # 拿回续期后的 cookie 存起来
+
+    `auto_renew=False` 时会话过期直接抛 AuthRequiredError，不试免密续期。
     """
 
     def __init__(
@@ -94,6 +98,7 @@ class MtopClient:
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         guard: AccountGuard | None = None,
+        auto_renew: bool = True,
     ):
         self._guard = guard  # 限流和熔断，不传就不管
         # 传入 client 时共用它的 cookie jar（扫码登录就是这样用的），关闭由调用方负责
@@ -101,6 +106,9 @@ class MtopClient:
         self._client = client or new_client(
             credential.cookies if credential else None, transport=transport
         )
+        self.auto_renew = auto_renew
+        # 这个实例做过的免密续期，一个实例最多试一次；没试过是 None
+        self.renewal: RenewResult | None = None
 
     @property
     def credential(self) -> Credential:
@@ -124,7 +132,14 @@ class MtopClient:
             await self._guard.acquire(api)
         try:
             return await self._call(
-                api, data, version, spm_cnt, extra_params, headers, retry_token=True
+                api,
+                data,
+                version,
+                spm_cnt,
+                extra_params,
+                headers,
+                retry_token=True,
+                retry_session=True,
             )
         except RiskControlError as exc:
             if self._guard:
@@ -141,6 +156,7 @@ class MtopClient:
         headers: dict[str, str] | None,
         *,
         retry_token: bool,
+        retry_session: bool,
     ) -> dict[str, Any]:
         data_str = encode_data(data)
         t = str(int(time.time() * 1000))
@@ -176,10 +192,44 @@ class MtopClient:
             if retry_token and self._m_h5_tk() != used_tk:
                 log.debug("[%s] token 已更新，重签后重试一次", api)
                 return await self._call(
-                    api, data, version, spm_cnt, extra_params, headers, retry_token=False
+                    api,
+                    data,
+                    version,
+                    spm_cnt,
+                    extra_params,
+                    headers,
+                    retry_token=False,
+                    retry_session=retry_session,
                 )
             raise AuthRequiredError(f"[{api}] 令牌失效且平台没有下发新令牌", ret=codes, raw=raw)
-        raise _classify(api, codes, raw)
+
+        error = _classify(api, codes, raw)
+        if isinstance(error, AuthRequiredError) and retry_session:
+            renewal = await self._renew()
+            if renewal and renewal.ok:
+                log.info("[%s] 会话过期，免密续期成功，重签后重试一次", api)
+                return await self._call(
+                    api,
+                    data,
+                    version,
+                    spm_cnt,
+                    extra_params,
+                    headers,
+                    retry_token=True,
+                    retry_session=False,
+                )
+            if renewal:
+                raise AuthRequiredError(f"{error}；{renewal.message}", ret=codes, raw=raw)
+        raise error
+
+    async def _renew(self) -> RenewResult | None:
+        """会话过期时试一次免密续期。不该试（关掉了、已经试过）时返回 None。"""
+        if not self.auto_renew or self.renewal is not None:
+            return None
+        self.renewal = await silent_renew(self._client)
+        if not self.renewal.ok:
+            log.warning("免密续期没成功：%s", self.renewal.message)
+        return self.renewal
 
     def _m_h5_tk(self) -> str:
         return jar_to_cookies(self._client.cookies).get("_m_h5_tk", "")

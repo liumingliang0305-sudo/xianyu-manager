@@ -22,7 +22,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 
 - 网页端的 appKey 是 `34839810` ✅；
 - ✅ 没有 token 时用空串签名，平台返回 `FAIL_SYS_TOKEN_EMPTY` 并下发 `_m_h5_tk`，用新 token 重签后能通过签名校验；
-- 返回 `FAIL_SYS_TOKEN_EXOIRED`（平台原样拼写，有的项目也判断 `FAIL_SYS_TOKEN_EXPIRED`）时，同样用新下发的 `_m_h5_tk` 重签；返回 `FAIL_SYS_SESSION_EXPIRED` 时重签没用，要重新登录；
+- 返回 `FAIL_SYS_TOKEN_EXOIRED`（平台原样拼写，有的项目也判断 `FAIL_SYS_TOKEN_EXPIRED`）时，同样用新下发的 `_m_h5_tk` 重签；返回 `FAIL_SYS_SESSION_EXPIRED` 时重签没用，要免密续期或重新登录（见下面"登录态续期"）；
 - 返回 `RGV587` 表示触发了风控，**应该熔断**，不要重试。
 - 网页端的 mtop 中间件会把 data 里 BMP 以外的字符（emoji）写成 `\ud83d\ude00` 这样的转义再签名，`xianyu_core` 照做。
 
@@ -34,7 +34,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 3. ✅ POST `/newlogin/qrcode/query.do`，表单是 loginFormData 加上 `t`、`ck` 和几项浏览器环境字段，返回的 `qrCodeStatus` 依次是 `NEW` → `SCANED`（平台原样拼写）→ `CONFIRMED`，也可能是 `EXPIRED` 或 `CANCELED`；`hasError: true` 时立即重试，最多 5 次；
 4. ✅ 确认时 query.do 的响应会种下登录 cookie，再访问一次 `https://www.goofish.com/im`，跳转链上会补齐其余 cookie。实测登录后拿到的是 `unb`、`cookie2`、`sgcookie`、`csg`、`tracknick`、`_tb_token_`、`_m_h5_tk`、`_m_h5_tk_enc`、`t` 等，这次没有要求额外验证；
 5. 确认时如果带了 `iframeRedirect: true`，说明要做额外身份验证（`iv/mini/verify_modes.htm`、`ivCheckLogin.htm`），地址在 `iframeRedirectUrl`，这时要通知人工处理；
-6. 还没做：Ydisks 在登录后还会调 `ac/account/setLoginSettings.do` 打开"保持登录"，能让 cookie 有效期更长。
+6. 落到 `/im` 之后打开"保持登录"，会话过期后才能免密续期，见下面"登录态续期"。失败只记日志，不影响登录。
 
 ## 商品管理
 
@@ -138,8 +138,56 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 
 ## 登录态续期
 
-- `passport.goofish.com/newlogin/hasLogin.do`、`silentHasLogin.do`
-- goofish-cli 的做法：碰到 `SESSION_EXPIRED` 先尝试免密续期，不行再要求重新扫码。
+> 来源：2026-10-29 读网页端的续期插件 `o.alicdn.com/vip/goofish-auto-login/plugin.js`（SHA-256 `b946a6db…`，和 Ydisks
+> 审计时的同一版）、xy-site 0.0.179 的 `main.js` 和 `p_layout.js`，对照 Ydisks 的 `internal/xianyu/renew`，
+> 再用已登录账号做了只读验证。✅ 是实测过的；🔍 只读过代码，没有在线上真正调用。
+
+分两块：网页端个人信息弹窗里的"保存登录信息"开关（下面叫保持登录），和续期插件 `window.lib.refreshAutoLogin`（免密续期）。
+免密续期要靠保持登录下发的长登录标记，没开保持登录就续不了，会话过期只能重新扫码。
+
+### 保持登录
+
+| 接口 | 请求 | 说明 |
+|---|---|---|
+| `ac/account/queryLoginSettings.do` ✅ | POST，query 是 `fromSite=77&appName=xianyu&bizEntrance=web`，空表单 | 返回 `{"code":0,"returnValue":{"status":200,"canOpenLongLogin":…,"hasLongTokenLogin":…,"occurError":false},"success":true}`。`hasLongTokenLogin` 是这次会话开没开；网页端只有 `canOpenLongLogin` 为 true 才显示开关 |
+| `ac/account/setLoginSettings.do` 🔍 | 同样的 query，表单 `status=0`（打开）或 `status=1`（关闭） | 成功看 `success`，失败原因在 `msgInfo`。打开后平台下发长登录标记 `havana_lgc_exp` 或 `cookie3_bak_exp`（值是到期的毫秒时间戳） |
+
+两个请求都从 `www.goofish.com` 发（`origin`、`referer` 是网页端页面），带登录 cookie。
+
+`xianyu login` 扫码后的做法：先查一次，`canOpenLongLogin` 为 true 且还没开时才提交 `status=0`，提交后再查一次确认。
+网页端不显示开关的时候（`canOpenLongLogin` 为 false）不提交，免得发出网页端不会发的请求。
+
+2026-10-29 实测：当天扫码登录的账号查出来是 `canOpenLongLogin: false`、`hasLongTokenLogin: false`，凭证里也没有长登录标记。
+同一天用新代码重新扫码（落到 `/im` 后马上查）也一样是 `canOpenLongLogin: false`，所以没有提交 `setLoginSettings.do`，
+新凭证里还是没有 `havana_lgc_exp` / `cookie3_bak_exp`，也没有 `sdkSilent`。
+🔍 为什么不能开还不知道：可能是账号本身不支持，也可能和登录方式（纯 HTTP 扫码、`umidTag=SERVER`、没走登录框的
+`keepLoginConfirm` 弹窗）有关。可以在浏览器里正常登录一次 goofish.com，看右上角个人信息弹窗里有没有"保存登录信息"开关来区分。
+
+### 免密续期
+
+插件的流程（`xianyu_core/renew.py` 照搬）：
+
+1. `sdkSilent`（毫秒时间戳）还没到 → 不续，不发请求（插件报 "request limit by fatigue"，平台在限制续期频率）；
+2. 等 2 秒；
+3. 选分支：`havana_lgc_exp` 没过期走 havana（加 `ltl=true`），否则 `cookie3_bak_exp` 没过期走 cookie3（加 `skipSessionFilter=true&c2r=true`），
+   都没有 → 不续，不发请求（插件报 "cookie expired"）；
+4. POST `passport.goofish.com/newlogin/silentHasLogin.do?documentReferer=<当前页面地址去掉 query>&appName=xianyu&appEntrance=xianyu_sdkSilent&fromSite=0&<分支参数>`，
+   没有请求体，带 cookie；
+5. 结果在 `data.content.data`，没有就看 `content.data`：`processFinished === true && resultCode === 100` 才算成功，新 cookie 在 Set-Cookie 里。
+
+- 网页端每打开一个页面就调一次（`main.js`，成功后刷新页面），靠 `sdkSilent` 限频；
+- ✅ 没有长登录标记时不发请求：2026-10-29 在上面那个凭证上调 `silent_renew`，直接返回"没有开启保持登录"，一个请求都没发；
+- 🔍 真正调 `silentHasLogin.do` 还没在线上验证过，要先有开了保持登录的凭证（上面的账号两次登录都开不了）。
+- `hasLogin.do` 是登录框（`mini_login.htm`）自己用的"已登录 / 快速进入"检查，插件和 Ydisks 现在的续期都不调它，我们也不用。
+- goofish-cli 不走接口：用 Playwright 打开首页，弹出登录框时点"快速进入"。
+
+### xianyu_core 的做法
+
+- `MtopClient` 碰到会话失效（`FAIL_SYS_SESSION_EXPIRED`、`FAIL_SYS_ILLEGAL_ACCESS`）时按上面的流程试一次续期，一个实例最多一次；
+  成功就重签重试一次，不行抛 `AuthRequiredError`，消息里写明为什么没续（没开保持登录、限频、平台拒绝）；
+- 风控（`RGV587`、`FAIL_SYS_USER_VALIDATE`、punish 页）一律不续期；续期请求本身被跳到 punish 页也按风控处理；
+- 和插件一样遵守 `sdkSilent` 限频，会话过期时也不绕过（Ydisks 在会话过期时会绕过，我们不这么做）；
+- 续期拿到的 cookie（包括 `sdkSilent`）都在 cookie jar 里，业务层 `Accounts.mtop()` 用完写回凭证文件，续期失败也写。
 
 ## 即时消息
 

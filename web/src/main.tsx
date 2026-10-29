@@ -11,16 +11,19 @@ import { ApiError } from "@/lib/api"
 import App from "./App"
 import "./index.css"
 
-// 碰到风控或熔断时重新拉账号列表，页面顶部的熔断提示马上出来
-const refreshBlocks = (error: unknown) => {
-  if (error instanceof ApiError && ["risk_control", "circuit_open"].includes(error.code)) {
-    queryClient.invalidateQueries({ queryKey: ["accounts"] })
+// 别的接口发现登录失效、风控或熔断时，重新拉账号列表：账号菜单里的登录态、页面顶部的提示跟着更新
+// （后端已经记下了，不会再请求闲鱼）
+const ACCOUNT_ERRORS = ["auth_required", "risk_control", "circuit_open"]
+
+function refreshAccounts(error: unknown) {
+  if (error instanceof ApiError && ACCOUNT_ERRORS.includes(error.code)) {
+    void queryClient.invalidateQueries({ queryKey: ["accounts"] })
   }
 }
 
 const queryClient: QueryClient = new QueryClient({
-  queryCache: new QueryCache({ onError: refreshBlocks }),
-  mutationCache: new MutationCache({ onError: refreshBlocks }),
+  queryCache: new QueryCache({ onError: refreshAccounts }),
+  mutationCache: new MutationCache({ onError: refreshAccounts }),
   defaultOptions: {
     queries: {
       // 商品详情会实时请求闲鱼，切回窗口时不要自动重新拉

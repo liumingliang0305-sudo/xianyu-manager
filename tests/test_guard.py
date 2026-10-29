@@ -5,7 +5,7 @@ import pytest
 from fakes import UNB
 
 from app import cli
-from app.accounts import make_guard
+from app.accounts import Accounts, LoginState, make_guard
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
     AuthRequiredError,
@@ -181,3 +181,13 @@ def test_cli_unblock(tmp_path, accounts):
     argv = ["--accounts", str(accounts.root), "--db", str(db_path), "accounts", "unblock", "-y"]
     assert cli.main(argv) == 0
     assert make_guard(db_path).block(UNB) is None
+
+
+def test_check_during_block_is_risk_without_request(accounts, platform):
+    guard = Guard()
+    guarded = Accounts(accounts.root, transport=httpx.MockTransport(platform), guard=guard)
+    guard.trip(UNB, "RGV587")
+    status = run(guarded.check(UNB))
+    assert status.state is LoginState.RISK
+    assert "暂停" in status.message
+    assert platform.calls == []

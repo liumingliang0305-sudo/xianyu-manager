@@ -32,9 +32,11 @@ SHARED = "Domain=.goofish.com; Path=/"
 class FakeXianyu:
     """按 URL 模拟闲鱼各接口；query.do 按 statuses 顺序返回。"""
 
-    def __init__(self, statuses, *, confirm_extra=None):
+    def __init__(self, statuses, *, confirm_extra=None, keep_login=True):
         self.statuses = list(statuses)
         self.confirm_extra = confirm_extra or {}
+        self.keep_login = keep_login  # False 时打开保持登录的接口报错
+        self.long_login_on = False
         self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -79,6 +81,18 @@ class FakeXianyu:
             return httpx.Response(
                 200, text="<html>im</html>", headers=[("set-cookie", f"sgcookie=sg; {SHARED}")]
             )
+        if path == "/ac/account/setLoginSettings.do":
+            if not self.keep_login:
+                return httpx.Response(500)
+            self.long_login_on = True
+            return httpx.Response(
+                200,
+                json={"success": True},
+                headers=[("set-cookie", f"havana_lgc_exp=4102444800000; {SHARED}")],
+            )
+        if path == "/ac/account/queryLoginSettings.do":
+            value = {"canOpenLongLogin": True, "hasLongTokenLogin": self.long_login_on}
+            return httpx.Response(200, json={"returnValue": value, "success": True})
         return httpx.Response(404)
 
     def find(self, path):
@@ -96,6 +110,16 @@ def login_with(fake, **kwargs):
 
     qr, credential = asyncio.run(go())
     return qr, credential, statuses_seen
+
+
+def keep_login_of(fake):
+    async def go():
+        async with QRLogin(poll_interval=0, transport=httpx.MockTransport(fake)) as login:
+            await login.start()
+            credential = await login.wait()
+            return login.keep_login, credential
+
+    return asyncio.run(go())
 
 
 def test_full_login_flow_collects_cookies():
@@ -182,3 +206,26 @@ def test_qr_renders_to_ascii_and_svg():
     qr, _, _ = login_with(fake)
     assert len(qr.to_ascii().splitlines()) > 10
     assert qr.to_svg().startswith(b"<?xml") or b"<svg" in qr.to_svg()[:200]
+
+
+def test_login_turns_on_keep_login():
+    fake = FakeXianyu(["CONFIRMED"])
+    keep_login, credential = keep_login_of(fake)
+
+    assert keep_login.enabled
+    assert credential.cookies["havana_lgc_exp"] == "4102444800000"
+    assert credential.keep_login_until == 4102444800
+    set_req = fake.find("/ac/account/setLoginSettings.do")[0]
+    assert set_req.content == b"status=0"
+    # 先落到 /im 拿齐 cookie，再开保持登录
+    paths = [r.url.path for r in fake.requests]
+    assert paths.index("/im") < paths.index("/ac/account/queryLoginSettings.do")
+
+
+def test_keep_login_failure_does_not_fail_login():
+    fake = FakeXianyu(["CONFIRMED"], keep_login=False)
+    keep_login, credential = keep_login_of(fake)
+
+    assert keep_login is None
+    assert credential.unb == "42"
+    assert credential.keep_login_until is None

@@ -5,7 +5,14 @@ import pytest
 from fakes import UNB, FakePlatform
 
 from app.accounts import Accounts
+from xianyu_core import renew
 from xianyu_core.credential import Credential
+
+
+@pytest.fixture(autouse=True)
+def no_renew_delay(monkeypatch):
+    """免密续期前不用真等 2 秒。"""
+    monkeypatch.setattr(renew, "SILENT_RENEW_DELAY", 0)
 
 
 @pytest.fixture

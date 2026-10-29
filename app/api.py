@@ -111,24 +111,38 @@ def create_app(
     def account(account_id: str) -> str:
         return accounts.resolve(account_id)
 
-    @app.get("/api/accounts")
-    async def list_accounts() -> dict[str, Any]:
+    async def account_info(account_id: str, *, recheck: bool = False) -> dict[str, Any]:
+        """账号和它的登录态。记下的登录态还能用就不请求平台。"""
+        status = None if recheck else accounts.login_status(account_id)
+        if status is None:
+            async with locks[account_id]:
+                status = None if recheck else accounts.login_status(account_id)
+                status = status or await accounts.check(account_id)
         guard = accounts.guard
         return {
-            "accounts": [
-                {
-                    "id": account_id,
-                    "saved_at": accounts.load(account_id).saved_at,
-                    "block": _block(guard.block(account_id)) if guard else None,
-                }
-                for account_id in accounts.ids()
-            ]
+            "id": account_id,
+            "saved_at": accounts.load(account_id).saved_at,
+            "login": asdict(status),
+            "block": _block(guard.block(account_id)) if guard else None,
         }
+
+    @app.get("/api/accounts")
+    async def list_accounts() -> dict[str, Any]:
+        return {"accounts": [await account_info(account_id) for account_id in accounts.ids()]}
+
+    @app.post("/api/accounts/{account_id}/check")
+    async def check_account(account_id: str) -> dict[str, Any]:
+        """马上确认一次登录态（会话过期时会先试免密续期）。"""
+        return await account_info(account(account_id), recheck=True)
 
     @app.delete("/api/accounts/{account_id}/block")
     async def unblock_account(account_id: str) -> dict[str, Any]:
-        """手动解除熔断。应该先在闲鱼 App 或网页上完成验证再解除。"""
+        """手动解除熔断。应该先在闲鱼 App 或网页上完成验证再解除。
+
+        记下的"风控"登录态一并忘掉，下次拉账号列表时重新确认一次。
+        """
         account_id = account(account_id)
+        accounts.forget_login(account_id)
         return {"ok": bool(accounts.guard and accounts.guard.unblock(account_id))}
 
     @app.get("/api/accounts/{account_id}/items")
