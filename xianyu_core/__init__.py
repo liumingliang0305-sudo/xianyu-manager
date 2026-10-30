@@ -4,6 +4,8 @@ from xianyu_core.auth import QRCode, QRLogin, QRStatus
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
     AuthRequiredError,
+    ImError,
+    ImRejectedError,
     MtopError,
     QRLoginError,
     RiskControlError,
@@ -11,12 +13,17 @@ from xianyu_core.errors import (
     VerificationRequiredError,
     XianyuError,
 )
+from xianyu_core.im import ImClient, ImConnection
 from xianyu_core.mtop import MtopClient
 from xianyu_core.sign import h5_token, mtop_sign
 
 __all__ = [
     "AuthRequiredError",
     "Credential",
+    "ImClient",
+    "ImConnection",
+    "ImError",
+    "ImRejectedError",
     "MtopClient",
     "MtopError",
     "QRCode",

@@ -52,6 +52,34 @@ class VerificationRequiredError(QRLoginError):
         self.verification_url = verification_url
 
 
+class ImError(XianyuError):
+    """即时消息出错：连接断了、请求没有回应、服务端返回的不是 200。重连一般就好。
+
+    `code` 是服务端返回的状态码，没有时是 None。
+    """
+
+    def __init__(self, message: str, *, code: int | None = None, **kwargs: Any):
+        super().__init__(message, **kwargs)
+        self.code = code
+
+
+class ImRejectedError(ImError):
+    """服务端拒绝这条连接，`reason` 是下面三种之一：
+
+    - `invalid_token`：注册时 accessToken 无效（或和设备 ID 对不上），换一个 token 再连；
+    - `kickout`：连着的时候被踢下线（服务端推 /push/kickout）；
+    - `session_removed`：连接数超限，会话被服务端移除。
+    """
+
+    INVALID_TOKEN = "invalid_token"
+    KICKOUT = "kickout"
+    SESSION_REMOVED = "session_removed"
+
+    def __init__(self, message: str, *, reason: str, **kwargs: Any):
+        super().__init__(message, **kwargs)
+        self.reason = reason
+
+
 class RateLimitedError(XianyuError):
     """本地限流：这个账号请求太频繁，请求没有发出去。`retry_after` 秒后再试。"""
 

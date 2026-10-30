@@ -12,7 +12,8 @@
 - [x] 登录态续期：会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。
   纯 HTTP 扫码登录平台不给开"保持登录"（同一个账号在浏览器里能开），所以用浏览器插件（[extension/](extension/)）把浏览器里的登录同步过来，见[协议笔记](docs/protocol-notes.md#登录态续期)。线上还没走通一次真正的续期
 - [x] 定时确认登录态：`xym serve` 每 30 分钟确认一次，会话一过期就免密续期；保持登录 3 天内到期时页面顶部提醒（[app/keepalive.py](app/keepalive.py)）
-- [ ] 即时消息（WebSocket + MessagePack）
+- [x] 即时消息底座：WebSocket 长连接，新消息由服务端实时推送，不用轮询；断线自动重连，会话列表和历史消息也能拉（[xianyu_core/im.py](xianyu_core/im.py)，协议见[协议笔记](docs/protocol-notes.md#即时消息)）。发消息、标已读还没做
+- [ ] 消息管理：业务层（存消息、后台页面）还没做
 - [x] 限流和风控熔断：每个账号改动 3 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
 - [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
@@ -133,6 +134,7 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   auth/qr_login.py 扫码登录，登录后开启保持登录
   item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
   order.py         订单接口：卖出的订单列表（卖家工作台）、订单详情、改价（price render → adjust）
+  im.py            即时消息：WebSocket 连接（注册、心跳、ACK、对齐同步位点）、推送解码、会话列表、历史消息、断线重连
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回，顺手记下登录态

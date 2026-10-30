@@ -6,6 +6,10 @@ WEB_HOST = "https://www.goofish.com"
 MTOP_HOST = "https://h5api.m.goofish.com"
 PASSPORT_HOST = "https://passport.goofish.com"
 
+# 即时消息（钉钉 IMPaaS）的 WebSocket 地址和 app-key，取 accessToken 时也要带这个 app-key
+IM_WS_URL = "wss://wss-goofish.dingtalk.com/"
+IM_APP_KEY = "444e9908a51d1cb236a27862abc769c9"
+
 # 登录 cookie 都种在这个域上，h5api / passport / www 共用
 COOKIE_DOMAIN = ".goofish.com"
 
