@@ -248,19 +248,68 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 
 ## 即时消息
 
-1. 调 `mtop.taobao.idlemessage.pc.login.token` 拿 accessToken；
-2. 连接 WebSocket，发送 `/reg` 注册（带 appKey、token、设备 ID 等）；
-3. 定时发心跳 `/!`；
-4. 下行消息体是 base64 编码的 MessagePack，解出来才是消息内容；
-5. 发消息走 `/r/MessageSend/sendByReceiverScope`。
+**收消息是服务端实时推送，不是轮询。**网页版 `/im` 用的是钉钉的 IMPaaS：一条 WebSocket 长连接，新消息由服务端推下来。
+轮询只在断线重连后补漏时用到，而且也是走同一条 WebSocket 发请求，不是另开 HTTP 接口去轮询。
+（2026-10-30 读 Ydisks 的 `internal/xianyu/ws` 和 goofish-cli 的 `core/ws.py` 整理，都是 Apache-2.0。
+标了 ✅ 的当天用自己的账号实测过，测试程序只读：没发消息、没标已读。
+✅ 连着的时候在闲鱼 App 里发一条消息，0.3 秒后就推到了这条连接上。测的是自己在 App 里发出去的消息，
+别人发来的还没测；开源项目说格式一样。）
 
-设备 ID、mid、uuid 的生成规则可以参考 XianyuAutoAgent 的 `utils/xianyu_utils.py`（GPL，只看思路，不拷代码）。
+1. ✅ 调 `mtop.taobao.idlemessage.pc.login.token`，data 是 `{"appKey": "444e9908a51d1cb236a27862abc769c9", "deviceId": <did>}`，
+   `spm_cnt` 用 `a21ybx.im.0.0`。返回 `accessToken`、`accessTokenExpiredTime`、`refreshToken`。
+   Ydisks 说这里的 `deviceId` 必须和后面 `/reg` 的 `did` 一样，否则注册报 "device id or appkey is not equal"（没试过不一样）；
+2. ✅ 连 `wss://wss-goofish.dingtalk.com/`，握手带 `Origin: https://www.goofish.com`、cookie 和 UA，1 秒左右连上；
+3. ✅ 发 `/reg` 注册：`app-key` 同上，`token` 是 accessToken（Ydisks 先 URL 解码；实测拿到的 token 原样用也行），
+   `did` 是设备 ID，`sync` 填 `0,0;0;0;`，`ua` 是浏览器 UA 后面接一串 `DingTalk(2.2.0) … IMPaaS`。
+   返回 `code: 200`，body 是 `{"unitName": "PNM", "timestamp": …, "isFromChina": …}`；
+4. ✅ 注册后服务端先推一帧 `/s/sync`（没有消息条目，`syncExtraType.type` 是 2），再推 `/s/vulcan`，这时才算就绪。
+   Ydisks 和 goofish-cli 都说就绪前发 `/r/` 请求会被 `code 400` 拒绝（没试）。
+   `/s/vulcan` 里是最近会话的"激活"事件，实测 37 条，`operation.content.contentType` 是 8，
+   `operation.sessionInfo.extensions` 里有 `itemId`、`itemTitle`、`ownerUserId`、`extUserId`；
+5. ✅ 每 15 秒发一次心跳 `/!`，回 `code: 200`，一般 260 毫秒左右，慢的时候 1.4 秒。10 分钟 39 次心跳，连接没断过。
+   开源项目的做法是 30 秒没回应就断开重连，按连续失败次数退避：5 秒、15 秒、30 秒、1 分钟、2 分钟；
+6. ✅ **收消息**：服务端推带 `body.syncPushPackage.data[]` 的帧，一帧里可能有好几条，每条的 `data` 是 base64。
+   `/s/vulcan` 里的会话激活事件 base64 解出来就是 JSON；聊天消息走 `/s/sync`，条目的 `objectType` 是 40000，
+   base64 解出来是 MessagePack，见下面"聊天消息的推送"。
+   每帧都原样带着它的 headers 回一次 ACK（`{"code": 200, "headers": …}`，一帧只回一次，不管里面有几条），服务端没有异议；
+7. ✅ 推送带 `syncExtraType` 1 或 2 时，发 `/r/SyncStatus/getState`（body `[{"topic": "sync"}]`），
+   再把它返回的 body 原样放进 `/r/SyncStatus/ackDiff`，两个都回 200；
+8. 补漏和看历史（都是 WebSocket 上的请求）：
+   - ✅ 会话列表 `/r/Conversation/listNewestPagination`，body `[9007199254740991, 20]`（游标取最大值表示从最新一页开始）。
+     返回 `hasMore`、`nextCursor`、`userConvs[]`；每个会话在 `singleChatUserConversation` 下，有 `redPoint`（应该是未读数）、
+     `modifyTime`，`singleChatConversation` 里有 `cid`、`pairFirst` / `pairSecond`（双方 ID）、`extension.ownerUserId` / `extUserId`；
+   - 某个会话的消息 `/r/MessageManager/listUserMessages`，body `[cid, false, 游标, 条数, false]`；
+9. 发消息走 `/r/MessageSend/sendByReceiverScope`，标已读 `/r/MessageStatus/read`；
+10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
+
+`did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，
+不能每次连接都新生成一个：要么沿用浏览器里网页版已有的那个，要么每个账号只生成一次、存下来一直用。
+实测用的是后一种，存在 `data/im/<unb>.json`；同一个 did 前后连了三次，都没被踢。
+
+### 聊天消息的推送
+
+✅ 2026-10-30 实测一条文本消息。MessagePack 解出来是嵌套的字典，键都是数字字符串，下面用点号写路径：
+
+| 路径 | 内容 |
+|---|---|
+| `1.1.1` | `<userId>@goofish`。这次是自己发的，它和 `senderUserId` 都是自己，分不出它是发送人还是当前账号，以 `1.10.senderUserId` 为准 |
+| `1.2` | 会话 ID，`<cid>@goofish`，和会话列表里的 `cid` 对得上 |
+| `1.3` | 消息 ID，形如 `<13 位数字>.PNM` |
+| `1.5` | 发送时间，毫秒时间戳 |
+| `1.6.1` | 外层内容类型，聊天消息是 101（自定义消息） |
+| `1.6.3.4` | 内层内容类型，1 是文本 |
+| `1.6.3.5` | 内层内容，是 JSON 字符串，不是 base64：`{"contentType": 1, "text": {"text": …}, "atUsers": []}` |
+| `1.6.3.2` | 摘要，文本消息就是正文 |
+| `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（发送人昵称）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 和对方 ID 从这里取 |
+| `3.needPush` | 要不要给手机推通知，这次是 `"false"` |
+
+`1.10` 里还带着发送端的 `clientIp`、`umid`、`umidToken`、`utdid`，是发消息那台设备的信息，不要存，也不要写进日志。
 
 ## 开源项目里常见的 mtop 接口
 
 | 接口 | 用途 |
 |---|---|
-| `mtop.taobao.idlemessage.pc.login.token` | 即时消息的 accessToken |
+| `mtop.taobao.idlemessage.pc.login.token` | 即时消息的 accessToken。✅ 见上面"即时消息" |
 | `mtop.taobao.idlemessage.pc.loginuser.get` | 当前登录用户。✅ 只返回 `userId`（等于 cookie 里的 `unb`），没有昵称 |
 | `mtop.idle.web.user.page.head` | 个人主页头部，`{"self": true}` 查自己。✅ 昵称在 `module.base.displayName` |
 | `mtop.taobao.idlemessage.pc.user.query` | 查询用户 |
