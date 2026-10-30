@@ -163,6 +163,55 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 🔍 为什么不能开还不知道：可能是账号本身不支持，也可能和登录方式（纯 HTTP 扫码、`umidTag=SERVER`、没走登录框的
 `keepLoginConfirm` 弹窗）有关。可以在浏览器里正常登录一次 goofish.com，看右上角个人信息弹窗里有没有"保存登录信息"开关来区分。
 
+#### 扫码登录时的"保持登录状态"弹窗
+
+> 来源：2026-10-30 读登录框 `x.alicdn.com/vip/havana-nlogin/0.10.38/index.js`（SHA-256 `1603531d…`）和
+> `mini_login.htm` 里的 `window.viewConfig`。🔍 还没在线上见过真正的弹窗响应。
+
+扫码视图的 `moduleCfg.blockCfg.keepLoginConfirm` 配了一个弹窗：标题"保持登录状态"，内容"保持登录，下次访问无需登录即可查看账号信息"，
+两个按钮"不保持"（`dynamicUrlCode=dialogRefuseLoginUrl`，8 秒后自动选它）和"保持"（`dialogConfirmLoginUrl`）。密码、短信登录也有这个弹窗，
+另外还有"保持登录"复选框（请求里的 `keepLogin`）；扫码登录没有复选框，只能靠弹窗。
+
+- `query.do` 返回 `CONFIRMED` 后，登录框把 `content.data` 交给 `handleLoginResult`：`dialogAction` 是弹窗类型，
+  `feedbackPayload.dynamicUrl` 是各按钮要提交的地址（平台给，可能是相对地址）。要弹窗时结果里不会同时有 `redirect`，
+  登录要等用户选完才往下走；
+- 点按钮：POST 那个地址，请求体只有登录框每个 POST 都带的 `deviceId`（浏览器 localStorage 的 `APLUS_CNA`，新浏览器是空的）
+  和 `pageTraceId`（登录页 `<meta name="eagleeye-trace">`）；返回的 `content.data.resultCode === 100` 才算成功，
+  然后照常处理登录结果（`redirect` 时整页跳到 `redirectUrl`）；
+- 我们以前不看 `dialogAction`、不提交，等于一直选了"不保持"。这可能就是上面开不了保持登录的原因。
+
+`QRLogin` 现在的做法：`dialogAction` 是 `keepLoginConfirm` 时替用户选"保持"，提交 `dialogConfirmLoginUrl`（只发给
+`https://passport.goofish.com`，别的地址不发）；成功后有本站的 `redirectUrl` 就跟一下，再照常访问 `/im`、查一次保持登录。
+弹窗提交失败只记日志，不影响登录。确认结果和弹窗结果的字段名用 INFO 级别记日志（`xianyu -v login` 能看到），不记值。
+
+2026-10-30 实测（同一个账号再扫一次）：确认结果的字段是 `appEntrance`、`loginResult`、`loginScene`、`loginSucResultAction`、
+`loginType`、`processFinished`、`qrCodeStatus`、`resultCode`、`smartlock`、`st`，**没有** `dialogAction`，平台这次没要弹窗；
+查出来还是 `canOpenLongLogin: false`。所以上面这个账号开不了保持登录，不是因为没回弹窗。
+- 登录框拿到这种结果只做一件事：有 `st` 就 postMessage 给外层页面；`smartlock`、`loginSucResultAction`、`loginScene` 登录框都不看；
+- 外层页面（xy-site 0.0.179 `p_layout.js` 的登录弹层）收到 `loginResult` 且 `dialogAction` 不是 `keepLoginConfirm` 时直接
+  `location.reload()`，不拿 `st` 换别的东西。登录 cookie 在 `query.do` 那一跳已经种好了，和我们的做法一样；
+- 个人信息弹窗的"保存登录信息"开关只在 `canOpenLongLogin` 为 true 时显示（同一个文件），和我们查的是同一个值。
+✅ 2026-10-30 同一个账号在用户自己的浏览器里登录 goofish.com，头像菜单里**有**"保存登录信息"开关，而且是开着的。
+所以账号本身能开，差别在登录环境：浏览器登录框带的是 um.js 采集设备信息算出来的 `umidToken`，我们是登录页给的
+`umidToken` 加 `umidTag=SERVER`。伪造设备指纹是在绕平台的风控，不做。
+
+#### 导入浏览器的登录
+
+替代办法：在浏览器里登录、打开"保存登录信息"，把那份登录的 cookie 整串交给管理后台（`POST /api/login/import`）。
+平时用 Chrome 插件（`extension/`）自动推，登录弹窗里的「导入浏览器登录」是手动粘贴的备用办法。2026-10-30 手动粘贴实测成功，
+导入的凭证带 `havana_lgc_exp`（到 30 天后），还带着浏览器那边的 `sdkSilent`。
+- 从哪复制：开发者工具"网络"里 `www.goofish.com` 那条文档请求的 `Cookie` 请求头。续期插件在 `www.goofish.com` 上读
+  `havana_lgc_exp` / `cookie3_bak_exp`，所以这两个 cookie 对 www 可见，会出现在这个请求头里；`cookie2` 是 HttpOnly，
+  `document.cookie` 拿不到，请求头里有；
+- 后台只要求有 `unb` 和 `cookie2`（`_m_h5_tk` 没有也行，第一次请求平台会发），先调 `loginuser.get` 确认登录态有效、
+  `userId` 等于 `unb` 才保存，失效的 cookie 不会盖掉现有凭证；
+- 确认时**不续期**：插件会反复推同一份 cookie，浏览器那份过期了还替它续，就是每推一次续一次，绕开了 `sdkSilent` 限频。
+  过期的直接拒绝（401），后台留着自己那份，自己的会话过期时照常续；浏览器那份等网页端自己续上、cookie 变了再推；
+- `unb`、`cookie2`、`havana_lgc_exp`、`cookie3_bak_exp` 都和已保存的一样就算同一份登录，不请求平台，直接返回 `changed: false`；
+- 插件那边：这几个 cookie 变了（防抖 3 秒）、每 10 分钟、浏览器启动、点"立即同步"时推；登录指纹没变不推；
+  4xx（过期、缺字段、不是这个账号）记下这份指纹不再重推，连不上后台、429、5xx 下次定时再试；
+- 导入后浏览器和后台共用这次登录：浏览器里退出登录，后台也失效。两边各自免密续期会不会互相顶掉还没验证过。
+
 ### 免密续期
 
 插件的流程（`xianyu_core/renew.py` 照搬）：
@@ -188,6 +237,14 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 - 风控（`RGV587`、`FAIL_SYS_USER_VALIDATE`、punish 页）一律不续期；续期请求本身被跳到 punish 页也按风控处理；
 - 和插件一样遵守 `sdkSilent` 限频，会话过期时也不绕过（Ydisks 在会话过期时会绕过，我们不这么做）；
 - 续期拿到的 cookie（包括 `sdkSilent`）都在 cookie jar 里，业务层 `Accounts.mtop()` 用完写回凭证文件，续期失败也写。
+- 网页端每打开一个页面就续一次；管理后台没人用的时候也要续，所以 `xym serve` 每 30 分钟调一次 `loginuser.get`（`app/keepalive.py`），
+  会话过期就走上面的续期。失效的账号只在续期有希望时（保持登录没到期、`sdkSilent` 过了）再试，最快 2 小时一次；风控的不碰。
+  续期成功和失效都用 WARNING 记日志，在 `xym serve` 的终端里能看到，可以从这里看出会话实际多久过期。
+
+几个还不知道的数（等定时确认跑一阵再补）：
+- 🔍 会话（`cookie2`）多久过期；
+- 🔍 `sdkSilent` 一般设多久：2026-10-30 只见过一次，浏览器 07:02 登录后是到第二天 08:00；
+- 🔍 续期时平台会不会顺延 `havana_lgc_exp`。不顺延的话，登录 30 天后要在浏览器里重新登录一次，页面会提前 3 天提醒。
 
 ## 即时消息
 

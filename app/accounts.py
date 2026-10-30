@@ -151,6 +151,22 @@ class Accounts:
             )
         return self._status[account_id]
 
+    async def verify(self, credential: Credential) -> Credential:
+        """确认一份还没保存的凭证（比如从浏览器导入的）登录态有效、属于 cookie 里的账号。
+
+        不写文件，也不续期：会话过期就抛 AuthRequiredError。浏览器插件会反复推同一份过期的 cookie，
+        续期的话每推一次续一次，等于绕开了平台的 sdkSilent 限频。
+        返回请求以后的凭证（可能换发了 _m_h5_tk）。
+        """
+        guard = self.guard.bind(credential.unb) if self.guard else None
+        async with MtopClient(
+            credential, transport=self._transport, guard=guard, auto_renew=False
+        ) as client:
+            user = await client.call(LOGIN_USER_API)
+            if str(user.get("userId", "")) != credential.unb:
+                raise AuthRequiredError("登录态对应的账号和 cookie 里的 unb 不一致")
+            return client.credential
+
     def forget_login(self, account_id: str) -> None:
         """忘掉记下的登录态，下次用到时重新确认（比如手动解除熔断以后）。"""
         self._status.pop(account_id, None)

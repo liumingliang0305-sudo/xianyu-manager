@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>闲鱼登录同步</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1f1f1f;
+        --muted: #6b6b6b;
+        --bg: #ffffff;
+        --border: #d9d9d9;
+        --ok: #188038;
+        --error: #d93025;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #ececec;
+          --muted: #a3a3a3;
+          --bg: #1f1f1f;
+          --border: #3c3c3c;
+          --ok: #81c995;
+          --error: #f28b82;
+        }
+      }
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 14px 16px;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+      p {
+        margin: 0 0 6px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .error {
+        color: var(--error);
+      }
+      button {
+        width: 100%;
+        margin: 6px 0 12px;
+        padding: 6px 0;
+        border: 0;
+        border-radius: 6px;
+        font: inherit;
+        color: #1f1f1f;
+        background: #ffe14d;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 4px 6px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font: inherit;
+        color: var(--fg);
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>闲鱼登录同步</h1>
+    <p id="status" aria-live="polite">还没同步过</p>
+    <p id="detail"></p>
+    <p id="time" class="muted"></p>
+    <button id="sync" type="button">立即同步</button>
+    <label for="server">管理后台地址（只能是本机）</label>
+    <input id="server" type="url" spellcheck="false" />
+    <p id="server-error" class="error" hidden>只能填本机地址，比如 http://127.0.0.1:8000</p>
+    <p class="muted">浏览器里点“退出登录”，管理后台的登录也会失效。</p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

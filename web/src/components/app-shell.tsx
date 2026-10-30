@@ -6,6 +6,7 @@ import {
   MessageSquareIcon,
   MoonIcon,
   PackageIcon,
+  QrCodeIcon,
   RefreshCwIcon,
   ShoppingCartIcon,
   SunIcon,
@@ -13,11 +14,12 @@ import {
   UserIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import type { ComponentType, ReactNode } from "react"
+import { useState, type ComponentType, type ReactNode } from "react"
 import { NavLink, Outlet } from "react-router"
 import { toast } from "sonner"
 
 import { GuardBanner } from "@/components/guard-banner"
+import { LoginDialog } from "@/components/login-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -115,9 +117,9 @@ function loginHint(login: LoginStatus): string {
     case "valid":
       return login.keep_login_until
         ? `保持登录到 ${dateTime(login.keep_login_until)}`
-        : "没开保持登录，过期后要重新扫码"
+        : "没开保持登录，过期后要重新登录"
     case "expired":
-      return "终端运行 uv run xianyu login 重新扫码"
+      return "要重新登录"
     case "risk":
       return "到闲鱼 App 或网页完成验证后再检查"
     case "error":
@@ -134,7 +136,7 @@ function LoginDot({ state }: { state: LoginState }) {
   )
 }
 
-function AccountSwitcher() {
+function AccountSwitcher({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, setAccount } = useAccount()
   const queryClient = useQueryClient()
   const check = useMutation({
@@ -190,9 +192,10 @@ function AccountSwitcher() {
           重新检查登录态
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          添加账号：终端运行 uv run xianyu login
-        </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={onLogin}>
+          <QrCodeIcon />
+          重新登录
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -222,13 +225,27 @@ function Notice({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function LoginBanner({ login }: { login: LoginStatus }) {
-  if (login.state !== "expired" && login.state !== "risk") return null
+/** 保持登录还剩几天时开始提醒 */
+const KEEP_LOGIN_WARN_DAYS = 3
+
+/** 保持登录快到期或已经到期时的提醒；会话已失效、风控时有别的提示，不用这个 */
+function keepLoginWarning(login: LoginStatus): string | null {
+  const until = login.keep_login_until
+  if (!until || login.state === "expired" || login.state === "risk") return null
+  const left = until * 1000 - Date.now()
+  if (left > KEEP_LOGIN_WARN_DAYS * 24 * 3600 * 1000) return null
+  const when = left > 0 ? `保持登录 ${dateTime(until)} 到期` : "保持登录已经到期"
+  return `${when}，之后会话一过期就续不上了。在 Chrome 里重新登录闲鱼、打开“保存登录信息”，插件会自动同步过来。`
+}
+
+function LoginBanner({ login, onLogin }: { login: LoginStatus; onLogin: () => void }) {
+  const keepLogin = keepLoginWarning(login)
+  if (login.state !== "expired" && login.state !== "risk" && !keepLogin) return null
   const expired = login.state === "expired"
   return (
     <div
       className={cn(
-        "mb-4 flex items-start gap-2 rounded-lg border px-3 py-2 text-sm",
+        "mb-4 flex flex-wrap items-start gap-2 rounded-lg border px-3 py-2 text-sm",
         expired
           ? "border-destructive/30 bg-destructive/5"
           : "border-amber-500/30 bg-amber-500/5",
@@ -238,21 +255,25 @@ function LoginBanner({ login }: { login: LoginStatus }) {
         className={cn("mt-0.5 size-4 shrink-0", expired ? "text-destructive" : "text-amber-600")}
       />
       {expired ? (
-        <p>
-          闲鱼登录已失效，免密续期也没成功。在终端运行{" "}
-          <code className="rounded bg-muted px-1 py-0.5">uv run xianyu login</code>{" "}
-          重新扫码，再在右上角账号菜单里点「重新检查登录态」。
-        </p>
-      ) : (
-        <p>
+        <>
+          <p className="min-w-0 flex-1">闲鱼登录已失效，免密续期也没成功，要重新登录。</p>
+          <Button variant="outline" size="sm" className="-my-0.5" onClick={onLogin}>
+            <QrCodeIcon />
+            重新登录
+          </Button>
+        </>
+      ) : login.state === "risk" ? (
+        <p className="min-w-0 flex-1">
           触发了闲鱼风控，先暂停操作。到闲鱼 App 或网页完成验证后，再在右上角账号菜单里点「重新检查登录态」。
         </p>
+      ) : (
+        <p className="min-w-0 flex-1">{keepLogin}</p>
       )}
     </div>
   )
 }
 
-function Content() {
+function Content({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, isLoading, error } = useAccount()
   if (isLoading) {
     return (
@@ -268,8 +289,11 @@ function Content() {
   if (!account) {
     return (
       <Notice title="还没有闲鱼账号">
-        在项目目录运行 <code className="rounded bg-muted px-1 py-0.5">uv run xianyu login</code>
-        ，用闲鱼 App 扫码登录后刷新本页。
+        <p>用闲鱼 App 扫码，或者导入浏览器里的登录，就能在这里管理商品和订单。</p>
+        <Button className="mt-4" onClick={onLogin}>
+          <QrCodeIcon />
+          登录闲鱼
+        </Button>
       </Notice>
     )
   }
@@ -280,7 +304,7 @@ function Content() {
       <GuardBanner />
       {/* 熔断期间顶部的熔断提示已经说了风控和下一步，登录态提示不再重复说风控 */}
       {current && !(current.block && current.login.state === "risk") && (
-        <LoginBanner login={current.login} />
+        <LoginBanner login={current.login} onLogin={onLogin} />
       )}
       <Outlet key={account} />
     </>
@@ -288,6 +312,8 @@ function Content() {
 }
 
 export function AppShell() {
+  const [loginOpen, setLoginOpen] = useState(false)
+  const openLogin = () => setLoginOpen(true)
   return (
     <div className="flex min-h-svh bg-muted/40">
       <aside className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col gap-6 border-r bg-sidebar px-3 py-4 md:flex">
@@ -302,15 +328,16 @@ export function AppShell() {
             <Brand />
           </div>
           <div className="flex-1" />
-          <AccountSwitcher />
+          <AccountSwitcher onLogin={openLogin} />
           <ThemeToggle />
         </header>
         <main className="flex-1 px-4 py-6 md:px-8">
           <div className="mx-auto max-w-6xl">
-            <Content />
+            <Content onLogin={openLogin} />
           </div>
         </main>
       </div>
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
     </div>
   )
 }

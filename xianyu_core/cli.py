@@ -96,7 +96,7 @@ async def login(out_dir: Path, *, invert: bool, open_image: bool) -> int:
     print(f"\n登录成功：{nick or '（未返回昵称）'}（unb {_mask(credential.unb)}）")
     if keep_login is None:
         print("注意：开启保持登录时出错，会话过期后要重新扫码（加 -v 看原因）")
-    elif not keep_login.can_open:
+    elif not keep_login.enabled and not keep_login.can_open:
         print("注意：平台不给这次登录开保持登录，会话过期后要重新扫码")
     else:
         print(_keep_login_text(credential))

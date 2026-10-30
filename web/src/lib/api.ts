@@ -7,7 +7,7 @@ export interface AccountBlock {
   reason: string
 }
 
-/** valid 有效；expired 免密续期也没成功，要重新扫码；risk 触发风控；error 网络或平台出错，没判断出来 */
+/** valid 有效；expired 免密续期也没成功，要重新登录；risk 触发风控；error 网络或平台出错，没判断出来 */
 export type LoginState = "valid" | "expired" | "risk" | "error"
 
 export interface LoginStatus {
@@ -25,6 +25,37 @@ export interface Account {
   saved_at: number | null
   login: LoginStatus
   block: AccountBlock | null
+}
+
+/**
+ * 扫码登录的进度。waiting 等扫码；scanned 已扫码，等手机上确认；confirmed 正在拿凭证；done 成功，凭证已保存；
+ * expired 二维码过期；canceled 手机上取消了；verify 平台要求额外身份验证；failed 其他错误
+ */
+export type LoginPhase =
+  | "waiting"
+  | "scanned"
+  | "confirmed"
+  | "done"
+  | "expired"
+  | "canceled"
+  | "verify"
+  | "failed"
+
+export interface LoginProgress {
+  id: string
+  phase: LoginPhase
+  /** 出错的原因；登录成功时是保持登录的情况 */
+  message: string
+  /** 登录成功后是账号 unb */
+  account_id: string
+}
+
+/** 导入浏览器登录的结果 */
+export interface LoginImport {
+  account_id: string
+  /** 保持登录到期时间（秒），这份 cookie 没开保持登录是 null */
+  keep_login_until: number | null
+  message: string
 }
 
 export interface Item {
@@ -203,6 +234,18 @@ export const api = {
       method: "DELETE",
     }),
 
+  /** 取一张新二维码，上一张没扫完的作废 */
+  startLogin: () => request<LoginProgress & { qr_svg: string }>("/login", { method: "POST" }),
+
+  loginProgress: (id: string) => request<LoginProgress>(`/login/${encodeURIComponent(id)}`),
+
+  cancelLogin: (id: string) =>
+    request<{ ok: boolean }>(`/login/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** 导入浏览器的登录（整串 Cookie 请求头）。后台先向平台确认能用再保存 */
+  importLogin: (cookie: string) =>
+    request<LoginImport>("/login/import", { method: "POST", body: JSON.stringify({ cookie }) }),
+
   items: (account: string) =>
     request<{ items: Item[]; last_synced_at: number | null }>(
       `${itemsPath(account)}?include_gone=true`,
@@ -288,7 +331,7 @@ export function errorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error)
   switch (error.code) {
     case "auth_required":
-      return "闲鱼登录已失效，请在终端运行 uv run xianyu login 重新扫码"
+      return "闲鱼登录已失效，请重新登录"
     case "risk_control":
       return "触发了闲鱼风控，账号已自动暂停请求。先到闲鱼 App 或网页完成验证"
     case "circuit_open":

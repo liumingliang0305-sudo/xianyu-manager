@@ -8,9 +8,10 @@
 - [x] 协议笔记 → [docs/protocol-notes.md](docs/protocol-notes.md)
 - [x] 底座方案：Python 自建 `xianyu_core`，结构参考 goofish-cli
 - [x] mtop 签名和请求客户端（[xianyu_core/mtop.py](xianyu_core/mtop.py)）
-- [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)）
-- [x] 登录态续期：扫码后开启"保持登录"，会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。线上还没走通一次真正的续期，见[协议笔记](docs/protocol-notes.md#登录态续期)
-- [ ] 定时续期：网页端每打开一个页面就续一次，我们现在只在会话过期时续
+- [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)），终端和管理后台都能扫（[app/login.py](app/login.py)）
+- [x] 登录态续期：会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。
+  纯 HTTP 扫码登录平台不给开"保持登录"（同一个账号在浏览器里能开），所以用浏览器插件（[extension/](extension/)）把浏览器里的登录同步过来，见[协议笔记](docs/protocol-notes.md#登录态续期)。线上还没走通一次真正的续期
+- [x] 定时确认登录态：`xym serve` 每 30 分钟确认一次，会话一过期就免密续期；保持登录 3 天内到期时页面顶部提醒（[app/keepalive.py](app/keepalive.py)）
 - [ ] 即时消息（WebSocket + MessagePack）
 - [x] 限流和风控熔断：每个账号改动 3 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
@@ -21,13 +22,15 @@
 - [ ] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），等即时消息做好后从交易消息里记
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
+以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹、登录同步插件推到远程服务器。
+
 ## 快速上手
 
 需要 [uv](https://docs.astral.sh/uv/) 和 Python 3.12 以上；管理后台的前端还要 Node.js 20 以上。
 
 ```bash
 uv sync                                      # 安装依赖
-uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫
+uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫（也可以在管理后台里扫）
 uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效，会话过期时先试免密续期
 uv run pytest                                # 跑测试
 ```
@@ -75,6 +78,17 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 前端用 pnpm，版本固定在 `web/package.json` 的 `packageManager` 里。没装过的话先运行一次 `corepack enable pnpm`（Node 自带的 corepack 会按这个版本下载 pnpm）。
 
 平时用：先打包一次前端，之后只要起后台，浏览器打开 http://127.0.0.1:8000 。
+还没有账号时页面上直接点「登录闲鱼」；登录失效时页面顶部的提示和右上角账号菜单里都能重新登录。
+扫码登录的会话平台不给开保持登录，过期后只能重新扫。想要自动续期，用浏览器插件把 Chrome 里的登录同步过来：
+
+1. Chrome 打开 `chrome://extensions`，右上角打开"开发者模式"，点"加载已解压的扩展程序"，选这个项目的 `extension` 目录；
+2. 在 Chrome 里登录 goofish.com，头像菜单里打开"保存登录信息"；
+3. 插件会把登录推给本机的管理后台（默认 http://127.0.0.1:8000，插件弹窗里能改，只能填本机地址）。
+   之后浏览器里登录变了（重新登录、网页端自动续期）都会自动同步，另外每 10 分钟对一次。点插件图标能看同步结果。
+
+插件只读 goofish.com 的 cookie，只发给本机的后台。后台和浏览器共用这次登录，浏览器里退出登录这里也会失效。
+后台收到登录先向平台确认能用再保存；和已保存的一样就不请求平台；浏览器那份已经过期就拒绝，不替它续期，留着后台自己那份。
+没装插件时，登录弹窗的「导入浏览器登录」可以手动粘贴开发者工具里 www.goofish.com 那条请求的 Cookie 请求头，效果一样。
 
 ```bash
 pnpm -C web install && pnpm -C web build   # 第一次，或前端代码更新后
@@ -125,6 +139,8 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   db.py            本地 SQLite（data/xianyu.db）：items、item_ops、orders、order_ops 四张表
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
+  login.py         管理后台的登录：扫码（后台任务跑 QRLogin，前端轮询进度，同一时间只有一张码）和导入浏览器的 Cookie
+  keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
   （以后）消息、自动化……
@@ -134,6 +150,10 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
   src/features/orders/ 订单管理页：添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
+extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理后台（manifest v3，不用打包，直接加载目录）
+  background.js    cookie 变化和每 10 分钟时推给 /api/login/import，登录没变不推
+  lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址），可以直接用 node 测
+  popup.html/js    弹窗：同步结果、立即同步、管理后台地址
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
 ```

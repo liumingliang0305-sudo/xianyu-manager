@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,10 +24,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import db
+from app import db, keepalive
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
 from app.items import ItemService, PriceGuardError
+from app.login import (
+    LoginNotFoundError,
+    WebLogin,
+    imported_text,
+    parse_cookie_header,
+    same_login,
+)
 from app.orders import OrderService
+from xianyu_core.credential import Credential
 from xianyu_core.errors import (
     AuthRequiredError,
     CircuitOpenError,
@@ -43,6 +52,7 @@ WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 ERRORS: list[tuple[type[Exception], int, str]] = [
     (PriceGuardError, 409, "price_guard"),
     (AccountNotFoundError, 404, "account_not_found"),
+    (LoginNotFoundError, 404, "login_not_found"),
     (AuthRequiredError, 401, "auth_required"),
     (RiskControlError, 503, "risk_control"),
     (CircuitOpenError, 503, "circuit_open"),
@@ -70,6 +80,10 @@ class OrderAddIn(BaseModel):
     order: str  # 订单号，或者订单详情页的链接
 
 
+class CookieImportIn(BaseModel):
+    cookie: str  # 浏览器开发者工具里复制的 Cookie 请求头
+
+
 class OrderPriceIn(BaseModel):
     fees: dict[str, str]  # 价格项 key → 新金额（元），没传的项保持原值
     force: bool = False
@@ -83,18 +97,38 @@ def create_app(
     interval: float = 1.5,
     web_dist: Path | None = WEB_DIST,
     guard: Guard | None = None,
+    login_poll_interval: float = 2.0,
+    login_check_interval: float | None = None,
 ) -> FastAPI:
+    """`login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。"""
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard(db_path))
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    async def save_login(credential: Credential) -> None:
+        # 等这个账号手上的平台请求做完再写，免得请求结束时把旧 cookie 写回来，盖掉刚扫到的凭证
+        async with locks[credential.unb]:
+            credential.save(accounts.path(credential.unb))
+
+    logins = WebLogin(save_login, transport=transport, poll_interval=login_poll_interval)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         conn = db.connect(db_path)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
+        keeper = None
+        if login_check_interval:
+            keeper = asyncio.create_task(
+                keepalive.run_forever(accounts, locks, interval=login_check_interval)
+            )
         try:
             yield
         finally:
+            if keeper:
+                keeper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await keeper
+            await logins.aclose()
             conn.close()
 
     app = FastAPI(title="闲鱼管理系统", lifespan=lifespan)
@@ -144,6 +178,45 @@ def create_app(
         account_id = account(account_id)
         accounts.forget_login(account_id)
         return {"ok": bool(accounts.guard and accounts.guard.unblock(account_id))}
+
+    @app.post("/api/login")
+    async def start_login() -> dict[str, Any]:
+        """扫码登录：取一张新二维码（上一张没扫完的作废），之后轮询 GET /api/login/{id}。"""
+        progress, svg = await logins.start()
+        return asdict(progress) | {"qr_svg": svg.decode()}
+
+    @app.get("/api/login/{session_id}")
+    async def login_progress(session_id: str) -> dict[str, Any]:
+        """扫码进度。登录成功（phase=done）时凭证已经保存好了。"""
+        return asdict(logins.progress(session_id))
+
+    @app.delete("/api/login/{session_id}")
+    async def cancel_login(session_id: str) -> dict[str, Any]:
+        """关掉扫码弹窗时取消，后台不再替这张二维码轮询。"""
+        return {"ok": await logins.cancel(session_id)}
+
+    @app.post("/api/login/import")
+    async def import_login(body: CookieImportIn) -> dict[str, Any]:
+        """导入浏览器的登录（整串 Cookie 请求头）：管理后台里粘贴的，和浏览器插件自动同步的。
+
+        和已保存的是同一份登录就直接返回（changed=false），不请求平台；
+        不一样时先向平台确认能用再保存。过期的不续期、直接拒绝，不会拿失效的 cookie 盖掉现有凭证。
+        """
+        credential = parse_cookie_header(body.cookie)
+        path = accounts.path(credential.unb)
+        async with locks[credential.unb]:
+            changed = not (path.exists() and same_login(credential, Credential.load(path)))
+            if changed:
+                credential = await accounts.verify(credential)
+                credential.save(path)
+            else:
+                credential = Credential.load(path)
+        return {
+            "account_id": credential.unb,
+            "changed": changed,
+            "keep_login_until": credential.keep_login_until,
+            "message": imported_text(credential),
+        }
 
     @app.get("/api/accounts/{account_id}/items")
     async def list_items(

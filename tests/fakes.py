@@ -222,3 +222,120 @@ class FakePlatform:
         order["price"] = int(data["modifyFee"])
         order["post"] = int(data["newTransportFee"])
         return {}
+
+
+# ---- 扫码登录 ----
+
+LOGIN_FORM = {
+    "appName": "xianyu",
+    "appEntrance": "web",
+    "_csrf_token": "csrf-abc",
+    "umidToken": "umid-xyz",
+    "hsiz": "hs-1",
+    "isMobile": False,
+    "returnUrl": "",
+    "fromSite": 77,
+}
+# 故意让 JSON 字符串里出现 "};"，验证解析不会提前截断
+VIEW_DATA = {"loginFormData": LOGIN_FORM, "title": "登录};"}
+MINI_LOGIN_HTML = (
+    '<html><meta name="eagleeye-trace" content="trace-1">'
+    "<script>window.viewData = " + json.dumps(VIEW_DATA, ensure_ascii=False) + ";"
+    "window.other = {};</script></html>"
+)
+
+# "保持登录状态"弹窗各按钮的地址，平台给的是相对地址
+KEEP_LOGIN_DIALOG_URLS = {
+    "dialogConfirmLoginUrl": "/newlogin/keepLoginConfirm.do?choice=keep&token=tk",
+    "dialogRefuseLoginUrl": "/newlogin/keepLoginConfirm.do?choice=refuse&token=tk",
+}
+
+
+class FakeXianyu:
+    """按 URL 模拟扫码登录用到的接口；query.do 按 statuses 顺序返回，只剩一个时一直返回它。"""
+
+    def __init__(self, statuses, *, confirm_extra=None, keep_login=True, keep_login_dialog=False):
+        self.statuses = list(statuses)
+        self.confirm_extra = confirm_extra or {}
+        self.keep_login = keep_login  # False 时打开保持登录的接口报错
+        # True 时像线上的账号：确认时要登录框弹"保持登录状态"，个人信息里的开关不给开
+        self.keep_login_dialog = keep_login_dialog
+        self.dialog_result = {"resultCode": 100}  # 弹窗里点"保持"的返回
+        self.long_login_on = False
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        host, path = request.url.host, request.url.path
+        if host == "h5api.m.goofish.com":
+            return httpx.Response(
+                200,
+                json={"ret": ["FAIL_SYS_TOKEN_EMPTY::令牌为空"]},
+                headers={"set-cookie": f"_m_h5_tk=boot_1; {SHARED}"},
+            )
+        if path == "/mini_login.htm":
+            return httpx.Response(200, text=MINI_LOGIN_HTML)
+        if path == "/newlogin/qrcode/generate.do":
+            return httpx.Response(
+                200,
+                json={
+                    "content": {
+                        "success": True,
+                        "data": {
+                            "t": 1761600000123,
+                            "ck": "ck-1",
+                            "codeContent": "https://qr.example/x",
+                        },
+                    }
+                },
+            )
+        if path == "/newlogin/qrcode/query.do":
+            status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            if status == "HAS_ERROR":
+                return httpx.Response(200, json={"hasError": True})
+            data = {"qrCodeStatus": status}
+            headers = []
+            if status == "CONFIRMED":
+                if self.keep_login_dialog:
+                    data |= {
+                        "dialogAction": "keepLoginConfirm",
+                        "feedbackPayload": {"dynamicUrl": KEEP_LOGIN_DIALOG_URLS},
+                    }
+                data |= self.confirm_extra
+                headers = [
+                    ("set-cookie", f"cookie2=c2; {SHARED}; HttpOnly"),
+                    ("set-cookie", f"unb=42; {SHARED}"),
+                ]
+            return httpx.Response(200, json={"content": {"data": data}}, headers=headers)
+        if path == "/newlogin/keepLoginConfirm.do":
+            choice = request.url.params["choice"]
+            headers = []
+            if choice == "keep" and self.dialog_result.get("resultCode") == 100:
+                self.long_login_on = True
+                headers = [("set-cookie", f"havana_lgc_exp=4102444800000; {SHARED}")]
+            return httpx.Response(
+                200, json={"content": {"data": self.dialog_result}}, headers=headers
+            )
+        if host == "www.goofish.com" and path == "/im":
+            return httpx.Response(
+                200, text="<html>im</html>", headers=[("set-cookie", f"sgcookie=sg; {SHARED}")]
+            )
+        if path == "/ac/account/setLoginSettings.do":
+            if not self.keep_login:
+                return httpx.Response(500)
+            self.long_login_on = True
+            return httpx.Response(
+                200,
+                json={"success": True},
+                headers=[("set-cookie", f"havana_lgc_exp=4102444800000; {SHARED}")],
+            )
+        if path == "/ac/account/queryLoginSettings.do":
+            value = {
+                "canOpenLongLogin": not self.keep_login_dialog,
+                "hasLongTokenLogin": self.long_login_on,
+            }
+            return httpx.Response(200, json={"returnValue": value, "success": True})
+        return httpx.Response(404)
+
+    def find(self, path):
+        return [r for r in self.requests if r.url.path == path]

@@ -350,6 +350,7 @@ def serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     from app.api import WEB_DIST, create_app
+    from app.keepalive import LOGIN_CHECK_INTERVAL
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
@@ -358,7 +359,9 @@ def serve(args: argparse.Namespace) -> int:
         )
     if not (WEB_DIST / "index.html").is_file():
         print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
-    app = create_app(db_path=args.db, accounts_dir=args.accounts)
+    app = create_app(
+        db_path=args.db, accounts_dir=args.accounts, login_check_interval=LOGIN_CHECK_INTERVAL
+    )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
