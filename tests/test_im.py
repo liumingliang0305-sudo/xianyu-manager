@@ -548,6 +548,19 @@ def test_send_text_uses_web_format_and_returns_the_message():
     )
 
 
+def test_clear_red_point_like_the_web_page():
+    server = FakeIm()
+
+    async def go():
+        conn = await open_conn(server)
+        await conn.clear_red_point("777", "1793378126001.PNM")
+        await conn.close()
+
+    run(go())
+    (frame,) = server.last.requests(im.CLEAR_RED_POINT_API)
+    assert frame["body"] == [[{"messageId": "1793378126001.PNM", "cid": "777@goofish"}]]
+
+
 def test_new_uuid_counts_up():
     first, second = im.new_uuid(), im.new_uuid()
     assert first.startswith("-") and first != second

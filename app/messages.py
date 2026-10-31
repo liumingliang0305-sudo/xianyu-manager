@@ -12,7 +12,9 @@
 USER_SESSION_TYPES）列会话时跳过，推下来的消息也不存；以前存进来的，启动时删掉。
 
 发消息：只能在商品会话里发文本，走同一条连接，过账号的限流（发消息每分钟 10 条）和熔断；
-发出去的消息马上存库、通知页面。标已读还没有做。
+发出去的消息马上存库、通知页面。
+
+标已读：页面上点开有未读的会话时清掉会话的红点（mark_read），和网页版一样；不给对方发已读回执。
 """
 
 from __future__ import annotations
@@ -309,6 +311,14 @@ class MessageStore:
             return None, None
         return row["older_cursor"], bool(row["older_more"])
 
+    def newest_message_id(self, account_id: str, cid: str) -> str | None:
+        row = self._db.execute(
+            "SELECT message_id FROM messages WHERE account_id = ? AND cid = ?"
+            " ORDER BY sent_at DESC, message_id DESC LIMIT 1",
+            (account_id, cid),
+        ).fetchone()
+        return row["message_id"] if row else None
+
     def oldest_sent_at(self, account_id: str, cid: str) -> float | None:
         row = self._db.execute(
             "SELECT MIN(sent_at) FROM messages WHERE account_id = ? AND cid = ?",
@@ -483,6 +493,13 @@ class MessageStore:
                 "UPDATE conversations SET peer_name = COALESCE(NULLIF(?, ''), peer_name),"
                 " named_at = ? WHERE account_id = ? AND cid = ?",
                 (name, now, account_id, cid),
+            )
+
+    def clear_unread(self, account_id: str, cid: str) -> None:
+        with self._db:
+            self._db.execute(
+                "UPDATE conversations SET unread = 0 WHERE account_id = ? AND cid = ?",
+                (account_id, cid),
             )
 
     def set_older(self, account_id: str, cid: str, cursor: int | None, more: bool) -> None:
@@ -870,6 +887,28 @@ class MessageHub:
             if self.store.nameless(account_id, [cid]):
                 await self.lookup_names(account_id, [cid])
         return {"added": added, "older_more": self.store.older(account_id, cid)[1]}
+
+    async def mark_read(self, account_id: str, cid: str) -> int:
+        """页面上看了这个会话：清掉平台上会话的红点（网页版点开会话时也是这样），本地未读数清零。
+
+        要带会话里最新一条消息的 ID，本地没跟上平台就先补拉。没有未读的不发请求。
+        返回清之前的未读数。
+        """
+        conversation = self.store.conversation(account_id, cid)
+        if conversation is None:
+            raise ValueError(f"本地没有会话 {cid}")
+        if conversation.unread == 0:
+            return 0
+        conn = self._online(account_id)
+        if conversation.stale:
+            await self.fetch_newest(account_id, cid, conn)
+        message_id = self.store.newest_message_id(account_id, cid)
+        if message_id is None:  # 平台上一条消息也拉不到，没法清
+            return 0
+        await conn.clear_red_point(cid, message_id)
+        self.store.clear_unread(account_id, cid)
+        self._publish(account_id, {"type": "conversations"})
+        return conversation.unread
 
     async def lookup_names(self, account_id: str, cids: list[str]) -> int:
         """向平台查这些会话里对方的昵称，一个会话一个 mtop 请求（网页版也是这样），

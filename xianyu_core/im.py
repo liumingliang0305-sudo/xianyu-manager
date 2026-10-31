@@ -11,7 +11,7 @@
 - 发文本消息：`ImConnection.send_text()`，格式照网页版。
 
 2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳，2026-10-31 实测发过一条文本消息。
-标已读还没有做。
+2026-10-31 也实测过清会话红点（`clear_red_point`）。给对方发已读回执还没有做。
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
 USER_QUERY_API = "mtop.taobao.idlemessage.pc.user.query"
 SPM_IM = "a21ybx.im.0.0"
 SEND_API = "/r/MessageSend/sendByReceiverScope"
+CLEAR_RED_POINT_API = "/r/Conversation/clearRedPoint"
 
 HEARTBEAT_INTERVAL = 15.0
 RESPONSE_TIMEOUT = 30.0  # 请求（含心跳）多久没回应算断了
@@ -649,6 +650,15 @@ class ImConnection:
             messages=messages,
             has_more=bool(body.get("hasMore")),
             next_cursor=_int_or_none(body.get("nextCursor")),
+        )
+
+    async def clear_red_point(self, cid: str, message_id: str) -> None:
+        """清掉会话的红点（未读数），和网页版点开有红点的会话时一样：带上会话里最新一条消息的 ID。
+
+        只清自己这边的未读，不给对方发已读回执（那是 /r/MessageStatus/read）。
+        """
+        await self.request(
+            CLEAR_RED_POINT_API, [[{"messageId": message_id, "cid": f"{cid}@goofish"}]]
         )
 
     async def send_text(self, cid: str, text: str, *, me: str, peer: str) -> ChatMessage:

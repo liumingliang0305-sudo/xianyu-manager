@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils"
 import {
   useConversations,
   useFetchMessages,
+  useMarkRead,
   useMessageStream,
   useReconnectIm,
   useSendMessage,
@@ -232,6 +233,17 @@ function Bubble({ message: m }: { message: ChatMessage }) {
   )
 }
 
+/** 页面是不是在前台（切到别的标签页、最小化时是 false） */
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState === "visible")
+  useEffect(() => {
+    const onChange = () => setVisible(document.visibilityState === "visible")
+    document.addEventListener("visibilitychange", onChange)
+    return () => document.removeEventListener("visibilitychange", onChange)
+  }, [])
+  return visible
+}
+
 /** 回复框：Enter 发送，Shift+Enter 换行；输入法选字时的 Enter 不算 */
 function Composer({
   account,
@@ -339,6 +351,18 @@ function Thread({
   const anchor = useRef<{ height: number; top: number } | null>(null)
 
   const online = im?.state === "online"
+  // 开着会话、页面在前台时有未读就标已读（清平台上的红点）：点开时一次，开着的时候来了新消息再一次。
+  // 同一个未读状态只试一次，出错了不反复重试
+  const { mutate: markRead } = useMarkRead(account)
+  const pageVisible = usePageVisible()
+  const readKey = conversation.unread > 0 ? `${cid}:${conversation.unread}:${conversation.updated_at}` : ""
+  const triedRead = useRef("")
+  useEffect(() => {
+    if (!readKey || !online || !pageVisible || triedRead.current === readKey) return
+    triedRead.current = readKey
+    markRead(cid, { onError: (e) => toast.error(`标已读失败：${errorMessage(e)}`) })
+  }, [readKey, online, pageVisible, cid, markRead])
+
   // 打开时本地没跟上平台、或者还不知道对方昵称，就补拉一次（后台顺便查昵称）；没连上时先看本地的
   const needsFetch = conversation.stale || !conversation.peer_name
   useEffect(() => {

@@ -420,6 +420,10 @@ export const api = {
       body: JSON.stringify({ text }),
     }).then((r) => r.message),
 
+  /** 看过了：清掉平台上这个会话的红点，本地未读清零（不给对方发已读回执）。返回清之前的未读数 */
+  markRead: (account: string, cid: string) =>
+    request<{ cleared: number }>(`${convPath(account, cid)}/read`, { method: "POST" }),
+
   reconnectIm: (account: string) =>
     request<ImStatus>(`/accounts/${encodeURIComponent(account)}/im/reconnect`, {
       method: "POST",

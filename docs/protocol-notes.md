@@ -335,7 +335,13 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
    失败时 body 里有 `reason`、`moreInfo`：`moreInfo` 含 `USER_NEED_ALIPYA_BIND`（要绑支付宝、实名认证）或
    `USER_NEED_VERIFY` / `USER_NEED_REALNAME_VERIFY`（要验证身份）时，网页版弹窗让人去 App 里处理。
    没等到回应时消息可能已经发出去了，底座抛 `ImSendUncertainError`，不自动重发。
-   标已读是 `/r/MessageStatus/read`，body `[[messageId]]`（Ydisks 说一次一条，只认 `.PNM` 结尾的 ID），还没做；
+   标已读分两件事（2026-10-31 读网页版 JS）：
+   - 清会话红点（自己这边的未读数）：`/r/Conversation/clearRedPoint`，body `[[{"messageId": 会话最新一条的 ID,
+     "cid": "<cid>@goofish"}]]`。网页版点开 `redPoint` 大于 0 的会话时调一次，用的是会话列表里 `lastMessage` 的 ID。
+     本系统在页面上点开有未读的会话、页面在前台时调。✅ 2026-10-31 在页面上点开 3 个有红点的会话，都回 200；
+     之后重连、重新拉会话列表，`redPoint` 都是 0，平台上确实清掉了；
+   - 已读回执（对方看到"已读"）：`/r/MessageStatus/read`，body `[[messageId]]`（Ydisks 说一次一条，只认 `.PNM` 结尾的 ID）。
+     网页版是消息滚到眼前时发，一部分走这个，一部分走一个 mtop 接口（带 `sessionId`、`msgId`、`peerUid`），还没做；
 10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
 
 `did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，

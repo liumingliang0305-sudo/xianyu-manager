@@ -45,6 +45,15 @@ export function useSendMessage(account: string, cid: string) {
   })
 }
 
+/** 标已读。成功后后台也会推通知，这里马上刷新会话列表，未读数不用等 */
+export function useMarkRead(account: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (cid: string) => api.markRead(account, cid),
+    onSuccess: () => client.invalidateQueries({ queryKey: messageKeys.conversations(account) }),
+  })
+}
+
 export function useReconnectIm(account: string) {
   const client = useQueryClient()
   return useMutation({

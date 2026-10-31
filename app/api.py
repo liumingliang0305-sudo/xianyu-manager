@@ -428,6 +428,11 @@ def create_app(
         """通过即时消息连接向平台拉：最新的消息（补上本地缺的），或者往前翻一页。"""
         return await hub(request).fetch(account(account_id), cid, older=body.older)
 
+    @app.post("/api/accounts/{account_id}/conversations/{cid}/read")
+    async def mark_read(request: Request, account_id: str, cid: str) -> dict[str, Any]:
+        """看过了：清掉平台上这个会话的红点，本地未读数清零。不给对方发已读回执。"""
+        return {"cleared": await hub(request).mark_read(account(account_id), cid)}
+
     @app.post("/api/accounts/{account_id}/conversations/{cid}/messages")
     async def send_message(
         request: Request, account_id: str, cid: str, body: SendIn

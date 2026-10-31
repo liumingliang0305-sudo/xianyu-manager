@@ -242,6 +242,7 @@ class FakeIm:
         self.send_echo: str | None = None
         self.sends = 0
         self.send_base_ms = 1793378200000  # 第 n 条发出去的消息时间是它加 n 秒
+        self.cleared: list[dict] = []  # 清红点请求里的 {messageId, cid}
 
     async def connect(self, url: str, **kwargs) -> FakeSocket:
         if self.refuse:
@@ -290,6 +291,9 @@ class FakeIm:
                 sock.respond(frame, 200, body)
         elif lwp == "/r/MessageSend/sendByReceiverScope":
             self._send(sock, frame)
+        elif lwp == "/r/Conversation/clearRedPoint":
+            self.cleared += frame["body"][0]
+            sock.respond(frame, 200)
         else:
             sock.respond(frame, 404, {"reason": "no such lwp"})
 

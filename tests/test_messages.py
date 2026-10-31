@@ -501,6 +501,61 @@ def test_second_hub_does_not_connect_while_another_holds_the_account(accounts):
     run(go())
 
 
+# ---------- 标已读 ----------
+
+
+def test_hub_marks_read_with_the_newest_message(accounts):
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [
+        conversation("777", UNB, "200", unread=2, modified_ms=T + 3000),
+        conversation("778", UNB, "201", unread=1, modified_ms=T + 2000),
+        conversation("779", UNB, "202", modified_ms=T + 1000),
+    ]
+    server.chats = {"777": [chat(1), chat(2)], "778": [], "779": [chat(3, cid="779")]}
+    hub = make_hub(accounts, server)
+    store = hub.store
+    events = []
+
+    async def go():
+        await start_synced(hub)
+        with hub.subscribe(UNB) as queue:
+            assert await hub.mark_read(UNB, "777") == 2
+            assert await hub.mark_read(UNB, "777") == 0  # 已经没有未读，不再发请求
+            assert await hub.mark_read(UNB, "779") == 0
+            assert await hub.mark_read(UNB, "778") == 0  # 一条消息也没有，没法清
+            while not queue.empty():
+                events.append(queue.get_nowait())
+        await hub.aclose()
+        with pytest.raises(ImOfflineError):
+            await hub.mark_read(UNB, "778")
+
+    run(go())
+    assert server.cleared == [{"messageId": "m2", "cid": "777@goofish"}]
+    assert store.conversation(UNB, "777").unread == 0
+    assert store.conversation(UNB, "778").unread == 1
+    assert {"type": "conversations"} in events
+
+
+def test_hub_mark_read_fetches_newest_first_when_behind(accounts):
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [conversation("777", UNB, "200", unread=1, modified_ms=T + 9000)]
+    server.chats = {"777": [chat(1)]}
+    hub = make_hub(accounts, server)
+
+    async def go():
+        await start_synced(hub)
+        hub.store.save_conversations(UNB, [conv("777", "200", unread=1, modified_ms=T + 20000)])
+        server.chats["777"].append(chat(9))  # 平台上又来了一条，本地还没拉
+        assert hub.store.conversation(UNB, "777").stale
+        await hub.mark_read(UNB, "777")
+        await hub.aclose()
+
+    run(go())
+    assert server.cleared == [{"messageId": "m9", "cid": "777@goofish"}]
+
+
 # ---------- 发消息 ----------
 
 
@@ -713,6 +768,9 @@ def test_api_with_im_online(accounts, platform):
         server.send_reply = "silent"
         resp = client.post(f"{url}/conversations/777/messages", json={"text": "好的"})
         assert (resp.status_code, resp.json()["code"]) == (504, "send_uncertain")
+
+        assert client.post(f"{url}/conversations/777/read").json() == {"cleared": 0}
+        assert client.post(f"{url}/conversations/999/read").status_code == 400
 
         assert client.post(f"{url}/im/reconnect").status_code == 200
     assert all(s.closed for s in server.sockets)
