@@ -14,6 +14,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -22,6 +23,7 @@ import { useCurrentAccount } from "@/hooks/use-account"
 import {
   ApiError,
   errorMessage,
+  type ChatImage,
   type ChatMessage,
   type Conversation,
   type ImState,
@@ -46,7 +48,7 @@ const TIME_GAP = 5 * 60
 /** 一条消息最多几个字，和后端（app/messages.py 的 MAX_TEXT）一样 */
 const MAX_TEXT = 500
 
-type Tab = "item" | "all"
+type Tab = "all" | "unread"
 
 const IM_LOOK: Record<ImState, { dot: string; label: string }> = {
   online: { dot: "bg-emerald-500", label: "实时接收中" },
@@ -163,7 +165,57 @@ function ConversationRow({
   )
 }
 
+/** 聊天里的图片最大显示多大（像素），按原图比例缩 */
+const IMAGE_BOX = { width: 240, height: 320 }
+
+/** 点开预览时图片的尺寸档：原图可能是 heic，浏览器不一定能显示，用图床转好的 jpg */
+const PREVIEW_SIZE = 1200
+
+function ChatImageView({ image }: { image: ChatImage }) {
+  const w = image.width || IMAGE_BOX.width
+  const h = image.height || IMAGE_BOX.width
+  const scale = Math.min(IMAGE_BOX.width / w, IMAGE_BOX.height / h, 1)
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button type="button" className="cursor-zoom-in rounded-xl" aria-label="预览图片">
+          {/* 宽高先定下来，图片加载完不会把聊天记录顶得跳一下 */}
+          <img
+            src={thumb(image.url, 2 * Math.max(IMAGE_BOX.width, IMAGE_BOX.height))}
+            width={Math.round(w * scale)}
+            height={Math.round(h * scale)}
+            alt="图片"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="rounded-xl border bg-muted object-cover"
+          />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="w-auto gap-2 p-2 sm:max-w-[calc(100vw-4rem)]">
+        <DialogTitle className="px-2 pt-1.5 text-sm">图片</DialogTitle>
+        <img
+          src={thumb(image.url, PREVIEW_SIZE)}
+          width={w}
+          height={h}
+          alt="图片"
+          referrerPolicy="no-referrer"
+          className="h-auto max-h-[calc(100svh-7rem)] w-auto max-w-full rounded-lg bg-muted object-contain"
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function Bubble({ message: m }: { message: ChatMessage }) {
+  if (m.images.length > 0) {
+    return (
+      <div className={cn("flex flex-col gap-1", m.mine ? "items-end" : "items-start")}>
+        {m.images.map((image) => (
+          <ChatImageView key={image.url} image={image} />
+        ))}
+      </div>
+    )
+  }
   return (
     <div className={cn("flex", m.mine ? "justify-end" : "justify-start")}>
       <div
@@ -436,20 +488,18 @@ export function MessagesPage() {
   useMessageStream(account)
   const query = useConversations(account)
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<Tab>("item")
+  const [tab, setTab] = useState<Tab>("all")
   const [search, setSearch] = useState("")
 
   const selected = params.get("c")
   const conversations = query.data?.conversations ?? []
   const im = query.data?.im
   const current = conversations.find((c) => c.cid === selected)
-  // 系统通知的未读很多，商品会话的单独数
-  const itemUnread = conversations.reduce((sum, c) => sum + (c.biz_type === "1" ? c.unread : 0), 0)
-  const allUnread = conversations.reduce((sum, c) => sum + c.unread, 0)
+  const unread = conversations.reduce((sum, c) => sum + c.unread, 0)
   const text = search.trim().toLowerCase()
   const visible = conversations.filter(
     (c) =>
-      (tab === "all" || c.biz_type === "1") &&
+      (tab === "all" || c.unread > 0) &&
       (!text ||
         peerName(c).toLowerCase().includes(text) ||
         c.item_title.toLowerCase().includes(text) ||
@@ -463,7 +513,7 @@ export function MessagesPage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold">消息</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            买家发来的消息实时收到这里，也能直接回复{itemUnread > 0 ? ` · ${itemUnread} 条未读` : ""}
+            买家发来的消息实时收到这里，也能直接回复{unread > 0 ? ` · ${unread} 条未读` : ""}
           </p>
         </div>
         <ImStatusBar account={account} im={im} />
@@ -474,13 +524,10 @@ export function MessagesPage() {
           <div className="flex flex-col gap-2 border-b p-3">
             <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
               <TabsList className="w-full">
-                <TabsTrigger value="item">
-                  商品会话
-                  {itemUnread > 0 && <UnreadCount n={itemUnread} />}
-                </TabsTrigger>
-                <TabsTrigger value="all">
-                  全部
-                  {allUnread > 0 && <UnreadCount n={allUnread} />}
+                <TabsTrigger value="all">全部</TabsTrigger>
+                <TabsTrigger value="unread">
+                  未读
+                  {unread > 0 && <UnreadCount n={unread} />}
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -514,7 +561,9 @@ export function MessagesPage() {
                 </p>
               </div>
             ) : visible.length === 0 ? (
-              <p className="px-6 py-14 text-center text-sm text-muted-foreground">没有符合条件的会话</p>
+              <p className="px-6 py-14 text-center text-sm text-muted-foreground">
+                {tab === "unread" && !text ? "没有未读的会话" : "没有符合条件的会话"}
+              </p>
             ) : (
               <div className="divide-y">
                 {visible.map((c) => (

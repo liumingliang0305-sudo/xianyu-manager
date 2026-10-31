@@ -212,7 +212,7 @@ export interface Conversation {
   cid: string
   peer_id: string
   peer_name: string
-  /** "1" 是商品会话，别的是系统通知之类 */
+  /** 会话类型，"1" 是商品会话；只存和人的聊天 */
   biz_type: string
   item_id: string
   item_title: string
@@ -245,6 +245,15 @@ export interface ChatMessage {
   received_at: number
   /** 这个账号自己发的 */
   mine: boolean
+  /** 图片消息里的图，别的类型是空数组 */
+  images: ChatImage[]
+}
+
+/** 聊天里的一张图：阿里 CDN 的地址和原图宽高（像素） */
+export interface ChatImage {
+  url: string
+  width: number | null
+  height: number | null
 }
 
 export class ApiError extends Error {

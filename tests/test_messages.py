@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import os
 import sqlite3
 import time
@@ -16,7 +18,7 @@ from app.messages import ImLock, ImOfflineError, MessageHub, MessageStore
 from xianyu_core.credential import Credential
 from xianyu_core.errors import ImSendUncertainError, RateLimitedError
 from xianyu_core.guard import SEND, Guard
-from xianyu_core.im import ChatMessage, Conversation, ImConnection
+from xianyu_core.im import ChatImage, ChatMessage, Conversation, ImConnection, decode_entry
 
 T = 1793378000000  # 毫秒
 FAST = {"heartbeat_interval": 0.05, "response_timeout": 0.5, "ready_timeout": 0.5}
@@ -155,6 +157,35 @@ def test_store_forgets_names_that_are_not_nicknames():
     assert store.forget_unsure_names() == 2
     assert store.forget_unsure_names() == 0
     assert [m.sender_name for m in store.messages(UNB, "777")[0]] == ["", "", "买家小王"]
+
+
+def test_store_hides_deleted_conversations_until_a_new_message():
+    store = make_store()
+    hidden = Conversation.parse(conversation("778", UNB, "201", unread=1), UNB)
+    hidden.visible = False  # 在 App 里删掉了，网页版不显示，未读也不算
+    store.save_conversations(UNB, [conv("777", "200"), hidden])
+    assert [c.cid for c in store.conversations(UNB)] == ["777"]
+    assert store.conversation(UNB, "778") is not None
+    store.add_live(UNB, live(5, cid="778", sender="201"))  # 来了新消息就又出现了
+    assert {c.cid for c in store.conversations(UNB)} == {"777", "778"}
+
+
+def test_store_returns_images_of_image_messages():
+    store = make_store()
+    store.save_conversations(UNB, [conv("777", "200")])
+    image = ChatMessage.from_history(chat(1))
+    image.content_type = 2
+    image.raw["message"]["content"]["custom"]["data"] = base64.b64encode(
+        json.dumps(
+            {"contentType": 2, "image": {"pics": [{"url": "https://img/x.jpg", "width": 3}]}}
+        ).encode()
+    ).decode()
+    pushed = ChatMessage.parse(decode_entry(entry(chat_message(message_id="p1"))["data"]))
+    store.save_messages(UNB, [image, pushed])
+    records = {m.message_id: m for m in store.messages(UNB, "777")[0]}
+    assert records["m1"].images == [ChatImage("https://img/x.jpg", 3, None)]
+    assert records["p1"].images == []
+    assert store.message(UNB, "m1").images == records["m1"].images
 
 
 def test_store_name_follows_the_list_until_looked_up():

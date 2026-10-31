@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     peer_name    TEXT    NOT NULL DEFAULT '', -- 对方昵称
     peer_type    TEXT    NOT NULL DEFAULT '', -- 对方的用户类型，查昵称要用；普通用户是 "0"
     named_at     REAL,                        -- 上次向平台查对方昵称的时间，没查过是 NULL
+    visible      INTEGER NOT NULL DEFAULT 1,  -- 网页版显示不显示（在 App 里删掉的会话是 0）
+    muted        INTEGER NOT NULL DEFAULT 0,  -- 开了消息免打扰
     biz_type     TEXT    NOT NULL DEFAULT '', -- "1" 是商品会话，别的是系统通知之类
     item_id      TEXT    NOT NULL DEFAULT '',
     item_title   TEXT    NOT NULL DEFAULT '',
@@ -118,6 +120,8 @@ CREATE INDEX IF NOT EXISTS messages_conv ON messages (account_id, cid, sent_at);
 ADDED_COLUMNS = [
     ("conversations", "peer_type", "TEXT NOT NULL DEFAULT ''"),
     ("conversations", "named_at", "REAL"),
+    ("conversations", "visible", "INTEGER NOT NULL DEFAULT 1"),
+    ("conversations", "muted", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

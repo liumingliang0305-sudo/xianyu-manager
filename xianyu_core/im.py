@@ -199,6 +199,15 @@ def strip_goofish(value: Any) -> str:
 
 
 @dataclass
+class ChatImage:
+    """图片消息里的一张图。url 是阿里 CDN 的地址，宽高是原图的像素。"""
+
+    url: str
+    width: int | None
+    height: int | None
+
+
+@dataclass
 class ChatMessage:
     """一条聊天消息。推送（MessagePack，键是数字）和历史消息（JSON）两种格式都解析成它，
     字段位置见协议笔记的"聊天消息的推送"。"""
@@ -212,6 +221,7 @@ class ChatMessage:
     text: str  # 文本消息是正文，别的类型是平台给的摘要
     item_id: str
     session_type: str = ""  # 所在会话的类型，见 USER_SESSION_TYPES；没带是空字符串
+    images: list[ChatImage] = field(default_factory=list)  # 图片消息（内容类型 2）里的图
     raw: dict[str, Any] = field(repr=False, default_factory=dict)  # 去掉了发送端设备信息
 
     @classmethod
@@ -293,8 +303,20 @@ class ChatMessage:
             text=str(text),
             item_id=(url_args.get("itemId") or [""])[0],
             session_type=str(reminder.get("sessionType") or ""),
+            images=_images(content),
             raw=raw,
         )
+
+
+def _images(content: dict[str, Any]) -> list[ChatImage]:
+    """内层内容里的图：`{"contentType": 2, "image": {"pics": [{"url", "width", "height"}]}}`。"""
+    image = content.get("image") if isinstance(content.get("image"), dict) else {}
+    pics = image.get("pics") if isinstance(image.get("pics"), list) else []
+    return [
+        ChatImage(str(pic["url"]), _int_or_none(pic.get("width")), _int_or_none(pic.get("height")))
+        for pic in pics
+        if isinstance(pic, dict) and pic.get("url")
+    ]
 
 
 def _scrub_reminder(reminder: dict[str, Any]) -> dict[str, Any]:
@@ -342,6 +364,10 @@ class Conversation:
     order_id: str
     unread: int
     updated_at: float | None  # 秒级时间戳
+    # 网页版只显示 visible 的会话（在 App 里删掉的会话不显示），未读数也只算这些
+    visible: bool = True
+    muted: bool = False  # 开了消息免打扰；网页版的未读在这种会话上只显示一个点
+
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @property
@@ -378,6 +404,8 @@ class Conversation:
             order_id=str(ext.get("orderId") or ""),
             unread=_int_or_none(user_conv.get("redPoint")) or 0,
             updated_at=modified / 1000 if isinstance(modified, int | float) else None,
+            visible=_int_or_none(user_conv.get("visible", 1)) == 1,
+            muted=_int_or_none(user_conv.get("muteNotification")) == 1,
             raw=row,
         )
 

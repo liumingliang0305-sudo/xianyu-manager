@@ -291,6 +291,13 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
      ✅ 2026-10-31 读网页版 JS：`bizType` 就是网页版的会话类型（`sessionType = parseInt(bizType)`，`visible` 是
      `singleChatUserConversation.visible === 1`）。网页版会话列表只显示 `visible` 而且类型在
      `[1, 19, 15, 32, 3, 44, 51, 52, 24]` 里的（灰度名单里的账号再加群聊 47），未读数、提示音也只算这些。
+     ✅ 自己账号 294 个商品会话里 13 个 `visible` 是 0（在 App 里删掉了），网页版不显示、不算未读，本系统也一样；
+     `muteNotification` 是免打扰，全都是 0。网页版的会话列表是分页加载的，滑到底才加载更早的会话，红点和未读数
+     只算已经加载的（2026-10-31 在网页版上看到的）。所以网页版刚打开时未读比本系统少：自己账号有 4 个很久以前的会话
+     `redPoint` 是 1，网页版要往下翻到它们才算上；本系统一次列出所有会话，都算。网页版代码里还调
+     `mtop.taobao.idlemessage.pc.redpoint.query`（`{sessionTypes: "1,19,15,32,3,44,51,52,24", fetch: 50}`，只回 `total`），
+     实测 fetch 50 和 500 都回 0，它算的是什么还不清楚，本系统不用。`session.sync`（3.0）只回通知类的推送会话
+     （类型 23、25 之类），没有商品会话；
      其中 3 是"通知消息"（另走 mtop 的 `session.sync` 拉，内容是"本周闲鱼币优推抵扣"这类推广），24 是"闲小蜜"
      （客服机器人，"邀您填写售后问卷"，发送人 ID 1400）。自己账号的系统会话还有 6、10、14、23、25、37、62、63、66，
      对方 ID 大多是 `0`，网页版都不显示。消息提醒里的 `sessionType` 和会话的 `bizType` 是同一个值，推送也能按它分。
@@ -303,6 +310,8 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
      ✅ 一页 20 条（网页版也是 20），从新到旧。`nextCursor` 是下一条更早消息的 `createAt`（毫秒），传回去从它开始、包含它，
      页与页不重叠；拿本页最早一条的 `createAt` 当游标会多出这一条。翻到头 `hasMore` 是 0。
      消息类型不止文本：14 是交易卡片（"[卖家已发货]"之类），25 是评价提醒，`summary` 都是给人看的摘要。
+     ✅ 2 是图片，`summary` 是"[图片]"，内层是 `{"contentType": 2, "image": {"pics": [{"url", "width", "height", "type": 0}]}}`，
+     url 是 `img.alicdn.com/imgextra/…` 的原图，后面接 `_400x400.jpg` 能拿缩略图；
      这些卡片的 `sender` 也是对方，但 `reminderTitle` 是"交易消息"、"快给ta一个评价吧～"这样的标题，不是昵称；
      ✅ 2026-10-31：文本消息也不一定，卖家设的自动回复 `reminderTitle` 是"你有一条新消息"。分法是看 `reminderNotice`：
      人发的是"发来一条新消息"（本地存的 67 条对方文本消息里 63 条，标题都是昵称），自动回复是"～"（4 条）；

@@ -52,6 +52,7 @@ from xianyu_core.im import (
     SYSTEM_USER_ID,
     USER_SESSION_TYPES,
     AccessToken,
+    ChatImage,
     ChatMessage,
     Conversation,
     ImClient,
@@ -75,6 +76,7 @@ WATCH_INTERVAL = 30.0  # 隔多久看一次有没有要连的账号
 RETRY_AFTER = 60.0  # 意外停下的，或者风控解除了的，至少隔这么久再连
 SUBSCRIBER_QUEUE = 100
 CLOSING = {"type": "closing"}  # 服务要退出了，订阅到此结束
+IMAGE_CONTENT_TYPE = 2  # 消息的内层内容类型：图片
 MAX_TEXT = 500  # 一条消息最多几个字。平台的上限没查到，这是自己定的，防止误贴一大段
 
 # 不知道对方昵称的，用对方最近一条本人发的消息里的昵称补上（见 ChatMessage.sender_name）
@@ -203,10 +205,24 @@ class MessageRecord:
     item_id: str
     received_at: float
     mine: bool  # 是不是这个账号自己发的
+    images: list[ChatImage]  # 图片消息里的图，别的类型是空的
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> MessageRecord:
-        return cls(**dict(row), mine=row["sender_id"] == row["account_id"])
+        data = dict(row)
+        raw = data.pop("raw")
+        images = _stored_images(raw) if data["content_type"] == IMAGE_CONTENT_TYPE else []
+        return cls(**data, mine=data["sender_id"] == data["account_id"], images=images)
+
+
+def _stored_images(raw: str) -> list[ChatImage]:
+    """从存下来的原始数据里重新解析出图（推送和历史消息两种格式都行）。"""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    message = ChatMessage.from_history(data) or ChatMessage.parse(data)
+    return message.images if message else []
 
 
 class MessageStore:
@@ -216,9 +232,9 @@ class MessageStore:
     # ---- 查询 ----
 
     def conversations(self, account_id: str) -> list[ConversationRecord]:
-        """最近有动静的在前。"""
+        """最近有动静的在前。和网页版一样不给 visible 是 0 的（在 App 里删掉的会话）。"""
         rows = self._db.execute(
-            _CONVERSATION_SELECT + " WHERE c.account_id = ?"
+            _CONVERSATION_SELECT + " WHERE c.account_id = ? AND c.visible = 1"
             " ORDER BY COALESCE(c.updated_at, c.first_seen_at) DESC, c.cid",
             (account_id,),
         )
@@ -236,7 +252,7 @@ class MessageStore:
         """一个会话最新的 `limit` 条消息（按时间正序），和本地还有没有更早的。"""
         rows = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
-            " text, item_id, received_at FROM messages WHERE account_id = ? AND cid = ?"
+            " text, item_id, received_at, raw FROM messages WHERE account_id = ? AND cid = ?"
             " ORDER BY sent_at DESC, message_id DESC LIMIT ?",
             (account_id, cid, limit + 1),
         ).fetchall()
@@ -246,7 +262,8 @@ class MessageStore:
     def message(self, account_id: str, message_id: str) -> MessageRecord | None:
         row = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
-            " text, item_id, received_at FROM messages WHERE account_id = ? AND message_id = ?",
+            " text, item_id, received_at, raw FROM messages"
+            " WHERE account_id = ? AND message_id = ?",
             (account_id, message_id),
         ).fetchone()
         return MessageRecord.from_row(row) if row else None
@@ -316,8 +333,8 @@ class MessageStore:
                     """
                     INSERT INTO conversations (account_id, cid, peer_id, peer_name, peer_type,
                                                biz_type, item_id, item_title, item_pic, order_id,
-                                               unread, updated_at, first_seen_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               unread, visible, muted, updated_at, first_seen_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (account_id, cid) DO UPDATE SET
                         peer_id = COALESCE(NULLIF(excluded.peer_id, ''), conversations.peer_id),
                         peer_name = CASE WHEN conversations.named_at IS NULL
@@ -333,6 +350,8 @@ class MessageStore:
                         item_pic = COALESCE(NULLIF(excluded.item_pic, ''), conversations.item_pic),
                         order_id = COALESCE(NULLIF(excluded.order_id, ''), conversations.order_id),
                         unread = excluded.unread,
+                        visible = excluded.visible,
+                        muted = excluded.muted,
                         updated_at = CASE
                             WHEN conversations.updated_at IS NULL
                                  OR excluded.updated_at > conversations.updated_at
@@ -350,6 +369,8 @@ class MessageStore:
                         conv.item_pic,
                         conv.order_id,
                         conv.unread,
+                        conv.visible,
+                        conv.muted,
                         conv.updated_at,
                         now,
                     ),
@@ -366,7 +387,8 @@ class MessageStore:
     def add_live(self, account_id: str, message: ChatMessage, now: float | None = None) -> bool:
         """存一条实时推下来的消息，更新会话的时间和未读数。本地没有这个会话就先建一个。
 
-        补拉进度原来跟上了的，收到推送以后仍然算跟上（连着的时候推送不会漏）。
+        补拉进度原来跟上了的，收到推送以后仍然算跟上（连着的时候推送不会漏）。有新消息的会话
+        重新显示（在 App 里删掉的会话，来了新消息也会再出现，下次会话列表会校正）。
         """
         now = time.time() if now is None else now
         mine = message.sender_id == account_id
@@ -397,7 +419,8 @@ class MessageStore:
                     fetched_at = CASE WHEN fetched_at >= COALESCE(updated_at, 0)
                                       THEN MAX(fetched_at, ?) ELSE fetched_at END,
                     updated_at = MAX(COALESCE(updated_at, 0), ?),
-                    unread = CASE WHEN ? THEN 0 ELSE unread + 1 END
+                    unread = CASE WHEN ? THEN 0 ELSE unread + 1 END,
+                    visible = 1
                 WHERE account_id = ? AND cid = ?
                 """,
                 (at, at, mine, account_id, message.cid),
@@ -825,11 +848,12 @@ class MessageHub:
         self.store.save_conversations(account_id, list(listed.values()))
         self._publish(account_id, {"type": "conversations"})
 
-        stale = self.store.stale(account_id, list(listed)[:BACKFILL_CONVERSATIONS])
+        shown = [cid for cid, c in listed.items() if c.visible]  # 删掉的会话不补拉、不查昵称
+        stale = self.store.stale(account_id, shown[:BACKFILL_CONVERSATIONS])
         for cid in stale:
             await asyncio.sleep(self._interval)
             await self.fetch_newest(account_id, cid, conn)
-        nameless = self.store.nameless(account_id, list(listed))[:NAME_LOOKUPS]
+        nameless = self.store.nameless(account_id, shown)[:NAME_LOOKUPS]
         if nameless:
             self._spawn(self.lookup_names(account_id, nameless))
         return stale

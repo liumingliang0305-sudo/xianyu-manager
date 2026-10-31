@@ -188,6 +188,38 @@ def test_sender_name_only_for_messages_from_the_person(notice, content_type, nam
     assert (message.sender_name != "") is named
 
 
+IMAGE = {
+    "contentType": 2,
+    "image": {
+        "pics": [
+            {
+                "url": "https://img.alicdn.com/imgextra/i3/x.jpg",
+                "width": 884,
+                "height": 1919,
+                "type": 0,
+            }
+        ]
+    },
+}
+
+
+def test_image_message_from_history_and_push():
+    model = history_message(text="[图片]")
+    data = base64.b64encode(json.dumps(IMAGE).encode()).decode()
+    model["message"]["content"]["custom"].update(type=2, data=data)
+    pushed = chat_message(text="[图片]")
+    pushed[1][6][3].update({4: 2, 5: json.dumps(IMAGE)})
+    for message in (
+        ChatMessage.from_history(model),
+        ChatMessage.parse(decode_entry(entry(pushed, packer="msgpack")["data"])),
+    ):
+        assert message is not None and message.content_type == 2
+        url = IMAGE["image"]["pics"][0]["url"]
+        assert message.images == [im.ChatImage(url, 884, 1919)]
+        assert message.text == "[图片]"
+    assert ChatMessage.from_history(history_message()).images == []
+
+
 def test_chat_message_parse_ignores_other_entries():
     assert ChatMessage.parse(session_activation()) is None
     assert ChatMessage.parse({"1": "x"}) is None
@@ -236,6 +268,18 @@ def test_fetch_peer_nick_asks_like_the_web_page(platform):
         {"type": 0, "sessionType": 1, "sessionId": "777", "isOwner": False},
         {"type": 0, "sessionType": 1, "sessionId": "778", "isOwner": False},
     ]
+
+
+def test_conversation_visible():
+    row = conversation("777", "42", "200")
+    assert Conversation.parse(row, "42").visible
+    row["singleChatUserConversation"]["visible"] = 0  # 在 App 里删掉的会话
+    assert not Conversation.parse(row, "42").visible
+    del row["singleChatUserConversation"]["visible"]
+    assert Conversation.parse(row, "42").visible
+    assert not Conversation.parse(row, "42").muted
+    row["singleChatUserConversation"]["muteNotification"] = 1  # 消息免打扰
+    assert Conversation.parse(row, "42").muted
 
 
 @pytest.mark.parametrize(
