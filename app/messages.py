@@ -3,25 +3,30 @@
 - `MessageStore`：会话和消息的本地库；
 - `MessageHub`：`xym serve` 里每个账号一条即时消息长连接（xianyu_core/im.py 的 ImClient）。
   新消息一推下来就存库，再通知订阅的页面；停下了（登录失效、风控、被踢太多次）等条件变了再连。
+  一个账号同一时间只能有一个进程在连（`ImLock`）：两个进程用同一个设备 ID 连，会互相挤掉线。
 
 补拉：每次连上先拉会话列表，最近的 BACKFILL_CONVERSATIONS 个会话里本地没跟上的，补拉最新的消息，
 一直拉到和本地接上；别的会话等页面上点开时再拉。更早的消息在页面上往前翻时再拉。
 
-发消息、标已读还没有做。
+发消息：只能在商品会话里发文本，走同一条连接，过账号的限流（发消息每分钟 10 条）和熔断；
+发出去的消息马上存库、通知页面。标已读还没有做。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import json
 import logging
+import os
 import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import IO, Any
 
 import websockets
 
@@ -36,6 +41,7 @@ from xianyu_core.errors import (
 )
 from xianyu_core.im import (
     NEWEST_CURSOR,
+    SEND_API,
     AccessToken,
     ChatMessage,
     Conversation,
@@ -58,6 +64,7 @@ WATCH_INTERVAL = 30.0  # 隔多久看一次有没有要连的账号
 RETRY_AFTER = 60.0  # 意外停下的，或者风控解除了的，至少隔这么久再连
 SUBSCRIBER_QUEUE = 100
 CLOSING = {"type": "closing"}  # 服务要退出了，订阅到此结束
+MAX_TEXT = 500  # 一条消息最多几个字。平台的上限没查到，这是自己定的，防止误贴一大段
 
 # 会话列表里没给对方昵称的，用对方最近一条文本消息的提醒标题补上（交易卡片之类的提醒标题不是昵称）
 _CONVERSATION_SELECT = """
@@ -84,6 +91,56 @@ LEFT JOIN messages m ON m.rowid = (
 
 class ImOfflineError(RuntimeError):
     """即时消息没连上，没法向平台拉消息。"""
+
+
+class ImBusyError(RuntimeError):
+    """别的进程（另一个 xym serve）正在连这个账号的即时消息，这里不连。"""
+
+
+class ImLock:
+    """一个账号的即时消息只让一个进程连：`<账号目录>/<unb>.im.lock` 上的文件锁（flock）。
+
+    进程退出（包括被杀掉）时系统自动放开，不会留下死锁。锁住以后文件里写上进程号，给没抢到的一边看。
+    文件用完也不删：删了以后，别的进程可能锁在已经删掉的那个文件上，两边就都以为自己抢到了。
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._file: IO[str] | None = None
+
+    @property
+    def held(self) -> bool:
+        return self._file is not None
+
+    def acquire(self) -> bool:
+        """抢锁，抢到（或者本来就是自己的）返回 True，别的进程拿着返回 False。不等。"""
+        if self._file:
+            return True
+        file = self.path.open("a+", encoding="utf-8")  # 先不清空，抢到了再写
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            file.close()
+            return False
+        file.seek(0)
+        file.truncate()
+        file.write(str(os.getpid()))
+        file.flush()
+        self._file = file
+        return True
+
+    def holder(self) -> str:
+        """拿着锁的进程号，读不到是空字符串。"""
+        try:
+            return self.path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def release(self) -> None:
+        if self._file:
+            fcntl.flock(self._file, fcntl.LOCK_UN)
+            self._file.close()
+            self._file = None
 
 
 @dataclass
@@ -173,6 +230,14 @@ class MessageStore:
         ).fetchall()
         records = [MessageRecord.from_row(r) for r in rows[:limit]]
         return records[::-1], len(rows) > limit
+
+    def message(self, account_id: str, message_id: str) -> MessageRecord | None:
+        row = self._db.execute(
+            "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
+            " text, item_id, received_at FROM messages WHERE account_id = ? AND message_id = ?",
+            (account_id, message_id),
+        ).fetchone()
+        return MessageRecord.from_row(row) if row else None
 
     def newest_update(self, account_id: str) -> float | None:
         row = self._db.execute(
@@ -360,7 +425,10 @@ class _Line:
 
 
 def _needs(error: Exception | None) -> str | None:
-    """停下以后要人做什么：login 重新登录；unblock 完成验证后解除熔断；reconnect 手动重新连接。"""
+    """停下以后要人做什么：login 重新登录；unblock 完成验证后解除熔断；reconnect 手动重新连接；
+    elsewhere 别的 xym serve 在连，关掉它（这边会自动接上）。"""
+    if isinstance(error, ImBusyError):
+        return "elsewhere"
     if isinstance(error, AuthRequiredError):
         return "login"
     if isinstance(error, RiskControlError | CircuitOpenError):
@@ -376,6 +444,9 @@ class MessageHub:
     `start()` 以后每隔 `watch_interval` 秒看一遍账号：没连的连上；停下了的，条件变了再连——
     换了登录（重新扫码、导入、免密续期）、熔断解除了、意外停下的过了 RETRY_AFTER。
     被踢太多次、连接数超限的只等换登录或者手动重新连接，免得和网页版抢连接。
+
+    连之前先抢这个账号的 `ImLock`，抢到了一直拿着，`aclose()` 时才放开；没抢到（另一个 xym serve
+    在连）就不连，每隔 `watch_interval` 秒再抢一次，那边退出了这边自动接上。
 
     取 accessToken 走账号的锁（`locks`），和别的平台请求串行。
     """
@@ -399,8 +470,10 @@ class MessageHub:
         self._watch_interval = watch_interval
         self._interval = request_interval
         self._lines: dict[str, _Line] = {}
+        self._claims: dict[str, ImLock] = {}
         self._subscribers: defaultdict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
         self._fetch_locks: defaultdict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._send_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._watcher: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closing = False
@@ -420,6 +493,8 @@ class MessageHub:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        for claim in self._claims.values():
+            claim.release()
 
     # ---- 状态和订阅 ----
 
@@ -439,10 +514,11 @@ class MessageHub:
         if status.state == "stopped" and line.task and not line.task.done():
             # 刚开的还没跑起来（或者在等旧连接关掉）
             status = ImStatus("connecting", status.since)
+        busy = isinstance(line.error, ImBusyError) and status.state == "stopped"
         return {
             "state": status.state,
-            "since": status.since,
-            "message": status.message,
+            "since": line.ended_at if busy else status.since,
+            "message": str(line.error) if busy else status.message,
             "needs": _needs(line.error) if status.state == "stopped" else None,
         }
 
@@ -515,6 +591,8 @@ class MessageHub:
     def _may_restart(self, account_id: str, line: _Line) -> bool:
         if line.task is None or not line.task.done() or line.ended_at is None:
             return False
+        if isinstance(line.error, ImBusyError):
+            return self._claim(account_id)  # 只是抢一下文件锁，不发请求
         waited = time.time() - line.ended_at
         try:
             current = self._accounts.load(account_id)
@@ -544,6 +622,14 @@ class MessageHub:
         self._lines[account_id] = line
         line.task = asyncio.create_task(self._run(account_id, line, previous))
 
+    def _claim(self, account_id: str) -> bool:
+        """抢这个账号的 ImLock，抢到（或者本来就拿着）返回 True。"""
+        claim = self._claims.get(account_id)
+        if claim is None:
+            claim = ImLock(self._accounts.root / f"{account_id}.im.lock")
+            self._claims[account_id] = claim
+        return claim.acquire()
+
     def _client(self, account_id: str, on_status: Callable[[ImStatus], None]) -> ImClient:
         device_id = self._accounts.device_id(account_id)
 
@@ -572,7 +658,16 @@ class MessageHub:
             await self.backfill(account_id, conn)
 
         try:
+            if not self._claim(account_id):
+                pid = self._claims[account_id].holder()
+                raise ImBusyError(
+                    f"另一个 xym serve{f'（进程 {pid}）' if pid else ''}正在连这个账号，"
+                    "这里先不连，那边退出以后自动接上"
+                )
             await line.client.run(on_event, on_connected)
+        except ImBusyError as exc:
+            line.error = exc
+            log.warning("账号 %s：%s", account_id, exc)
         except Exception as exc:
             line.error = exc
             log.warning("账号 %s 的即时消息停了：%s", account_id, exc)
@@ -584,10 +679,14 @@ class MessageHub:
                 self._publish_status(account_id)
 
     async def _on_event(self, account_id: str, event: ImEvent) -> None:
-        if isinstance(event, ChatMessage) and self.store.add_live(account_id, event):
+        if not isinstance(event, ChatMessage):
+            return
+        if self.store.add_live(account_id, event):
             self._publish(
                 account_id, {"type": "message", "cid": event.cid, "message_id": event.message_id}
             )
+        else:
+            log.debug("消息 %s 已经存过了（自己发的推回来、或者重复推送）", event.message_id)
 
     def _require_running(self) -> None:
         if not self.running:
@@ -598,7 +697,10 @@ class MessageHub:
         line = self._lines.get(account_id)
         conn = line.client.connection if line else None
         if conn is None or conn.closed:
-            message = line.client.status.message if line else ""
+            if line and isinstance(line.error, ImBusyError):
+                message = str(line.error)
+            else:
+                message = line.client.status.message if line else ""
             raise ImOfflineError(f"即时消息没连上{f'：{message}' if message else ''}")
         return conn
 
@@ -688,3 +790,35 @@ class MessageHub:
         if added:
             self._publish(account_id, {"type": "messages", "cid": cid})
         return added
+
+    # ---- 发消息 ----
+
+    async def send(self, account_id: str, cid: str, text: str) -> MessageRecord:
+        """在商品会话里发一条文本消息，存进本地库、通知页面，返回存下的这条。
+
+        同一个账号的消息排队一条条发，发之前过限流和熔断。没等到平台的结果时抛
+        ImSendUncertainError（消息可能已经发出去了），不自动重发。
+        """
+        text = text.strip()
+        if not text:
+            raise ValueError("消息不能是空的")
+        if len(text) > MAX_TEXT:
+            raise ValueError(f"一条消息最多 {MAX_TEXT} 个字，现在有 {len(text)} 个")
+        conversation = self.store.conversation(account_id, cid)
+        if conversation is None:
+            raise ValueError(f"本地没有会话 {cid}")
+        if conversation.biz_type != "1" or not conversation.peer_id:
+            raise ValueError("这是系统通知，不能回复")
+        self._online(account_id)
+        async with self._send_locks[account_id]:
+            guard = self._accounts.guard
+            if guard:
+                await guard.acquire(account_id, SEND_API)
+            conn = self._online(account_id)  # 排队、等限流的时候可能断了
+            message = await conn.send_text(cid, text, me=account_id, peer=conversation.peer_id)
+        log.info("账号 %s 在会话 %s 发了一条消息 %s", account_id, cid, message.message_id)
+        # 实测平台不会把这条推回发它的连接，所以用响应存库；万一推回来了，按消息 ID 去重只存一次
+        await self._on_event(account_id, message)
+        record = self.store.message(account_id, message.message_id)
+        assert record is not None
+        return record

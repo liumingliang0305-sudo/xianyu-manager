@@ -5,6 +5,7 @@ import {
   MessageSquareIcon,
   RefreshCwIcon,
   SearchIcon,
+  SendHorizontalIcon,
 } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router"
@@ -16,8 +17,10 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { useCurrentAccount } from "@/hooks/use-account"
 import {
+  ApiError,
   errorMessage,
   type ChatMessage,
   type Conversation,
@@ -32,6 +35,7 @@ import {
   useFetchMessages,
   useMessageStream,
   useReconnectIm,
+  useSendMessage,
   useThread,
 } from "./queries"
 
@@ -39,6 +43,8 @@ import {
 const PAGE = 50
 /** 两条消息隔这么久（秒）就在中间标一下时间 */
 const TIME_GAP = 5 * 60
+/** 一条消息最多几个字，和后端（app/messages.py 的 MAX_TEXT）一样 */
+const MAX_TEXT = 500
 
 type Tab = "item" | "all"
 
@@ -62,8 +68,10 @@ function ImStatusBar({ account, im }: { account: string; im: ImStatus | undefine
   if (!im) return null
   const look = IM_LOOK[im.state]
   const hint = im.state === "online" || im.state === "connecting" ? "" : imHint(im)
+  // 要换登录、解除熔断、关掉另一个后台的，点重新连接也没用
   const canReconnect =
-    im.state === "waiting" || (im.state === "stopped" && im.needs !== "login" && im.needs !== "unblock")
+    im.state === "waiting" ||
+    (im.state === "stopped" && (im.needs === "reconnect" || im.needs === null))
   return (
     <div className="flex min-w-0 items-center gap-2 text-sm">
       <span className={cn("size-2 shrink-0 rounded-full", look.dot)} />
@@ -167,6 +175,90 @@ function Bubble({ message: m }: { message: ChatMessage }) {
       >
         {m.text || "（没有文字内容）"}
       </div>
+    </div>
+  )
+}
+
+/** 回复框：Enter 发送，Shift+Enter 换行；输入法选字时的 Enter 不算 */
+function Composer({
+  account,
+  conversation,
+  online,
+  onSent,
+}: {
+  account: string
+  conversation: Conversation
+  online: boolean
+  onSent: () => void
+}) {
+  const [text, setText] = useState("")
+  const send = useSendMessage(account, conversation.cid)
+
+  if (conversation.biz_type !== "1") {
+    return (
+      <div className="border-t px-4 py-2.5 text-center text-xs text-muted-foreground">
+        系统通知不能回复
+      </div>
+    )
+  }
+
+  const trimmed = text.trim()
+  // 按字算（和后端一样），表情不算两个
+  const length = Array.from(trimmed).length
+  const tooLong = length > MAX_TEXT
+  const showCount = length > MAX_TEXT - 50
+  const canSend = online && length > 0 && !tooLong && !send.isPending
+  const submit = () => {
+    if (!canSend) return
+    send.mutate(trimmed, {
+      onSuccess: () => {
+        setText("")
+        onSent()
+      },
+      onError: (e) => {
+        if (e instanceof ApiError && e.code === "send_uncertain") {
+          toast.warning("没等到闲鱼的结果，消息可能已经发出去了", {
+            description: "等一会儿看聊天记录里有没有这条，再决定要不要重发",
+          })
+        } else {
+          toast.error(errorMessage(e))
+        }
+      },
+    })
+  }
+
+  return (
+    <div className="flex items-end gap-2 border-t p-3">
+      <div className="relative min-w-0 flex-1">
+        <Textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return
+            e.preventDefault()
+            submit()
+          }}
+          rows={1}
+          placeholder={online ? "输入消息，Enter 发送" : "即时消息连上以后才能发消息"}
+          title="Enter 发送，Shift+Enter 换行"
+          aria-label="回复内容"
+          aria-invalid={tooLong || undefined}
+          className={cn("max-h-36 min-h-9 resize-none", showCount && "pr-16")}
+        />
+        {showCount && (
+          <span
+            className={cn(
+              "pointer-events-none absolute right-2 bottom-1.5 text-xs tabular-nums text-muted-foreground",
+              tooLong && "text-destructive",
+            )}
+          >
+            {length}/{MAX_TEXT}
+          </span>
+        )}
+      </div>
+      <Button size="icon-lg" onClick={submit} disabled={!canSend} aria-label="发送">
+        {send.isPending ? <Loader2Icon className="animate-spin" /> : <SendHorizontalIcon />}
+      </Button>
     </div>
   )
 }
@@ -325,9 +417,14 @@ function Thread({
         )}
       </div>
 
-      <div className="border-t px-4 py-2.5 text-center text-xs text-muted-foreground">
-        这里暂时只能看，回复请在闲鱼 App 里发
-      </div>
+      <Composer
+        account={account}
+        conversation={fresh}
+        online={online}
+        onSent={() => {
+          atBottom.current = true
+        }}
+      />
     </div>
   )
 }
@@ -364,7 +461,7 @@ export function MessagesPage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold">消息</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            买家发来的消息实时收到这里{itemUnread > 0 ? ` · ${itemUnread} 条未读` : ""}
+            买家发来的消息实时收到这里，也能直接回复{itemUnread > 0 ? ` · ${itemUnread} 条未读` : ""}
           </p>
         </div>
         <ImStatusBar account={account} im={im} />

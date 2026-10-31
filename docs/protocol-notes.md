@@ -251,7 +251,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 **收消息是服务端实时推送，不是轮询。**网页版 `/im` 用的是钉钉的 IMPaaS：一条 WebSocket 长连接，新消息由服务端推下来。
 轮询只在断线重连后补漏时用到，而且也是走同一条 WebSocket 发请求，不是另开 HTTP 接口去轮询。
 （2026-10-30 读 Ydisks 的 `internal/xianyu/ws` 和 goofish-cli 的 `core/ws.py` 整理，都是 Apache-2.0。
-标了 ✅ 的当天用自己的账号实测过，测试程序只读：没发消息、没标已读。
+标了 ✅ 的当天用自己的账号实测过，测试程序只读：没发消息、没标已读（发消息那一条除外，见第 9 条）。
 ✅ 连着的时候在闲鱼 App 里发一条消息，0.3 秒后就推到了这条连接上。测的是自己在 App 里发出去的消息，
 别人发来的还没测；开源项目说格式一样。）
 
@@ -292,12 +292,35 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
      页与页不重叠；拿本页最早一条的 `createAt` 当游标会多出这一条。翻到头 `hasMore` 是 0。
      消息类型不止文本：14 是交易卡片（"[卖家已发货]"之类），25 是评价提醒，`summary` 都是给人看的摘要。
      这些卡片的 `sender` 也是对方，但 `reminderTitle` 是"交易消息"、"快给ta一个评价吧～"这样的标题，不是昵称；
-9. 发消息走 `/r/MessageSend/sendByReceiverScope`，标已读 `/r/MessageStatus/read`；
+9. ✅ 发消息走 `/r/MessageSend/sendByReceiverScope`。2026-10-31 照网页版 `/im` 的 JS 整理，和 Ydisks、goofish-cli 的写法一致。
+   body 是两项：
+   - 消息：`uuid`（`-`、毫秒时间戳、再接一个从 1 开始递增的序号）、`cid`（带 `@goofish`）、`conversationType: 1`、
+     `content: {contentType: 101, custom: {type: 1, data}}`、`redPointPolicy: 0`、`extension: {extJson: "{}"}`、
+     `ctx: {appVersion: "1.0", platform: "web"}`、`mtags: {}`、`msgReadStatusSetting: 1`。
+     `data` 是 `{"contentType":1,"text":{"text":…}}` 的 base64，网页版用 `JSON.stringify` 转，没有空格；
+   - 接收方：`{actualReceivers: [对方@goofish, 自己@goofish]}`（网页版取会话的 `pairFirst`、`pairSecond`）。
+
+   网页版要 `code` 是 200、而且 body 里有 `messageId` 才算发出去。
+   ✅ 2026-10-31 用自己的账号在一个会话里发了一条「好的，谢谢」（征得同意，只发了这一条）：0.6 秒回 200，
+   body 有 `messageId`（`<13 位数字>.PNM`）、`uuid`、`createAt`、`content`、`extension`、`receiverCount`、`unreadCount`、
+   `msgReadStatusSetting`、`msgReadStatusDowngrade`；`extension` 和推送里的 `1.10` 一样（`reminderTitle` 是自己的昵称，
+   `reminderUrl` 里有商品 ID，`_platform` 是 `web`），也带着发送端的设备信息，要去掉。对方的自动回复同一秒推了过来，说明送到了。
+   **自己发的这条不会推回发它的这条连接**（等了 40 秒没有），所以发完直接用响应存库；
+   在 App 里发的会推过来（见上面），两种都按消息 ID 去重。
+   失败时 body 里有 `reason`、`moreInfo`：`moreInfo` 含 `USER_NEED_ALIPYA_BIND`（要绑支付宝、实名认证）或
+   `USER_NEED_VERIFY` / `USER_NEED_REALNAME_VERIFY`（要验证身份）时，网页版弹窗让人去 App 里处理。
+   没等到回应时消息可能已经发出去了，底座抛 `ImSendUncertainError`，不自动重发。
+   标已读是 `/r/MessageStatus/read`，body `[[messageId]]`（Ydisks 说一次一条，只认 `.PNM` 结尾的 ID），还没做；
 10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
 
 `did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，
 不能每次连接都新生成一个：要么沿用浏览器里网页版已有的那个，要么每个账号只生成一次、存下来一直用。
 实测用的是后一种，存在凭证旁边的 `data/accounts/<unb>.im.json`；同一个 did 前后连了好几次，都没被踢。
+✅ 2026-10-31：同一个账号、同一个 did **同时**开两条连接（两个 `xym serve` 进程）会互相挤：新的一条连上，旧的那条就被断开，
+服务端不推 `/push/kickout`，直接断（websockets 报 "no close frame received or sent"）。两边都当成断网重连，
+3 分钟里各断了 4 次，停掉一边以后另一边马上稳定。所以一个账号同一时间只能有一个 `xym serve` 在连，
+`MessageHub` 连之前先抢 `data/accounts/<unb>.im.lock` 上的文件锁（flock），抢不到就不连，等那边退出。
+网页版用的是它自己的 did，会不会被挤还没测。
 
 ### 聊天消息的推送
 

@@ -6,7 +6,7 @@
 - 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖；
 - 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态和命令行共用；
 - 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
-  GET .../messages/stream（Server-Sent Events）通知页面。
+  GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接。
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from xianyu_core.credential import Credential
 from xianyu_core.errors import (
     AuthRequiredError,
     CircuitOpenError,
+    ImSendUncertainError,
     RateLimitedError,
     RiskControlError,
     XianyuError,
@@ -65,6 +66,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (RiskControlError, 503, "risk_control"),
     (CircuitOpenError, 503, "circuit_open"),
     (RateLimitedError, 429, "rate_limited"),
+    (ImSendUncertainError, 504, "send_uncertain"),
     (XianyuError, 502, "platform_error"),
     (ValueError, 400, "invalid"),
 ]
@@ -99,6 +101,10 @@ class OrderPriceIn(BaseModel):
 
 class FetchIn(BaseModel):
     older: bool = False  # True 往前翻一页，False 拉最新的
+
+
+class SendIn(BaseModel):
+    text: str
 
 
 def create_app(
@@ -421,6 +427,17 @@ def create_app(
     ) -> dict[str, Any]:
         """通过即时消息连接向平台拉：最新的消息（补上本地缺的），或者往前翻一页。"""
         return await hub(request).fetch(account(account_id), cid, older=body.older)
+
+    @app.post("/api/accounts/{account_id}/conversations/{cid}/messages")
+    async def send_message(
+        request: Request, account_id: str, cid: str, body: SendIn
+    ) -> dict[str, Any]:
+        """通过即时消息连接发一条文本消息，返回存进本地库的这条。
+
+        504 send_uncertain：请求发出去了但没等到结果，消息可能已经发出去了，别急着重发。
+        """
+        record = await hub(request).send(account(account_id), cid, body.text)
+        return {"message": asdict(record)}
 
     @app.post("/api/accounts/{account_id}/im/reconnect")
     async def reconnect_im(request: Request, account_id: str) -> dict[str, Any]:

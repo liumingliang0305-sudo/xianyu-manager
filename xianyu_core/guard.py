@@ -1,6 +1,6 @@
 """按账号的限流和风控熔断。
 
-- 限流：每个账号按"读"和"改动"两类接口分别计数，窗口是最近一分钟。超出时先等，要等的时间超过
+- 限流：每个账号按"读"、"改动"、"发消息"三类分别计数，窗口是最近一分钟。超出时先等，要等的时间超过
   `max_wait` 就抛 RateLimitedError，免得网页上的请求卡住太久。计数只在本进程内存里；
 - 熔断：调接口碰到风控（RiskControlError）时，这个账号停 `cooldown` 秒，期间所有请求直接抛
   CircuitOpenError，一个都不发出去。熔断状态存在文件里，命令行和管理后台两个进程共用，重启后还在。
@@ -22,23 +22,31 @@ from pathlib import Path
 from typing import Protocol
 
 from xianyu_core.errors import CircuitOpenError, RateLimitedError, XianyuError
+from xianyu_core.im import SEND_API
 from xianyu_core.item import DELETE_API, DOWNSHELF_API, EDIT_API
 from xianyu_core.order import ADJUST_PRICE_API
 
 READ = "read"
 WRITE = "write"
+SEND = "send"
 
 # 会改平台数据的接口。新加的改动类接口要登记在这里，不然按读接口限流
 WRITE_APIS = frozenset({EDIT_API, DOWNSHELF_API, DELETE_API, ADJUST_PRICE_API})
+# 发消息（即时消息连接上的请求，不是 mtop 接口），单独计数
+SEND_APIS = frozenset({SEND_API})
 
 WINDOW = 60.0
-DEFAULT_LIMITS = {READ: 30, WRITE: 3}  # 每个账号每分钟最多几次
+DEFAULT_LIMITS = {READ: 30, WRITE: 3, SEND: 10}  # 每个账号每分钟最多几次
 DEFAULT_MAX_WAIT = 20.0
 DEFAULT_COOLDOWN = 30 * 60.0
 
+_KIND_TEXT = {READ: "请求", WRITE: "改动", SEND: "发消息"}
+
 
 def api_kind(api: str) -> str:
-    return WRITE if api in WRITE_APIS else READ
+    if api in WRITE_APIS:
+        return WRITE
+    return SEND if api in SEND_APIS else READ
 
 
 @dataclass
@@ -162,9 +170,9 @@ class Guard:
                     return
                 wait = WINDOW - (now - hits[0])
                 if wait > self._max_wait:
-                    what = "改动" if kind == WRITE else "请求"
                     raise RateLimitedError(
-                        f"{what}太频繁：每分钟最多 {limit} 次，{math.ceil(wait)} 秒后再试",
+                        f"{_KIND_TEXT[kind]}太频繁：每分钟最多 {limit} 次，"
+                        f"{math.ceil(wait)} 秒后再试",
                         retry_after=wait,
                     )
                 await self._sleep(wait)

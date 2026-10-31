@@ -33,6 +33,18 @@ export function useFetchMessages(account: string) {
   })
 }
 
+/** 发消息。后台存库后也会推通知，这里成功了马上刷新一次，不等推送 */
+export function useSendMessage(account: string, cid: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (text: string) => api.sendMessage(account, cid, text),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["messages", account, cid] })
+      client.invalidateQueries({ queryKey: messageKeys.conversations(account) })
+    },
+  })
+}
+
 export function useReconnectIm(account: string) {
   const client = useQueryClient()
   return useMutation({

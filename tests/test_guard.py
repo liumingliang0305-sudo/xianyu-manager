@@ -14,7 +14,8 @@ from xianyu_core.errors import (
     RiskControlError,
     XianyuError,
 )
-from xianyu_core.guard import READ, WRITE, FileBlockStore, Guard, api_kind
+from xianyu_core.guard import READ, SEND, WRITE, FileBlockStore, Guard, api_kind
+from xianyu_core.im import SEND_API
 from xianyu_core.item import DETAIL_API, EDIT_API
 from xianyu_core.mtop import MtopClient
 from xianyu_core.order import ADJUST_PRICE_API
@@ -52,6 +53,7 @@ def test_api_kind():
     assert api_kind(EDIT_API) == WRITE
     assert api_kind(ADJUST_PRICE_API) == WRITE
     assert api_kind(DETAIL_API) == READ
+    assert api_kind(SEND_API) == SEND
 
 
 def test_waits_for_a_free_slot(clock):

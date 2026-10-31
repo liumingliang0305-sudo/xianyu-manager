@@ -12,11 +12,13 @@
 - [x] 登录态续期：会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。
   纯 HTTP 扫码登录平台不给开"保持登录"（同一个账号在浏览器里能开），所以用浏览器插件（[extension/](extension/)）把浏览器里的登录同步过来，见[协议笔记](docs/protocol-notes.md#登录态续期)。线上还没走通一次真正的续期
 - [x] 定时确认登录态：`xym serve` 每 30 分钟确认一次，会话一过期就免密续期；保持登录 3 天内到期时页面顶部提醒（[app/keepalive.py](app/keepalive.py)）
-- [x] 即时消息底座：WebSocket 长连接，新消息由服务端实时推送，不用轮询；断线自动重连，会话列表和历史消息也能拉（[xianyu_core/im.py](xianyu_core/im.py)，协议见[协议笔记](docs/protocol-notes.md#即时消息)）。发消息、标已读还没做
+- [x] 即时消息底座：WebSocket 长连接，新消息由服务端实时推送，不用轮询；断线自动重连，会话列表和历史消息也能拉（[xianyu_core/im.py](xianyu_core/im.py)，协议见[协议笔记](docs/protocol-notes.md#即时消息)）。能发文本消息；标已读还没做
 - [x] 消息管理：`xym serve` 里每个账号挂一条即时消息连接，新消息实时存进本地库、推到后台"消息"页；连上先补拉最近的会话，
   别的会话点开时再拉，往前翻历史也走同一条连接（[app/messages.py](app/messages.py)）。登录失效、风控时停下，换了登录、解除熔断后自动再连。
-  只能看，回复还要在闲鱼 App 里发
-- [x] 限流和风控熔断：每个账号改动 3 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
+  在页面上能直接回复商品会话（文本消息，每分钟最多 10 条）；格式照网页版，实测发过一条。
+  同一个账号同一时间只让一个 `xym serve` 连即时消息（两个进程会互相挤掉线）：后开的那个不连，页面上提示，
+  先开的退出以后自动接上
+- [x] 限流和风控熔断：每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
 - [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
@@ -74,7 +76,7 @@ uv run xym messages list              # 商品会话，最近有动静的在前�
 uv run xym messages show <会话ID> -n 50 # 一个会话最近的消息
 ```
 
-所有请求都有限流（每个账号改动 3 次/分钟、读 30 次/分钟）。碰到风控（滑块、"被挤爆啦"）时账号自动暂停 30 分钟，
+所有请求都有限流（每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟）。碰到风控（滑块、"被挤爆啦"）时账号自动暂停 30 分钟，
 期间不发任何请求。先到闲鱼 App 或网页完成验证，再提前解除：
 
 ```bash
@@ -116,7 +118,8 @@ pnpm -C web dev
 ```
 
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
-旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删。
+旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删；
+`<unb>.im.lock` 是文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开。
 
 在代码里用：
 
@@ -153,7 +156,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   login.py         管理后台的登录：扫码（后台任务跑 QRLogin，前端轮询进度，同一时间只有一张码）和导入浏览器的 Cookie
   keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
-  messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连
+  messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连；回复
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
@@ -163,7 +166,7 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
   src/features/orders/ 订单管理页：添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
-  src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史，新消息通过 SSE 实时刷新
+  src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史、回复，新消息通过 SSE 实时刷新
 extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理后台（manifest v3，不用打包，直接加载目录）
   background.js    cookie 变化和每 10 分钟时推给 /api/login/import，登录没变不推
   lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址），可以直接用 node 测

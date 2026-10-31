@@ -19,7 +19,13 @@ from fake_im import (
 from xianyu_core import im
 from xianyu_core.constants import IM_APP_KEY
 from xianyu_core.credential import Credential
-from xianyu_core.errors import AuthRequiredError, ImError, ImRejectedError, RateLimitedError
+from xianyu_core.errors import (
+    AuthRequiredError,
+    ImError,
+    ImRejectedError,
+    ImSendUncertainError,
+    RateLimitedError,
+)
 from xianyu_core.im import (
     AccessToken,
     ChatMessage,
@@ -378,6 +384,93 @@ def test_list_messages():
         5,
         False,
     ]
+
+
+def test_send_text_uses_web_format_and_returns_the_message():
+    server = FakeIm()
+    server.send_echo = None
+
+    async def go():
+        conn = await open_conn(server)
+        message = await conn.send_text("777", "在的，今天能发货", me="42", peer="200")
+        await conn.close()
+        return message
+
+    message = run(go())
+    (frame,) = server.last.requests(im.SEND_API)
+    model, receivers = frame["body"]
+    data = base64.b64decode(model.pop("content")["custom"].pop("data")).decode()
+    # 和网页版的 JSON.stringify 一样：没有空格，中文不转义
+    assert data == '{"contentType":1,"text":{"text":"在的，今天能发货"}}'
+    assert model.pop("uuid").startswith("-")
+    assert model == {
+        "cid": "777@goofish",
+        "conversationType": 1,
+        "redPointPolicy": 0,
+        "extension": {"extJson": "{}"},
+        "ctx": {"appVersion": "1.0", "platform": "web"},
+        "mtags": {},
+        "msgReadStatusSetting": 1,
+    }
+    assert receivers == {"actualReceivers": ["200@goofish", "42@goofish"]}
+    assert (message.message_id, message.cid, message.sender_id) == (
+        "1793378200001.PNM",
+        "777",
+        "42",
+    )
+    assert (message.text, message.content_type, message.sent_at) == (
+        "在的，今天能发货",
+        1,
+        1793378201.0,
+    )
+
+
+def test_new_uuid_counts_up():
+    first, second = im.new_uuid(), im.new_uuid()
+    assert first.startswith("-") and first != second
+
+
+@pytest.mark.parametrize(
+    ("reply", "error", "text"),
+    [
+        ("reject", ImError, "绑定支付宝"),
+        ("silent", ImSendUncertainError, "不知道消息发出去没有"),
+        ("no_id", ImSendUncertainError, "没给消息 ID"),
+    ],
+)
+def test_send_text_failures(reply, error, text):
+    server = FakeIm()
+    server.send_reply = reply
+
+    async def go():
+        conn = await open_conn(server)
+        try:
+            await conn.send_text("777", "好的", me="42", peer="200")
+        finally:
+            await conn.close()
+
+    with pytest.raises(error, match=text) as exc:
+        run(go())
+    if reply == "reject":
+        assert not isinstance(exc.value, ImSendUncertainError) and exc.value.code == 400
+
+
+def test_send_text_on_closed_connection_is_not_sent():
+    server = FakeIm()
+
+    async def go():
+        conn = await open_conn(server)
+        server.last.drop()
+        await asyncio.wait_for(conn._ended.wait(), 1)
+        try:
+            await conn.send_text("777", "好的", me="42", peer="200")
+        finally:
+            await conn.close()
+
+    with pytest.raises(ImError, match="没有发出去") as exc:
+        run(go())
+    assert not isinstance(exc.value, ImSendUncertainError)
+    assert server.sends == 0
 
 
 def test_request_error_code():

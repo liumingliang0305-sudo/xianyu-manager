@@ -205,6 +205,14 @@ class FakeIm:
         # 会话 ID → 历史消息（history_message 造的）。在这里的会话按真实的游标规则分页
         self.chats: dict[str, list[dict]] = {}
         self.refuse = 0  # 前几次 connect 直接连不上
+        # 发消息怎么应答：ok 收下；reject 拒绝（要绑支付宝）；silent 不回应；
+        # no_id 回 200 但没有消息 ID
+        self.send_reply = "ok"
+        # 收下以后把这条消息推回来：after 在响应之后推，before 在响应之前推，None 不推。
+        # 实测平台不推回发它的连接，默认不推；推回来的情况留着测去重
+        self.send_echo: str | None = None
+        self.sends = 0
+        self.send_base_ms = 1793378200000  # 第 n 条发出去的消息时间是它加 n 秒
 
     async def connect(self, url: str, **kwargs) -> FakeSocket:
         if self.refuse:
@@ -251,8 +259,45 @@ class FakeIm:
                     "nextCursor": 1793378002814,
                 }
                 sock.respond(frame, 200, body)
+        elif lwp == "/r/MessageSend/sendByReceiverScope":
+            self._send(sock, frame)
         else:
             sock.respond(frame, 404, {"reason": "no such lwp"})
+
+    def _send(self, sock: FakeSocket, frame: dict) -> None:
+        self.sends += 1
+        model, receivers = frame["body"]
+        if self.send_reply == "silent":
+            return
+        if self.send_reply == "reject":
+            sock.respond(frame, 400, {"reason": "send fail", "moreInfo": "USER_NEED_ALIPYA_BIND"})
+            return
+        if self.send_reply == "no_id":
+            sock.respond(frame, 200, {"uuid": model["uuid"]})
+            return
+        message_id = f"{1793378200000 + self.sends}.PNM"
+        created = self.send_base_ms + self.sends * 1000
+        inner = json.loads(base64.b64decode(model["content"]["custom"]["data"]))
+        me = receivers["actualReceivers"][1].removesuffix("@goofish")
+        echo = chat_message(
+            cid=model["cid"].removesuffix("@goofish"),
+            sender=me,
+            text=inner["text"]["text"],
+            message_id=message_id,
+            sent_ms=created,
+        )
+        if self.send_echo == "before":
+            sock.push_entries([entry(echo, packer="msgpack")])
+        body = {
+            "messageId": message_id,
+            "uuid": model["uuid"],
+            "createAt": created,
+            "receiverCount": 2,
+            "extension": {"senderUserId": me, "reminderContent": inner["text"]["text"]},
+        }
+        sock.respond(frame, 200, body)
+        if self.send_echo == "after":
+            sock.push_entries([entry(echo, packer="msgpack")])
 
     @staticmethod
     def _page(models: list[dict], cursor: int, limit: int) -> dict:

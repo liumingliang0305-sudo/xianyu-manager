@@ -200,8 +200,11 @@ export interface ImStatus {
   state: ImState
   since: number | null
   message: string
-  /** 停下以后要做的：login 重新登录；unblock 完成验证后解除熔断；reconnect 手动重新连接 */
-  needs: "login" | "unblock" | "reconnect" | null
+  /**
+   * 停下以后要做的：login 重新登录；unblock 完成验证后解除熔断；reconnect 手动重新连接；
+   * elsewhere 另一个 xym serve 在连这个账号，关掉它（这边会自动接上）
+   */
+  needs: "login" | "unblock" | "reconnect" | "elsewhere" | null
 }
 
 export interface Conversation {
@@ -397,6 +400,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ older }),
     }),
+
+  /**
+   * 发一条文本消息，返回存进本地库的这条。要即时消息在线，只能发商品会话。
+   * 出错 code 是 send_uncertain 时消息可能已经发出去了，别急着重发
+   */
+  sendMessage: (account: string, cid: string, text: string) =>
+    request<{ message: ChatMessage }>(`${convPath(account, cid)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }).then((r) => r.message),
 
   reconnectIm: (account: string) =>
     request<ImStatus>(`/accounts/${encodeURIComponent(account)}/im/reconnect`, {

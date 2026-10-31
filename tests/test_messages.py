@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from collections import defaultdict
 
@@ -10,8 +11,10 @@ from fastapi.testclient import TestClient
 
 from app import db, messages
 from app.api import create_app, sse_events
-from app.messages import ImOfflineError, MessageHub, MessageStore
+from app.messages import ImLock, ImOfflineError, MessageHub, MessageStore
 from xianyu_core.credential import Credential
+from xianyu_core.errors import ImSendUncertainError, RateLimitedError
+from xianyu_core.guard import SEND, Guard
 from xianyu_core.im import ChatMessage, Conversation, ImConnection
 
 T = 1793378000000  # 毫秒
@@ -290,6 +293,137 @@ def test_hub_waits_for_manual_reconnect_after_session_removed(accounts):
     assert all(s.closed for s in server.sockets)
 
 
+def test_im_lock_one_holder_at_a_time(tmp_path):
+    path = tmp_path / "42.im.lock"
+    first, second = ImLock(path), ImLock(path)
+    assert first.acquire() and first.acquire()  # 自己再抢一次也行
+    assert not second.acquire()
+    assert second.holder() == str(os.getpid())
+    first.release()
+    assert second.acquire() and second.held
+    second.release()
+    assert path.exists()  # 不删文件
+
+
+def test_second_hub_does_not_connect_while_another_holds_the_account(accounts):
+    server = FakeIm()
+    server.conversations_more = False
+    first, second = make_hub(accounts, server), make_hub(accounts, server)
+
+    async def go():
+        await first.start()
+        await wait_until(lambda: first.status(UNB)["state"] == "online")
+        await second.start()
+        await wait_until(lambda: second.status(UNB)["needs"] == "elsewhere")
+        await asyncio.sleep(0.1)  # 抢了几轮都没抢到
+        status = second.status(UNB)
+        assert status["state"] == "stopped" and str(os.getpid()) in status["message"]
+        assert len(server.sockets) == 1 and first.status(UNB)["state"] == "online"
+        with pytest.raises(ImOfflineError, match="另一个 xym serve"):
+            await second.fetch(UNB, "777")
+
+        await first.aclose()  # 那边退出了，这边自动接上
+        await wait_until(lambda: second.status(UNB)["state"] == "online")
+        assert len(server.sockets) == 2
+        await second.aclose()
+
+    run(go())
+
+
+# ---------- 发消息 ----------
+
+
+def send_server() -> FakeIm:
+    """一个商品会话 777（对方 200，有一条未读）和一个系统通知 800。"""
+    server = FakeIm()
+    server.conversations_more = False
+    notice = conversation("800", UNB, "300", modified_ms=T)
+    notice["singleChatUserConversation"]["singleChatConversation"]["bizType"] = "14"
+    server.conversations = [conversation("777", UNB, "200", unread=1, modified_ms=T + 2000), notice]
+    server.chats = {"777": [chat(1)], "800": []}
+    return server
+
+
+async def start_synced(hub: MessageHub) -> None:
+    await hub.start()
+    await wait_until(
+        lambda: (
+            hub.status(UNB)["state"] == "online"
+            and not any(c.stale for c in hub.store.conversations(UNB))
+        )
+    )
+
+
+@pytest.mark.parametrize("echo", ["after", "before", None])
+def test_hub_sends_reply_and_stores_it_once(accounts, echo):
+    server = send_server()
+    server.send_echo = echo
+    hub = make_hub(accounts, server)
+    events = []
+
+    async def go():
+        await start_synced(hub)
+        with hub.subscribe(UNB) as queue:
+            acks = len(server.last.acks)
+            record = await hub.send(UNB, "777", "  在的，今天能发货\n")
+            if echo:  # 等推回来的那条也处理完
+                await wait_until(lambda: len(server.last.acks) > acks)
+                await asyncio.sleep(0.02)
+            while not queue.empty():
+                events.append(queue.get_nowait())
+        await hub.aclose()
+        return record
+
+    record = run(go())
+    assert (record.text, record.mine, record.content_type) == ("在的，今天能发货", True, 1)
+    messages = hub.store.messages(UNB, "777")[0]
+    assert [m.text for m in messages] == ["第1条", "在的，今天能发货"]
+    c = hub.store.conversation(UNB, "777")
+    assert c.last_text == "在的，今天能发货" and c.unread == 0 and not c.stale
+    assert {"type": "message", "cid": "777", "message_id": record.message_id} in events
+
+
+def test_hub_send_checks_before_sending(accounts):
+    server = send_server()
+    hub = make_hub(accounts, server)
+
+    async def go():
+        await start_synced(hub)
+        with pytest.raises(ValueError, match="空的"):
+            await hub.send(UNB, "777", " \n ")
+        with pytest.raises(ValueError, match="最多 500 个字"):
+            await hub.send(UNB, "777", "好" * 501)
+        with pytest.raises(ValueError, match="系统通知"):
+            await hub.send(UNB, "800", "在的")
+        with pytest.raises(ValueError, match="本地没有会话"):
+            await hub.send(UNB, "999", "在的")
+        await hub.aclose()
+        with pytest.raises(ImOfflineError):
+            await hub.send(UNB, "777", "在的")
+
+    run(go())
+    assert server.sends == 0
+
+
+def test_hub_send_rate_limit_and_uncertain_result(accounts):
+    accounts.guard = Guard(limits={SEND: 1}, max_wait=0)
+    server = send_server()
+    hub = make_hub(accounts, server)
+
+    async def go():
+        await start_synced(hub)
+        server.send_reply = "silent"
+        with pytest.raises(ImSendUncertainError):
+            await hub.send(UNB, "777", "在的")
+        with pytest.raises(RateLimitedError, match="发消息太频繁"):
+            await hub.send(UNB, "777", "在的")
+        await hub.aclose()
+
+    run(go())
+    assert server.sends == 1  # 没结果的不自动重发，被限流的没发出去
+    assert [m.text for m in hub.store.messages(UNB, "777")[0]] == ["第1条"]
+
+
 def test_sse_sends_status_then_events_and_pings(accounts):
     hub = make_hub(accounts, FakeIm())
 
@@ -395,5 +529,18 @@ def test_api_with_im_online(accounts, platform):
 
         resp = client.post(f"{url}/conversations/777/fetch", json={"older": True})
         assert resp.json() == {"added": 0, "older_more": False}
+
+        resp = client.post(f"{url}/conversations/777/messages", json={"text": "在的"})
+        assert resp.status_code == 200
+        sent = resp.json()["message"]
+        assert (sent["text"], sent["mine"], sent["cid"]) == ("在的", True, "777")
+        body = client.get(f"{url}/conversations/777/messages").json()
+        assert body["messages"][-1]["message_id"] == sent["message_id"]
+        resp = client.post(f"{url}/conversations/777/messages", json={"text": " "})
+        assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+        server.send_reply = "silent"
+        resp = client.post(f"{url}/conversations/777/messages", json={"text": "好的"})
+        assert (resp.status_code, resp.json()["code"]) == (504, "send_uncertain")
+
         assert client.post(f"{url}/im/reconnect").status_code == 200
     assert all(s.closed for s in server.sockets)

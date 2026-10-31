@@ -80,6 +80,13 @@ class ImRejectedError(ImError):
         self.reason = reason
 
 
+class ImSendUncertainError(ImError):
+    """发消息的请求已经发出去了，但没等到服务端的结果（没回应、等的时候连接断了）。
+
+    消息可能已经发给对方了，不要自动重发：等推送或者重新拉一次消息再看。
+    """
+
+
 class RateLimitedError(XianyuError):
     """本地限流：这个账号请求太频繁，请求没有发出去。`retry_after` 秒后再试。"""
 

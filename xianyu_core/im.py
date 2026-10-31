@@ -6,9 +6,11 @@
   每帧推送都回 ACK，推送带 syncExtraType 1 或 2 时对齐同步位点。推送里的条目解码后
   从 `events()` 出来；
 - `ImClient`：一个账号长期在线，断了自动重连，每次连接都重新取 accessToken（网页版也是这样）；
-- 聊天消息解析成 `ChatMessage`，会话列表解析成 `Conversation`。
+- 聊天消息解析成 `ChatMessage`，会话列表解析成 `Conversation`；
+- 发文本消息：`ImConnection.send_text()`，格式照网页版。
 
-2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳。发消息、标已读还没有做。
+2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳，2026-10-31 实测发过一条文本消息。
+标已读还没有做。
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import itertools
 import json
 import logging
 import random
@@ -38,6 +41,7 @@ from xianyu_core.errors import (
     CircuitOpenError,
     ImError,
     ImRejectedError,
+    ImSendUncertainError,
     RateLimitedError,
     RiskControlError,
     XianyuError,
@@ -48,6 +52,7 @@ log = logging.getLogger(__name__)
 
 TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
 SPM_IM = "a21ybx.im.0.0"
+SEND_API = "/r/MessageSend/sendByReceiverScope"
 
 HEARTBEAT_INTERVAL = 15.0
 RESPONSE_TIMEOUT = 30.0  # 请求（含心跳）多久没回应算断了
@@ -73,6 +78,15 @@ SENDER_DEVICE_KEYS = frozenset({"clientIp", "port", "umid", "umidToken", "utdid"
 _REJECT_TOKEN_WORDS = ("invalid token", "token invalid", "not auth", "device id or appkey")
 _REJECT_LIMIT_WORDS = ("connect limit", "too many", "session remove")
 
+# 发消息被拒绝时 moreInfo 里的这几种要人去 App 里处理，网页版也是弹窗让人去 App
+_SEND_REFUSALS = (
+    ("USER_NEED_ALIPYA_BIND", "为了交易安全，要先在闲鱼 App 里绑定支付宝并完成实名认证"),
+    ("USER_NEED_REALNAME_VERIFY", "平台要求先完成实名认证，在闲鱼 App 里发一条消息，按提示操作"),
+    ("USER_NEED_VERIFY", "平台要求先完成身份验证，在闲鱼 App 里发一条消息，按提示操作"),
+)
+
+_uuid_seq = itertools.count(1)
+
 
 def new_device_id(unb: str) -> str:
     """生成设备 ID：大写的随机 UUID 加 `-<unb>`。
@@ -85,6 +99,11 @@ def new_device_id(unb: str) -> str:
 def new_mid() -> str:
     """请求的消息 ID，服务端在响应里原样带回来，靠它把响应和请求对上。"""
     return f"{random.randint(0, 999)}{int(time.time() * 1000)} 0"
+
+
+def new_uuid() -> str:
+    """发消息带的 uuid：网页版是 `-`、毫秒时间戳、再接一个从 1 开始递增的序号。"""
+    return f"-{int(time.time() * 1000)}{next(_uuid_seq)}"
 
 
 def reg_user_agent(user_agent: str) -> str:
@@ -542,6 +561,72 @@ class ImConnection:
             next_cursor=_int_or_none(body.get("nextCursor")),
         )
 
+    async def send_text(self, cid: str, text: str, *, me: str, peer: str) -> ChatMessage:
+        """在单聊会话里发一条文本消息，返回平台收下的这条。
+
+        返回的和推送、历史消息解析成同一个 ChatMessage。格式照网页版：外层是自定义消息 101，
+        内层 `{"contentType": 1, "text": {"text": …}}` 转成 JSON 再 base64；接收方是对方和自己。
+        - 连接已经断了：消息没发出去，抛 ImError；
+        - 服务端拒绝（不是 200，或者没给消息 ID 但说了原因）：抛 ImError，带上能看懂的原因；
+        - 请求发出去了但没等到结果：抛 ImSendUncertainError，消息可能已经发出去了，不要自动重发。
+        """
+        if self.close_reason:
+            raise ImError(f"即时消息连接断了，消息没有发出去：{self.close_reason}")
+        inner = json.dumps(
+            {"contentType": 1, "text": {"text": text}}, ensure_ascii=False, separators=(",", ":")
+        )
+        data = base64.b64encode(inner.encode()).decode()
+        content = {"contentType": 101, "custom": {"type": 1, "data": data}}
+        model = {
+            "uuid": new_uuid(),
+            "cid": f"{cid}@goofish",
+            "conversationType": 1,
+            "content": content,
+            "redPointPolicy": 0,
+            "extension": {"extJson": "{}"},
+            "ctx": {"appVersion": "1.0", "platform": "web"},
+            "mtags": {},
+            "msgReadStatusSetting": 1,
+        }
+        receivers = {"actualReceivers": [f"{peer}@goofish", f"{me}@goofish"]}
+        try:
+            resp = await self.request(SEND_API, [model, receivers])
+        except ImError as exc:
+            if exc.code is None:
+                raise ImSendUncertainError(f"不知道消息发出去没有：{exc}", raw=exc.raw) from None
+            reason = _send_refusal(exc.raw) or f"服务端返回 {exc.code}"
+            raise ImError(f"消息没有发出去：{reason}", code=exc.code, raw=exc.raw) from None
+
+        body = resp.get("body") if isinstance(resp.get("body"), dict) else {}
+        extension = body.get("extension")
+        log.debug(
+            "发消息的响应：body 有 %s，extension 有 %s",
+            sorted(body),
+            sorted(extension) if isinstance(extension, dict) else None,
+        )
+        message_id = body.get("messageId")
+        if not message_id:
+            if reason := _send_refusal(resp):
+                raise ImError(f"消息没有发出去：{reason}", code=200, raw=resp)
+            raise ImSendUncertainError("服务端回了 200，但没给消息 ID，不知道发出去没有", raw=resp)
+        created = body.get("createAt")
+        message = ChatMessage.from_history(
+            {
+                "message": {
+                    "messageId": message_id,
+                    "cid": model["cid"],
+                    "createAt": created
+                    if isinstance(created, int | float)
+                    else int(time.time() * 1000),
+                    "sender": {"uid": f"{me}@goofish"},
+                    "content": {**content, "custom": {**content["custom"], "summary": text}},
+                    "extension": extension if isinstance(extension, dict) else {},
+                }
+            }
+        )
+        assert message is not None  # cid 不是空的就一定解析得出来
+        return message
+
     # ----- 收推送 -----
 
     async def events(self) -> AsyncIterator[ImEvent]:
@@ -708,6 +793,15 @@ def _frame_reason(frame: Any) -> str:
             if value not in (None, "") and str(value) not in parts:
                 parts.append(str(value))
     return " | ".join(parts)
+
+
+def _send_refusal(frame: Any) -> str:
+    """发消息被拒绝的原因。要人去 App 里处理的几种换成能看懂的说法，别的原样给出。"""
+    reason = _frame_reason(frame)
+    for key, text in _SEND_REFUSALS:
+        if key in reason:
+            return text
+    return reason
 
 
 # ---------- 长期在线 ----------
