@@ -73,6 +73,42 @@ CREATE TABLE IF NOT EXISTS order_ops (
     created_at REAL    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS order_ops_order ON order_ops (account_id, order_id);
+
+-- 即时消息的会话（单聊），见 app/messages.py
+CREATE TABLE IF NOT EXISTS conversations (
+    account_id   TEXT    NOT NULL,
+    cid          TEXT    NOT NULL,           -- 会话 ID，不带 @goofish
+    peer_id      TEXT    NOT NULL DEFAULT '',
+    peer_name    TEXT    NOT NULL DEFAULT '',
+    biz_type     TEXT    NOT NULL DEFAULT '', -- "1" 是商品会话，别的是系统通知之类
+    item_id      TEXT    NOT NULL DEFAULT '',
+    item_title   TEXT    NOT NULL DEFAULT '',
+    item_pic     TEXT    NOT NULL DEFAULT '',
+    order_id     TEXT    NOT NULL DEFAULT '',
+    unread       INTEGER NOT NULL DEFAULT 0,  -- 平台的红点数，收到对方新消息时加一
+    updated_at   REAL,                        -- 最后有动静的时间
+    fetched_at   REAL,                        -- 最新消息补拉到了哪个时间点，没拉过是 NULL
+    older_cursor INTEGER,                     -- 往前翻历史消息的游标（毫秒），没翻过是 NULL
+    older_more   INTEGER,                     -- 平台上还有没有更早的消息，不知道是 NULL
+    first_seen_at REAL   NOT NULL,
+    PRIMARY KEY (account_id, cid)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    account_id   TEXT    NOT NULL,
+    message_id   TEXT    NOT NULL,
+    cid          TEXT    NOT NULL,
+    sender_id    TEXT    NOT NULL DEFAULT '',
+    sender_name  TEXT    NOT NULL DEFAULT '',
+    sent_at      REAL,
+    content_type INTEGER,                     -- 1 是文本
+    text         TEXT    NOT NULL DEFAULT '', -- 文本消息是正文，别的类型是平台给的摘要
+    item_id      TEXT    NOT NULL DEFAULT '',
+    raw          TEXT    NOT NULL DEFAULT '{}', -- 原始数据（JSON），去掉了发送端的设备信息
+    received_at  REAL    NOT NULL,
+    PRIMARY KEY (account_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS messages_conv ON messages (account_id, cid, sent_at);
 """
 
 

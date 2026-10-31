@@ -18,6 +18,8 @@ uv run xym orders price <订单ID> [项=金额 ...] [--force] [-y]
                                                 不带金额时列出能改的价格项
 uv run xym orders log [订单ID]                    本系统对订单做过的改动
 uv run xym orders remove <订单ID> [-y]           从本地列表移除，不动平台上的订单
+uv run xym messages list [--all]                看本地库里的会话（消息由 xym serve 在后台收）
+uv run xym messages show <会话ID> [-n 30]        看一个会话最近的消息
 uv run xym serve [--port 8000]                  启动管理后台，只监听本机
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
@@ -31,6 +33,8 @@ import logging
 import sys
 import time
 from pathlib import Path
+from types import FrameType
+from typing import TYPE_CHECKING
 
 from app import db
 from app.accounts import (
@@ -42,10 +46,14 @@ from app.accounts import (
     make_guard,
 )
 from app.items import ItemRecord, ItemService, PriceGuardError
+from app.messages import ConversationRecord, MessageStore
 from app.orders import OrderRecord, OrderService
 from xianyu_core.errors import CircuitOpenError, XianyuError
 from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
 from xianyu_core.order import STATUS_TEXT as ORDER_STATUS_TEXT
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 STATUS_ARG = {"online": 0, "sold": 1}
 LOGIN_TEXT = {
@@ -110,6 +118,19 @@ def _print_orders(orders: list[OrderRecord]) -> None:
         )
 
 
+def _print_conversations(conversations: list[ConversationRecord]) -> None:
+    if not conversations:
+        print("本地库里没有会话。消息由 xym serve 在后台收，先启动一次管理后台")
+        return
+    print(f"{'会话ID':<14} {'未读':>4}  {'最后动静':<16}  {'对方':<10}  最后一条")
+    for c in conversations:
+        peer = c.peer_name or c.peer_id or "-"
+        last = c.last_text.replace("\n", " ")[:30] or c.item_title[:20]
+        print(
+            f"{c.cid:<14} {c.unread or '':>4}  {_time(c.updated_at):<16}  {peer[:10]:<10}  {last}"
+        )
+
+
 def _parse_fees(pairs: list[str]) -> dict[str, int]:
     """["modifyFee=99", "newTransportFee=0"] → {"modifyFee": 9900, "newTransportFee": 0}"""
     fees = {}
@@ -128,7 +149,37 @@ async def run(args: argparse.Namespace) -> int:
         return await check_accounts(args)
     if args.command == "orders":
         return await run_orders(args)
+    if args.command == "messages":
+        return run_messages(args)
     return await run_items(args)
+
+
+def run_messages(args: argparse.Namespace) -> int:
+    """只读本地库，不连平台。"""
+    account = Accounts(args.accounts).resolve(args.account)
+    store = MessageStore(db.connect(args.db))
+    if args.messages_command == "list":
+        conversations = store.conversations(account)
+        if not args.all:
+            conversations = [c for c in conversations if c.biz_type == "1"]
+        _print_conversations(conversations)
+        return 0
+
+    conversation = store.conversation(account, args.cid)
+    if conversation is None:
+        print(f"本地没有会话 {args.cid}，用 xym messages list 看有哪些", file=sys.stderr)
+        return 1
+    records, more = store.messages(account, args.cid, limit=args.n)
+    peer = conversation.peer_name or conversation.peer_id or "对方"
+    print(f"{peer}  {conversation.item_title or conversation.item_id}")
+    if more:
+        print(f"（只显示最新 {args.n} 条，-n 可以看更多）")
+    for m in records:
+        who = "我" if m.mine else (m.sender_name or peer)
+        print(f"{_time(m.sent_at)}  {who}：{m.text}")
+    if conversation.stale:
+        print("\n平台上还有本地没拉到的消息，在管理后台打开这个会话会补拉")
+    return 0
 
 
 def unblock_account(args: argparse.Namespace) -> int:
@@ -347,8 +398,6 @@ async def check_accounts(args: argparse.Namespace) -> int:
 
 
 def serve(args: argparse.Namespace) -> int:
-    import uvicorn
-
     from app.api import WEB_DIST, create_app
     from app.keepalive import LOGIN_CHECK_INTERVAL
 
@@ -360,10 +409,29 @@ def serve(args: argparse.Namespace) -> int:
     if not (WEB_DIST / "index.html").is_file():
         print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
     app = create_app(
-        db_path=args.db, accounts_dir=args.accounts, login_check_interval=LOGIN_CHECK_INTERVAL
+        db_path=args.db,
+        accounts_dir=args.accounts,
+        login_check_interval=LOGIN_CHECK_INTERVAL,
+        messages=True,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+    run_server(app, args.host, args.port)
     return 0
+
+
+def run_server(app: FastAPI, host: str, port: int) -> None:
+    """打开着的消息页面占着一条推送流（SSE），uvicorn 退出时要等它结束。
+    Ctrl+C 时先让推送流都结束；万一还有没结束的，最多等 3 秒。"""
+    import uvicorn
+
+    class Server(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+            hub = getattr(app.state, "messages", None)
+            if hub:
+                hub.close_streams()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(app, host=host, port=port, timeout_graceful_shutdown=3)
+    Server(config).run()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -440,6 +508,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p = orders.add_parser("log", help="本系统对订单做过的改动")
     p.add_argument("order_id", nargs="?")
+
+    messages = sub.add_parser("messages", help="消息（只读本地库）").add_subparsers(
+        dest="messages_command", required=True
+    )
+    p = messages.add_parser("list", help="看本地库里的会话")
+    p.add_argument("--all", action="store_true", help="包括系统通知之类的非商品会话")
+
+    p = messages.add_parser("show", help="看一个会话最近的消息")
+    p.add_argument("cid", help="会话ID，xym messages list 里第一列")
+    p.add_argument("-n", type=int, default=30, help="显示多少条，默认 30")
 
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
     p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")

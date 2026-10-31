@@ -297,6 +297,7 @@ class Conversation:
     biz_type: str  # "1" 是商品会话，别的是系统通知之类
     item_id: str
     item_title: str
+    item_pic: str
     order_id: str
     unread: int
     updated_at: float | None  # 秒级时间戳
@@ -322,6 +323,7 @@ class Conversation:
             biz_type=str(conv.get("bizType") or ""),
             item_id=str(ext.get("itemId") or ""),
             item_title=str(ext.get("itemTitle") or ""),
+            item_pic=str(ext.get("itemMainPic") or ""),
             order_id=str(ext.get("orderId") or ""),
             unread=_int_or_none(user_conv.get("redPoint")) or 0,
             updated_at=modified / 1000 if isinstance(modified, int | float) else None,
@@ -734,7 +736,8 @@ class ImClient:
 
     `fetch_token` 和 `load_cookies` 由业务层给：取 token 要走它的限流、熔断，cookie 要用最新的。
     每次连上（包括重连）先调 `on_connected`，适合在这里补拉断线期间漏掉的消息；之后每个推送条目
-    调一次 `on_event`。这两个回调抛的异常只记日志，不影响连接。
+    调一次 `on_event`；状态（`status`）每次变化调一次 `on_status`。
+    回调抛的异常只记日志，不影响连接。
     """
 
     def __init__(
@@ -751,6 +754,7 @@ class ImClient:
         heartbeat_interval: float = HEARTBEAT_INTERVAL,
         response_timeout: float = RESPONSE_TIMEOUT,
         ready_timeout: float = READY_TIMEOUT,
+        on_status: Callable[[ImStatus], None] | None = None,
     ):
         self.device_id = device_id
         self._fetch_token = fetch_token
@@ -765,6 +769,7 @@ class ImClient:
         }
         self._delays = reconnect_delays
         self._stable_after = stable_after
+        self._on_status = on_status
         self.status = ImStatus("stopped", time.time())
         self.connection: ImConnection | None = None
 
@@ -884,3 +889,8 @@ class ImClient:
 
     def _set(self, state: str, message: str = "") -> None:
         self.status = ImStatus(state, time.time(), message)
+        if self._on_status:
+            try:
+                self._on_status(self.status)
+            except Exception:
+                log.exception("on_status 出错")

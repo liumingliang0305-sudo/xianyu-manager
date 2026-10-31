@@ -4,23 +4,27 @@
 - 金额：响应里一律是分（`*_cent`，整数）；请求里的价格是元的字符串（"49"、"12.5"），服务端校验换算；
 - 出错时返回 `{"code": ..., "message": ...}`，`code` 见 ERRORS；
 - 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖；
-- 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态和命令行共用。
+- 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态和命令行共用；
+- 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
+  GET .../messages/stream（Server-Sent Events）通知页面。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import httpx
+import websockets
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -34,6 +38,7 @@ from app.login import (
     parse_cookie_header,
     same_login,
 )
+from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderService
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -47,12 +52,15 @@ from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+# 消息推送流多久没事件就发一行注释，顺便发现页面已经关了
+SSE_PING = 15.0
 
 # 异常 → (HTTP 状态码, code)。按顺序匹配，子类要排在父类前面
 ERRORS: list[tuple[type[Exception], int, str]] = [
     (PriceGuardError, 409, "price_guard"),
     (AccountNotFoundError, 404, "account_not_found"),
     (LoginNotFoundError, 404, "login_not_found"),
+    (ImOfflineError, 503, "im_offline"),
     (AuthRequiredError, 401, "auth_required"),
     (RiskControlError, 503, "risk_control"),
     (CircuitOpenError, 503, "circuit_open"),
@@ -89,6 +97,10 @@ class OrderPriceIn(BaseModel):
     force: bool = False
 
 
+class FetchIn(BaseModel):
+    older: bool = False  # True 往前翻一页，False 拉最新的
+
+
 def create_app(
     *,
     db_path: str | Path = db.DEFAULT_PATH,
@@ -99,8 +111,15 @@ def create_app(
     guard: Guard | None = None,
     login_poll_interval: float = 2.0,
     login_check_interval: float | None = None,
+    messages: bool = False,
+    im_connect: Callable[..., Awaitable[Any]] = websockets.connect,
+    im_options: dict[str, Any] | None = None,
 ) -> FastAPI:
-    """`login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。"""
+    """`login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
+
+    `messages`：连不连即时消息。不连时消息接口只能看本地库里已有的。
+    `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
+    """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard(db_path))
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -108,6 +127,7 @@ def create_app(
         # 等这个账号手上的平台请求做完再写，免得请求结束时把旧 cookie 写回来，盖掉刚扫到的凭证
         async with locks[credential.unb]:
             credential.save(accounts.path(credential.unb))
+        app.state.messages.resume(credential.unb)
 
     logins = WebLogin(save_login, transport=transport, poll_interval=login_poll_interval)
 
@@ -116,6 +136,12 @@ def create_app(
         conn = db.connect(db_path)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
+        hub = MessageHub(
+            MessageStore(conn), accounts, locks, connect=im_connect, **(im_options or {})
+        )
+        app.state.messages = hub
+        if messages:
+            await hub.start()
         keeper = None
         if login_check_interval:
             keeper = asyncio.create_task(
@@ -128,6 +154,7 @@ def create_app(
                 keeper.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await keeper
+            await hub.aclose()
             await logins.aclose()
             conn.close()
 
@@ -141,6 +168,9 @@ def create_app(
 
     def orders(request: Request) -> OrderService:
         return request.app.state.orders
+
+    def hub(request: Request) -> MessageHub:
+        return request.app.state.messages
 
     def account(account_id: str) -> str:
         return accounts.resolve(account_id)
@@ -170,14 +200,16 @@ def create_app(
         return await account_info(account(account_id), recheck=True)
 
     @app.delete("/api/accounts/{account_id}/block")
-    async def unblock_account(account_id: str) -> dict[str, Any]:
+    async def unblock_account(request: Request, account_id: str) -> dict[str, Any]:
         """手动解除熔断。应该先在闲鱼 App 或网页上完成验证再解除。
 
         记下的"风控"登录态一并忘掉，下次拉账号列表时重新确认一次。
         """
         account_id = account(account_id)
         accounts.forget_login(account_id)
-        return {"ok": bool(accounts.guard and accounts.guard.unblock(account_id))}
+        ok = bool(accounts.guard and accounts.guard.unblock(account_id))
+        hub(request).resume(account_id)
+        return {"ok": ok}
 
     @app.post("/api/login")
     async def start_login() -> dict[str, Any]:
@@ -196,7 +228,7 @@ def create_app(
         return {"ok": await logins.cancel(session_id)}
 
     @app.post("/api/login/import")
-    async def import_login(body: CookieImportIn) -> dict[str, Any]:
+    async def import_login(request: Request, body: CookieImportIn) -> dict[str, Any]:
         """导入浏览器的登录（整串 Cookie 请求头）：管理后台里粘贴的，和浏览器插件自动同步的。
 
         和已保存的是同一份登录就直接返回（changed=false），不请求平台；
@@ -211,6 +243,8 @@ def create_app(
                 credential.save(path)
             else:
                 credential = Credential.load(path)
+        if changed:
+            hub(request).resume(credential.unb)
         return {
             "account_id": credential.unb,
             "changed": changed,
@@ -354,9 +388,78 @@ def create_app(
         ops = orders(request).history(account(account_id), order_id, limit=min(limit, 500))
         return {"ops": [asdict(op) for op in ops]}
 
+    @app.get("/api/accounts/{account_id}/conversations")
+    async def list_conversations(request: Request, account_id: str) -> dict[str, Any]:
+        """本地库里的会话，和即时消息的连接状态。"""
+        account_id = account(account_id)
+        records = hub(request).store.conversations(account_id)
+        return {
+            "conversations": [asdict(r) for r in records],
+            "im": hub(request).status(account_id),
+        }
+
+    @app.get("/api/accounts/{account_id}/conversations/{cid}/messages")
+    async def list_messages(
+        request: Request, account_id: str, cid: str, limit: int = 50
+    ) -> dict[str, Any]:
+        """本地库里一个会话最新的 `limit` 条消息（按时间正序）。local_more：本地还有更早的。"""
+        account_id = account(account_id)
+        store = hub(request).store
+        conversation = store.conversation(account_id, cid)
+        if conversation is None:
+            raise ValueError(f"本地没有会话 {cid}")
+        records, more = store.messages(account_id, cid, limit=min(max(limit, 1), 500))
+        return {
+            "conversation": asdict(conversation),
+            "messages": [asdict(r) for r in records],
+            "local_more": more,
+        }
+
+    @app.post("/api/accounts/{account_id}/conversations/{cid}/fetch")
+    async def fetch_messages(
+        request: Request, account_id: str, cid: str, body: FetchIn
+    ) -> dict[str, Any]:
+        """通过即时消息连接向平台拉：最新的消息（补上本地缺的），或者往前翻一页。"""
+        return await hub(request).fetch(account(account_id), cid, older=body.older)
+
+    @app.post("/api/accounts/{account_id}/im/reconnect")
+    async def reconnect_im(request: Request, account_id: str) -> dict[str, Any]:
+        account_id = account(account_id)
+        hub(request).restart(account_id)
+        return hub(request).status(account_id)
+
+    @app.get("/api/accounts/{account_id}/messages/stream")
+    async def message_stream(request: Request, account_id: str) -> StreamingResponse:
+        """Server-Sent Events：连上先发一次 status，之后有新消息、补拉完、连接状态变了都发一条。"""
+        return StreamingResponse(
+            sse_events(hub(request), account(account_id)),
+            media_type="text/event-stream",
+            headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+        )
+
     if web_dist and (web_dist / "index.html").is_file():
         _mount_web(app, web_dist)
     return app
+
+
+async def sse_events(
+    hub: MessageHub, account_id: str, *, ping: float = SSE_PING
+) -> AsyncIterator[str]:
+    with hub.subscribe(account_id) as queue:
+        yield _sse({"type": "status", **hub.status(account_id)})
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), ping)
+            except TimeoutError:
+                yield ": ping\n\n"
+                continue
+            if event is CLOSING:
+                return
+            yield _sse(event)
+
+
+def _sse(event: dict[str, Any]) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 def _block(block: Block | None) -> dict[str, Any] | None:

@@ -102,3 +102,12 @@ def test_items_error_updates_login_status(accounts, platform):
     with pytest.raises(AuthRequiredError):
         run(service.fetch_detail(UNB, "1001"))
     assert accounts.login_status(UNB).state is LoginState.EXPIRED
+
+
+def test_device_id_is_created_once_and_kept(accounts):
+    device_id = accounts.device_id(UNB)
+    assert device_id.endswith(f"-{UNB}")
+    assert accounts.device_id(UNB) == device_id
+    path = accounts.root / f"{UNB}.im.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert accounts.ids() == [UNB]  # 设备 ID 文件不算账号

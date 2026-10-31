@@ -94,12 +94,20 @@ def session_activation(cid: str = "777") -> dict:
     return {"sessionId": cid, "chatType": 1, "operation": {"content": {"contentType": 8}}}
 
 
-def conversation(cid: str, me: str, peer: str, *, unread: int = 0, item: str = "300") -> dict:
+def conversation(
+    cid: str,
+    me: str,
+    peer: str,
+    *,
+    unread: int = 0,
+    item: str = "300",
+    modified_ms: int = 1793378003908,
+) -> dict:
     return {
         "type": 1,
         "singleChatUserConversation": {
             "redPoint": unread,
-            "modifyTime": 1793378003908,
+            "modifyTime": modified_ms,
             "singleChatConversation": {
                 "cid": f"{cid}@goofish",
                 "pairFirst": f"{peer}@goofish",
@@ -192,7 +200,10 @@ class FakeIm:
         self.vulcan: list[dict] = [entry(session_activation())]
         self.heartbeat_ok = True
         self.conversations: list[dict] = []
+        self.conversations_more = True  # 会话列表说不说还有下一页
         self.history: list[dict] = []
+        # 会话 ID → 历史消息（history_message 造的）。在这里的会话按真实的游标规则分页
+        self.chats: dict[str, list[dict]] = {}
         self.refuse = 0  # 前几次 connect 直接连不上
 
     async def connect(self, url: str, **kwargs) -> FakeSocket:
@@ -222,10 +233,35 @@ class FakeIm:
             if self.heartbeat_ok:
                 sock.respond(frame, 200)
         elif lwp == "/r/Conversation/listNewestPagination":
-            body = {"userConvs": self.conversations, "hasMore": 1, "nextCursor": 1790449136584}
+            body = {
+                "userConvs": self.conversations,
+                "hasMore": int(self.conversations_more),
+                "nextCursor": 1790449136584,
+            }
             sock.respond(frame, 200, body)
         elif lwp == "/r/MessageManager/listUserMessages":
-            body = {"userMessageModels": self.history, "hasMore": 0, "nextCursor": 1793378002814}
-            sock.respond(frame, 200, body)
+            cid, _, cursor, limit, _ = frame["body"]
+            cid = cid.removesuffix("@goofish")
+            if cid in self.chats:
+                sock.respond(frame, 200, self._page(self.chats[cid], cursor, limit))
+            else:
+                body = {
+                    "userMessageModels": self.history,
+                    "hasMore": 0,
+                    "nextCursor": 1793378002814,
+                }
+                sock.respond(frame, 200, body)
         else:
             sock.respond(frame, 404, {"reason": "no such lwp"})
+
+    @staticmethod
+    def _page(models: list[dict], cursor: int, limit: int) -> dict:
+        """实测的规则：从新到旧，游标是毫秒时间、包含等于它的；nextCursor 是下一条的时间。"""
+        newest_first = sorted(models, key=lambda m: m["message"]["createAt"], reverse=True)
+        rest = [m for m in newest_first if m["message"]["createAt"] <= cursor]
+        page, after = rest[:limit], rest[limit:]
+        return {
+            "userMessageModels": page,
+            "hasMore": int(bool(after)),
+            "nextCursor": after[0]["message"]["createAt"] if after else None,
+        }

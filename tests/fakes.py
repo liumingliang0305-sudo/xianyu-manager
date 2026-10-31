@@ -36,6 +36,7 @@ class FakePlatform:
         self.session_expired = False
         self.renew_ok = True
         self.renews = 0  # silentHasLogin 被调了几次
+        self.im_tokens = 0  # 即时消息的 accessToken 发了几个
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "passport.goofish.com":
@@ -72,6 +73,11 @@ class FakePlatform:
 
     def mtop_taobao_idlemessage_pc_loginuser_get(self, data):
         return {"userId": int(UNB)}
+
+    def mtop_taobao_idlemessage_pc_login_token(self, data):
+        self.im_tokens += 1
+        expires_ms = int((time.time() + 86400) * 1000)
+        return {"accessToken": f"im{self.im_tokens}", "accessTokenExpiredTime": str(expires_ms)}
 
     def mtop_idle_web_xyh_item_list(self, data):
         cards = [

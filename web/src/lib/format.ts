@@ -37,6 +37,20 @@ export function dateTime(seconds: number | null | undefined): string {
   return new Date(seconds * 1000).toLocaleString("zh-CN", { hour12: false })
 }
 
+/** 聊天里的时间：今天只显示时分，今年的显示月日，再早的带年份 */
+export function chatTime(seconds: number | null | undefined): string {
+  if (!seconds) return ""
+  const date = new Date(seconds * 1000)
+  const now = new Date()
+  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
+  if (date.toDateString() === now.toDateString()) return time
+  const day =
+    date.getFullYear() === now.getFullYear()
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
+  return `${day} ${time}`
+}
+
 export type ItemState = "online" | "sold" | "gone"
 
 export function itemState(item: Pick<Item, "status" | "on_platform">): ItemState {

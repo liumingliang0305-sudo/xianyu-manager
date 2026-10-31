@@ -190,6 +190,60 @@ export interface OrderSyncResult {
   failed: string[]
 }
 
+/**
+ * 即时消息的连接状态。connecting 正在连；online 在线，新消息实时收；waiting 断了，等着重连；
+ * stopped 停了，needs 说要人做什么；off 后台没开即时消息（只有 xym serve 会连）
+ */
+export type ImState = "connecting" | "online" | "waiting" | "stopped" | "off"
+
+export interface ImStatus {
+  state: ImState
+  since: number | null
+  message: string
+  /** 停下以后要做的：login 重新登录；unblock 完成验证后解除熔断；reconnect 手动重新连接 */
+  needs: "login" | "unblock" | "reconnect" | null
+}
+
+export interface Conversation {
+  account_id: string
+  cid: string
+  peer_id: string
+  peer_name: string
+  /** "1" 是商品会话，别的是系统通知之类 */
+  biz_type: string
+  item_id: string
+  item_title: string
+  item_pic: string
+  order_id: string
+  unread: number
+  updated_at: number | null
+  fetched_at: number | null
+  /** 平台上还有没有更早的消息，没往前翻过是 null */
+  older_more: boolean | null
+  first_seen_at: number
+  last_text: string
+  last_sender_id: string
+  last_sent_at: number | null
+  /** 平台上有本地还没拉的消息，打开时补拉 */
+  stale: boolean
+}
+
+export interface ChatMessage {
+  account_id: string
+  message_id: string
+  cid: string
+  sender_id: string
+  sender_name: string
+  sent_at: number | null
+  /** 1 是文本，别的类型 text 是平台给的摘要 */
+  content_type: number | null
+  text: string
+  item_id: string
+  received_at: number
+  /** 这个账号自己发的 */
+  mine: boolean
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -222,6 +276,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const itemsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/items`
 const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)}/orders`
+const convPath = (account: string, cid: string) =>
+  `/accounts/${encodeURIComponent(account)}/conversations/${encodeURIComponent(cid)}`
+
+/** 新消息、补拉完、连接状态变了都会推一条（Server-Sent Events） */
+export const messageStreamUrl = (account: string) =>
+  `/api/accounts/${encodeURIComponent(account)}/messages/stream`
 
 export const api = {
   accounts: () => request<{ accounts: Account[] }>("/accounts").then((r) => r.accounts),
@@ -319,6 +379,29 @@ export const api = {
       `${ordersPath(account)}/${orderId}/price`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+
+  conversations: (account: string) =>
+    request<{ conversations: Conversation[]; im: ImStatus }>(
+      `/accounts/${encodeURIComponent(account)}/conversations`,
+    ),
+
+  /** 本地库里最新的 limit 条（按时间正序）；local_more：本地还有更早的 */
+  messages: (account: string, cid: string, limit: number) =>
+    request<{ conversation: Conversation; messages: ChatMessage[]; local_more: boolean }>(
+      `${convPath(account, cid)}/messages?limit=${limit}`,
+    ),
+
+  /** 向平台拉：最新的消息（补上本地缺的），或者往前翻一页。要即时消息在线 */
+  fetchMessages: (account: string, cid: string, older: boolean) =>
+    request<{ added: number; older_more: boolean | null }>(`${convPath(account, cid)}/fetch`, {
+      method: "POST",
+      body: JSON.stringify({ older }),
+    }),
+
+  reconnectIm: (account: string) =>
+    request<ImStatus>(`/accounts/${encodeURIComponent(account)}/im/reconnect`, {
+      method: "POST",
+    }),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,6 +20,7 @@ import httpx
 from xianyu_core import AuthRequiredError, Credential, MtopClient, RiskControlError, XianyuError
 from xianyu_core.errors import CircuitOpenError
 from xianyu_core.guard import FileBlockStore, Guard
+from xianyu_core.im import new_device_id
 
 DEFAULT_DIR = Path("data/accounts")
 # 只读接口，只返回 userId（等于 unb），用来确认登录态
@@ -89,6 +92,21 @@ class Accounts:
 
     def load(self, account_id: str) -> Credential:
         return Credential.load(self.path(account_id))
+
+    def device_id(self, account_id: str) -> str:
+        """即时消息的设备 ID，存在凭证旁边的 <unb>.im.json。
+
+        每个账号只在第一次用时生成，之后一直用同一个：每次都换，看起来就像换了设备。
+        """
+        path = self.root / f"{account_id}.im.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))["device_id"]
+        device_id = new_device_id(account_id)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"device_id": device_id, "created_at": time.time()}, f)
+        return device_id
 
     @asynccontextmanager
     async def mtop(self, account_id: str) -> AsyncIterator[MtopClient]:

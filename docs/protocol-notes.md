@@ -279,17 +279,25 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
    - ✅ 会话列表 `/r/Conversation/listNewestPagination`，body `[9007199254740991, 20]`（游标取最大值表示从最新一页开始）。
      返回 `hasMore`、`nextCursor`、`userConvs[]`；每个会话在 `singleChatUserConversation` 下，有 `redPoint`（应该是未读数）、
      `modifyTime`，`singleChatConversation` 里有 `cid`、`pairFirst` / `pairSecond`（双方 ID）、`extension.ownerUserId` / `extUserId`；
+     `extension` 里还有 `itemId`、`itemTitle`、`itemMainPic`、`squadName_<userId>`（双方昵称，有的会话没有）。
+     ✅ 每页 50 个可以；按 `modifyTime` 从新到旧，`nextCursor` 是下一页第一个会话的 `modifyTime`（毫秒），下一页从它开始、包含它。
+     自己的账号一共 313 个会话，7 页翻完；`bizType` 是 `"1"` 的商品会话 293 个，别的是交易通知、活动之类的系统会话，
+     未读数大多在系统会话上（336 对 4）。`/s/vulcan` 里的 37 条只是最近会话的激活事件，不是会话总数；
    - ✅ 某个会话的消息 `/r/MessageManager/listUserMessages`，body `["<cid>@goofish", false, 游标, 条数, false]`。
      返回 `hasMore`、`nextCursor`、`userMessageModels[]`，自己发的和对方发的都在里面。每条的 `message` 下有
      `messageId`、`cid`、`createAt`（毫秒）、`sender.uid`、`content.custom`（`type` 1 是文本，`summary` 是摘要，
      `data` 是 base64 的 JSON，解出来和推送里的 `1.6.3.5` 一样）、`extension`（和推送里的 `1.10` 一样，
-     也带着发送端的设备信息）；
+     也带着发送端的设备信息）。
+     ✅ 一页 20 条（网页版也是 20），从新到旧。`nextCursor` 是下一条更早消息的 `createAt`（毫秒），传回去从它开始、包含它，
+     页与页不重叠；拿本页最早一条的 `createAt` 当游标会多出这一条。翻到头 `hasMore` 是 0。
+     消息类型不止文本：14 是交易卡片（"[卖家已发货]"之类），25 是评价提醒，`summary` 都是给人看的摘要。
+     这些卡片的 `sender` 也是对方，但 `reminderTitle` 是"交易消息"、"快给ta一个评价吧～"这样的标题，不是昵称；
 9. 发消息走 `/r/MessageSend/sendByReceiverScope`，标已读 `/r/MessageStatus/read`；
 10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
 
 `did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，
 不能每次连接都新生成一个：要么沿用浏览器里网页版已有的那个，要么每个账号只生成一次、存下来一直用。
-实测用的是后一种，存在 `data/im/<unb>.json`；同一个 did 前后连了三次，都没被踢。
+实测用的是后一种，存在凭证旁边的 `data/accounts/<unb>.im.json`；同一个 did 前后连了好几次，都没被踢。
 
 ### 聊天消息的推送
 
@@ -305,7 +313,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `1.6.3.4` | 内层内容类型，1 是文本 |
 | `1.6.3.5` | 内层内容，是 JSON 字符串，不是 base64：`{"contentType": 1, "text": {"text": …}, "atUsers": []}` |
 | `1.6.3.2` | 摘要，文本消息就是正文 |
-| `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（发送人昵称）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 从这里取。✅ `peerUserId` 是**发送人**，不是会话里的对方：这个链接是给收消息的人点的，自己发的消息里它就是自己。对方是谁看会话列表 |
+| `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（文本消息是发送人昵称，交易卡片之类是卡片标题）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 从这里取。✅ `peerUserId` 是**发送人**，不是会话里的对方：这个链接是给收消息的人点的，自己发的消息里它就是自己。对方是谁看会话列表 |
 | `3.needPush` | 要不要给手机推通知，这次是 `"false"` |
 
 `1.10` 里还带着发送端的 `clientIp`、`umid`、`umidToken`、`utdid`，是发消息那台设备的信息，不要存，也不要写进日志。
