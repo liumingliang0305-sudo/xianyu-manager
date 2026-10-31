@@ -279,10 +279,22 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
    - ✅ 会话列表 `/r/Conversation/listNewestPagination`，body `[9007199254740991, 20]`（游标取最大值表示从最新一页开始）。
      返回 `hasMore`、`nextCursor`、`userConvs[]`；每个会话在 `singleChatUserConversation` 下，有 `redPoint`（应该是未读数）、
      `modifyTime`，`singleChatConversation` 里有 `cid`、`pairFirst` / `pairSecond`（双方 ID）、`extension.ownerUserId` / `extUserId`；
-     `extension` 里还有 `itemId`、`itemTitle`、`itemMainPic`、`squadName_<userId>`（双方昵称，有的会话没有）。
+     `extension` 里还有 `itemId`、`itemTitle`、`itemMainPic`、`ownerUserType` / `extUserType`（用户类型，普通用户 `0`，
+     系统账号 `10`）、`squadId_<userId>` / `squadName_<userId>`。
+     ✅ 2026-10-31 更正：**`squadName_<userId>` 不是昵称**，是商品的简称（294 个商品会话里 152 个和商品标题一样，
+     别的是"取暖器"这类短名）。会话列表本身不带对方昵称，只有两种办法拿：
+     `singleChatUserConversation.lastMessage`（和历史消息同一个格式）是对方发的文本时，它的 `reminderTitle` 就是昵称；
+     否则调 mtop `mtop.taobao.idlemessage.pc.user.query`（见下面接口表），网页版也是每个会话查一次。
      ✅ 每页 50 个可以；按 `modifyTime` 从新到旧，`nextCursor` 是下一页第一个会话的 `modifyTime`（毫秒），下一页从它开始、包含它。
      自己的账号一共 313 个会话，7 页翻完；`bizType` 是 `"1"` 的商品会话 293 个，别的是交易通知、活动之类的系统会话，
      未读数大多在系统会话上（336 对 4）。`/s/vulcan` 里的 37 条只是最近会话的激活事件，不是会话总数；
+     ✅ 2026-10-31 读网页版 JS：`bizType` 就是网页版的会话类型（`sessionType = parseInt(bizType)`，`visible` 是
+     `singleChatUserConversation.visible === 1`）。网页版会话列表只显示 `visible` 而且类型在
+     `[1, 19, 15, 32, 3, 44, 51, 52, 24]` 里的（灰度名单里的账号再加群聊 47），未读数、提示音也只算这些。
+     其中 3 是"通知消息"（另走 mtop 的 `session.sync` 拉，内容是"本周闲鱼币优推抵扣"这类推广），24 是"闲小蜜"
+     （客服机器人，"邀您填写售后问卷"，发送人 ID 1400）。自己账号的系统会话还有 6、10、14、23、25、37、62、63、66，
+     对方 ID 大多是 `0`，网页版都不显示。消息提醒里的 `sessionType` 和会话的 `bizType` 是同一个值，推送也能按它分。
+     本系统只存和人的聊天：类型在网页版名单里、去掉 3 和 24、对方不是 `0`（`xianyu_core/im.py` 的 `USER_SESSION_TYPES`）；
    - ✅ 某个会话的消息 `/r/MessageManager/listUserMessages`，body `["<cid>@goofish", false, 游标, 条数, false]`。
      返回 `hasMore`、`nextCursor`、`userMessageModels[]`，自己发的和对方发的都在里面。每条的 `message` 下有
      `messageId`、`cid`、`createAt`（毫秒）、`sender.uid`、`content.custom`（`type` 1 是文本，`summary` 是摘要，
@@ -292,6 +304,10 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
      页与页不重叠；拿本页最早一条的 `createAt` 当游标会多出这一条。翻到头 `hasMore` 是 0。
      消息类型不止文本：14 是交易卡片（"[卖家已发货]"之类），25 是评价提醒，`summary` 都是给人看的摘要。
      这些卡片的 `sender` 也是对方，但 `reminderTitle` 是"交易消息"、"快给ta一个评价吧～"这样的标题，不是昵称；
+     ✅ 2026-10-31：文本消息也不一定，卖家设的自动回复 `reminderTitle` 是"你有一条新消息"。分法是看 `reminderNotice`：
+     人发的是"发来一条新消息"（本地存的 67 条对方文本消息里 63 条，标题都是昵称），自动回复是"～"（4 条）；
+     交易卡片（14）、评价（25、26）有时也是"发来一条新消息"，标题多半是昵称，但也见过"交易消息"。
+     所以只认"发来一条新消息"而且内容类型是 1（文字）或 2（图片）的，它们的标题全是昵称；
 9. ✅ 发消息走 `/r/MessageSend/sendByReceiverScope`。2026-10-31 照网页版 `/im` 的 JS 整理，和 Ydisks、goofish-cli 的写法一致。
    body 是两项：
    - 消息：`uuid`（`-`、毫秒时间戳、再接一个从 1 开始递增的序号）、`cid`（带 `@goofish`）、`conversationType: 1`、
@@ -336,7 +352,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `1.6.3.4` | 内层内容类型，1 是文本 |
 | `1.6.3.5` | 内层内容，是 JSON 字符串，不是 base64：`{"contentType": 1, "text": {"text": …}, "atUsers": []}` |
 | `1.6.3.2` | 摘要，文本消息就是正文 |
-| `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（文本消息是发送人昵称，交易卡片之类是卡片标题）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 从这里取。✅ `peerUserId` 是**发送人**，不是会话里的对方：这个链接是给收消息的人点的，自己发的消息里它就是自己。对方是谁看会话列表 |
+| `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（人发的消息是发送人昵称，交易卡片、自动回复是"交易消息"、"你有一条新消息"这样的标题，用 `reminderNotice` 分，见上面第 8 条）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 从这里取。✅ `peerUserId` 是**发送人**，不是会话里的对方：这个链接是给收消息的人点的，自己发的消息里它就是自己。对方是谁看会话列表 |
 | `3.needPush` | 要不要给手机推通知，这次是 `"false"` |
 
 `1.10` 里还带着发送端的 `clientIp`、`umid`、`umidToken`、`utdid`，是发消息那台设备的信息，不要存，也不要写进日志。
@@ -348,7 +364,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `mtop.taobao.idlemessage.pc.login.token` | 即时消息的 accessToken。✅ 见上面"即时消息" |
 | `mtop.taobao.idlemessage.pc.loginuser.get` | 当前登录用户。✅ 只返回 `userId`（等于 cookie 里的 `unb`），没有昵称 |
 | `mtop.idle.web.user.page.head` | 个人主页头部，`{"self": true}` 查自己。✅ 昵称在 `module.base.displayName` |
-| `mtop.taobao.idlemessage.pc.user.query` | 查询用户 |
+| `mtop.taobao.idlemessage.pc.user.query` | 会话里对方的昵称。✅ v4.0，data `{type: 对方的用户类型, sessionType: 会话的 bizType, sessionId: 会话 ID, isOwner: false}`（不传对方 ID；对方类型看 extUserId 是不是自己，是的话取 ownerUserType，否则取 extUserType）。返回 `userInfo` 里的 `fishNick`（闲鱼昵称）、`nick`（打了码的账号名，"x***0"）、`logo`；网页版显示 `fishNick`，没有才用 `nick` |
 | `mtop.taobao.idlemessage.pc.session.sync` | 同步会话 |
 | `mtop.taobao.idle.pc.detail` | 商品详情。✅ 见上面"商品管理" |
 | `mtop.idle.web.xyh.item.list` | 我的商品列表。✅ 见上面"商品管理" |

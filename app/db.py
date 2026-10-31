@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     account_id   TEXT    NOT NULL,
     cid          TEXT    NOT NULL,           -- 会话 ID，不带 @goofish
     peer_id      TEXT    NOT NULL DEFAULT '',
-    peer_name    TEXT    NOT NULL DEFAULT '',
+    peer_name    TEXT    NOT NULL DEFAULT '', -- 对方昵称
+    peer_type    TEXT    NOT NULL DEFAULT '', -- 对方的用户类型，查昵称要用；普通用户是 "0"
+    named_at     REAL,                        -- 上次向平台查对方昵称的时间，没查过是 NULL
     biz_type     TEXT    NOT NULL DEFAULT '', -- "1" 是商品会话，别的是系统通知之类
     item_id      TEXT    NOT NULL DEFAULT '',
     item_title   TEXT    NOT NULL DEFAULT '',
@@ -112,11 +114,31 @@ CREATE INDEX IF NOT EXISTS messages_conv ON messages (account_id, cid, sent_at);
 """
 
 
+# 建表以后才加的列：(表, 列, 定义)。老库打开时补上
+ADDED_COLUMNS = [
+    ("conversations", "peer_type", "TEXT NOT NULL DEFAULT ''"),
+    ("conversations", "named_at", "REAL"),
+]
+
+
 def connect(path: str | Path = DEFAULT_PATH) -> sqlite3.Connection:
-    """打开数据库并建表。传 ":memory:" 用内存库（测试用）。"""
+    """打开数据库并建表，老库补上新加的列。传 ":memory:" 用内存库（测试用）。"""
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _add_columns(conn)
     return conn
+
+
+def _add_columns(conn: sqlite3.Connection) -> None:
+    with conn:
+        for table, column, definition in ADDED_COLUMNS:
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column in columns:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            if (table, column) == ("conversations", "named_at"):
+                # 以前的 peer_name 取自会话扩展里的 squadName，那其实是商品的简称，不是昵称
+                conn.execute("UPDATE conversations SET peer_name = ''")

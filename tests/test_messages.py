@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 import time
 from collections import defaultdict
 
@@ -77,7 +78,12 @@ def test_store_conversations_and_messages():
     assert [c.cid for c in store.conversations(UNB)] == ["778", "777"]
 
     c = store.conversation(UNB, "777")
-    assert (c.peer_id, c.peer_name, c.item_title, c.unread) == ("200", "买家小王", "洗衣机", 2)
+    assert (c.peer_id, c.peer_name, c.item_title, c.unread) == (
+        "200",
+        "买家小王",
+        "九成新洗衣机",
+        2,
+    )
     assert c.stale and c.older_more is None and c.last_text == ""
 
     new = store.save_messages(UNB, [live(1), live(2, sender=UNB), live(3)])
@@ -120,20 +126,50 @@ def test_store_live_message_updates_conversation():
     assert c.stale
 
 
-def test_store_peer_name_falls_back_to_text_messages():
+def test_store_peer_name_falls_back_to_messages_from_the_person():
     store = make_store()
-    nameless = conversation("777", UNB, "200")
-    del nameless["singleChatUserConversation"]["singleChatConversation"]["extension"][
-        "squadName_200"
-    ]
+    nameless = conversation("777", UNB, "200", last_from="me")
     store.save_conversations(UNB, [Conversation.parse(nameless, UNB)])
     assert store.conversation(UNB, "777").peer_name == ""
 
-    card = live(1)
-    card.content_type, card.sender_name = 14, "交易消息"  # 交易卡片的提醒标题不是昵称
-    store.save_messages(UNB, [card])
+    # 自动回复的提醒标题是"你有一条新消息"，不是昵称
+    auto = ChatMessage.from_history(history_message(message_id="a1", notice="～"))
+    assert auto is not None and auto.sender_name == ""
+    store.save_messages(UNB, [auto])
     assert store.conversation(UNB, "777").peer_name == ""
+    assert store.nameless(UNB, ["777"]) == ["777"]
     store.save_messages(UNB, [live(2)])
+    assert store.conversation(UNB, "777").peer_name == "买家小王"
+    assert store.nameless(UNB, ["777"]) == []
+
+
+def test_store_forgets_names_that_are_not_nicknames():
+    """以前存的消息，sender_name 直接取的提醒标题；卡片、自动回复的那种清掉，人发的留着。"""
+    store = make_store()
+    store.save_conversations(UNB, [conv("777", "200")])
+    shipped, card, person = live(1), live(2), live(3)
+    shipped.sender_name = "交易消息"
+    shipped.raw["message"]["extension"]["reminderNotice"] = "卖家已发货，请注意物流签收"
+    card.content_type, card.sender_name = 14, "交易消息"  # 提醒也是"发来一条新消息"
+    store.save_messages(UNB, [shipped, card, person])
+    assert store.forget_unsure_names() == 2
+    assert store.forget_unsure_names() == 0
+    assert [m.sender_name for m in store.messages(UNB, "777")[0]] == ["", "", "买家小王"]
+
+
+def test_store_name_follows_the_list_until_looked_up():
+    store = make_store()
+    store.save_conversations(UNB, [conv("777", "200")])
+    assert store.conversation(UNB, "777").peer_name == "买家小王"
+    # 没查过的跟着会话列表走：列表里看不出来了，就不再用列表上次给的
+    later = Conversation.parse(conversation("777", UNB, "200", last_from="me"), UNB)
+    store.save_conversations(UNB, [later])
+    assert store.conversation(UNB, "777").peer_name == ""
+    # 查过的留着，列表里有新的才换
+    store.set_peer_name(UNB, "777", "小林同学")
+    store.save_conversations(UNB, [later])
+    assert store.conversation(UNB, "777").peer_name == "小林同学"
+    store.save_conversations(UNB, [conv("777", "200")])
     assert store.conversation(UNB, "777").peer_name == "买家小王"
 
 
@@ -239,6 +275,110 @@ def test_hub_backfills_on_connect_and_saves_live_messages(accounts, platform):
     assert {"type": "message", "cid": "777", "message_id": "m9"} in events
 
 
+def test_hub_looks_up_missing_names(accounts, platform, monkeypatch):
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [
+        conversation("777", UNB, "200", modified_ms=T + 3000),  # 最后一条是对方的文本：有昵称
+        conversation("778", UNB, "201", modified_ms=T + 2000, last_from="me"),  # 要查
+        conversation("779", UNB, "202", modified_ms=T + 1000, last_from="me"),  # 消息里有昵称
+        conversation("780", UNB, "203", modified_ms=T, last_from=None),  # 超出名额，点开时再查
+    ]
+    server.chats = {
+        "777": [chat(1)],
+        "778": [chat(2, cid="778", sender=UNB)],
+        "779": [chat(3, cid="779", sender="202")],
+        "780": [],
+    }
+    platform.nicks = {"778": "小林同学", "780": "晚风ovo"}
+    monkeypatch.setattr(messages, "NAME_LOOKUPS", 1)
+    hub = make_hub(accounts, server)
+    store = hub.store
+
+    async def go():
+        await hub.start()
+        await wait_until(
+            lambda: (c := store.conversation(UNB, "778")) is not None and c.peer_name == "小林同学"
+        )
+        assert store.conversation(UNB, "780").peer_name == ""
+        await hub.fetch(UNB, "780")  # 页面上点开
+        await hub.aclose()
+
+    run(go())
+    names = {c.cid: c.peer_name for c in store.conversations(UNB)}
+    assert names == {"777": "买家小王", "778": "小林同学", "779": "买家小王", "780": "晚风ovo"}
+    assert [q["sessionId"] for q in platform.user_queries] == ["778", "780"]
+    assert store.nameless(UNB, ["780"]) == []  # 查过了不再查
+
+
+def test_old_database_gets_new_columns_and_drops_wrong_names(tmp_path):
+    path = tmp_path / "xianyu.db"
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE conversations (account_id TEXT NOT NULL, cid TEXT NOT NULL,"
+        " peer_id TEXT NOT NULL DEFAULT '', peer_name TEXT NOT NULL DEFAULT '',"
+        " biz_type TEXT NOT NULL DEFAULT '', item_id TEXT NOT NULL DEFAULT '',"
+        " item_title TEXT NOT NULL DEFAULT '', item_pic TEXT NOT NULL DEFAULT '',"
+        " order_id TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0,"
+        " updated_at REAL, fetched_at REAL, older_cursor INTEGER, older_more INTEGER,"
+        " first_seen_at REAL NOT NULL, PRIMARY KEY (account_id, cid))"
+    )
+    old.execute(
+        "INSERT INTO conversations (account_id, cid, peer_id, peer_name, biz_type, first_seen_at)"
+        " VALUES (?, '777', '200', '取暖器', '1', 0)",
+        (UNB,),
+    )
+    old.commit()
+    old.close()
+
+    store = MessageStore(db.connect(path))
+    c = store.conversation(UNB, "777")
+    assert (c.peer_name, c.peer_type) == ("", "")  # 以前存的是商品简称，清掉
+    store.set_peer_name(UNB, "777", "小林同学")
+    assert MessageStore(db.connect(path)).conversation(UNB, "777").peer_name == "小林同学"
+
+
+def test_hub_keeps_only_conversations_with_people(accounts):
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [
+        conversation("777", UNB, "200", modified_ms=T + 5000),
+        conversation("800", UNB, "0", modified_ms=T + 4000, biz_type="3"),  # 通知消息
+        conversation("801", UNB, "0", modified_ms=T + 3000, biz_type="24"),  # 闲小蜜
+        conversation("802", UNB, "202", modified_ms=T + 2000, biz_type="66"),  # 网页版不显示
+        conversation("803", UNB, "203", modified_ms=T + 1000, biz_type="15"),
+    ]
+    hub = make_hub(accounts, server)
+    store = hub.store
+    # 以前存进来的系统会话（类型 23，对方是 0）和它的消息，启动时删掉
+    old = conv("700", "0", modified_ms=T)
+    old.biz_type = "23"
+    store.save_conversations(UNB, [old])
+    store.save_messages(UNB, [live(1, cid="700", sender="1400")])
+    # 推送先建出来、还不知道类型的会话留着
+    unknown = live(2, cid="701", sender="204")
+    unknown.item_id = unknown.session_type = ""
+    store.add_live(UNB, unknown)
+
+    async def go():
+        await hub.start()
+        await wait_until(
+            lambda: (
+                hub.status(UNB)["state"] == "online" and not store.conversation(UNB, "777").stale
+            )
+        )
+        promo = chat_message(cid="801", sender="1400", message_id="p1", session_type="24")
+        server.last.push_entries([entry(promo, packer="msgpack")])
+        server.last.push_entries([entry(chat_message(message_id="m9"), packer="msgpack")])
+        await wait_until(lambda: store.conversation(UNB, "777").last_text == "还在吗")
+        await hub.aclose()
+
+    run(go())
+    assert {c.cid for c in store.conversations(UNB)} == {"777", "803", "701"}
+    assert store.messages(UNB, "700") == ([], False)
+    assert store.messages(UNB, "801") == ([], False)
+
+
 def test_hub_stops_when_login_expired_and_resumes_after_new_login(accounts, platform):
     platform.session_expired = True
     platform.renew_ok = False
@@ -334,13 +474,14 @@ def test_second_hub_does_not_connect_while_another_holds_the_account(accounts):
 
 
 def send_server() -> FakeIm:
-    """一个商品会话 777（对方 200，有一条未读）和一个系统通知 800。"""
+    """一个商品会话 777（对方 200，有一条未读）和一个不是商品会话的聊天 801（类型 15）。"""
     server = FakeIm()
     server.conversations_more = False
-    notice = conversation("800", UNB, "300", modified_ms=T)
-    notice["singleChatUserConversation"]["singleChatConversation"]["bizType"] = "14"
-    server.conversations = [conversation("777", UNB, "200", unread=1, modified_ms=T + 2000), notice]
-    server.chats = {"777": [chat(1)], "800": []}
+    server.conversations = [
+        conversation("777", UNB, "200", unread=1, modified_ms=T + 2000),
+        conversation("801", UNB, "201", modified_ms=T, biz_type="15"),
+    ]
+    server.chats = {"777": [chat(1)], "801": []}
     return server
 
 
@@ -393,8 +534,8 @@ def test_hub_send_checks_before_sending(accounts):
             await hub.send(UNB, "777", " \n ")
         with pytest.raises(ValueError, match="最多 500 个字"):
             await hub.send(UNB, "777", "好" * 501)
-        with pytest.raises(ValueError, match="系统通知"):
-            await hub.send(UNB, "800", "在的")
+        with pytest.raises(ValueError, match="只能回复商品会话"):
+            await hub.send(UNB, "801", "在的")
         with pytest.raises(ValueError, match="本地没有会话"):
             await hub.send(UNB, "999", "在的")
         await hub.aclose()

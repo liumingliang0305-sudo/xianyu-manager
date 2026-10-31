@@ -24,8 +24,13 @@ def chat_message(
     item: str = "300",
     message_id: str = "1793378126001.PNM",
     sent_ms: int = 1793378126437,
+    session_type: str = "1",
+    notice: str = "发来一条新消息",
 ) -> dict:
-    """照实测的格式造一条聊天消息（MessagePack 解出来的那种，键是整数）。"""
+    """照实测的格式造一条聊天消息（MessagePack 解出来的那种，键是整数）。
+
+    人发的消息 `notice` 是"发来一条新消息"，提醒标题是昵称；自动回复是"～"，标题是"你有一条新消息"。
+    """
     inner = json.dumps({"contentType": 1, "text": {"text": text}, "atUsers": []})
     ext = {"messageId": message_id, "umidToken": "secret", "utdid": "secret", "tag": "u"}
     return {
@@ -37,13 +42,14 @@ def chat_message(
             6: {1: 101, 3: {1: "", 2: text, 3: "", 4: 1, 5: inner}},
             10: {
                 "senderUserId": sender,
-                "reminderTitle": "买家小王",
+                "reminderTitle": "买家小王" if notice == "发来一条新消息" else "你有一条新消息",
+                "reminderNotice": notice,
                 "reminderContent": text,
                 "reminderUrl": (
                     f"fleamarket://message_chat?itemId={item}&peerUserId={sender}"
                     f"&sid={cid}&messageId={message_id}&adv=no"
                 ),
-                "sessionType": "1",
+                "sessionType": session_type,
                 "extJson": json.dumps(ext),
                 "clientIp": "10.0.0.1",
                 "port": "51000",
@@ -64,12 +70,20 @@ def history_message(
     item: str = "300",
     message_id: str = "1793378126001.PNM",
     sent_ms: int = 1793378126437,
+    session_type: str = "1",
+    notice: str = "发来一条新消息",
 ) -> dict:
     """照实测的格式造一条历史消息（listUserMessages 的 userMessageModels 里的一条）。"""
     data = json.dumps({"contentType": 1, "text": {"text": text}, "atUsers": []})
-    reminder = chat_message(cid=cid, sender=sender, text=text, item=item, message_id=message_id)[1][
-        10
-    ]
+    reminder = chat_message(
+        cid=cid,
+        sender=sender,
+        text=text,
+        item=item,
+        message_id=message_id,
+        session_type=session_type,
+        notice=notice,
+    )[1][10]
     return {
         "readStatus": 2,
         "message": {
@@ -102,26 +116,41 @@ def conversation(
     unread: int = 0,
     item: str = "300",
     modified_ms: int = 1793378003908,
+    biz_type: str = "1",
+    last_from: str | None = "peer",
 ) -> dict:
-    return {
+    """照实测的格式造会话列表里的一个会话。squadName 是商品的简称，不是昵称；对方昵称只能从
+    最后一条消息看出来。`last_from`："peer" 最后一条是对方发的文本，"me" 是自己发的，
+    None 没有最后一条。"""
+    row = {
         "type": 1,
         "singleChatUserConversation": {
             "redPoint": unread,
             "modifyTime": modified_ms,
+            "visible": 1,
             "singleChatConversation": {
                 "cid": f"{cid}@goofish",
                 "pairFirst": f"{peer}@goofish",
                 "pairSecond": f"{me}@goofish",
-                "bizType": "1",
+                "bizType": biz_type,
                 "extension": {
                     "itemId": item,
-                    "itemTitle": "洗衣机",
-                    f"squadName_{peer}": "买家小王",
-                    f"squadName_{me}": "我",
+                    "itemTitle": "九成新洗衣机",
+                    "ownerUserId": peer,
+                    "ownerUserType": "10" if peer == "0" else "0",
+                    "extUserId": me,
+                    "extUserType": "0",
+                    f"squadName_{peer}": "洗衣机",
+                    f"squadName_{me}": "洗衣机",
                 },
             },
         },
     }
+    if last_from:
+        sender = peer if last_from == "peer" else me
+        last = history_message(cid=cid, sender=sender, session_type=biz_type, sent_ms=modified_ms)
+        row["singleChatUserConversation"]["lastMessage"] = last
+    return row
 
 
 class FakeSocket:

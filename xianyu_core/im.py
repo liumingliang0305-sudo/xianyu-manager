@@ -6,7 +6,8 @@
   每帧推送都回 ACK，推送带 syncExtraType 1 或 2 时对齐同步位点。推送里的条目解码后
   从 `events()` 出来；
 - `ImClient`：一个账号长期在线，断了自动重连，每次连接都重新取 accessToken（网页版也是这样）；
-- 聊天消息解析成 `ChatMessage`，会话列表解析成 `Conversation`；
+- 聊天消息解析成 `ChatMessage`，会话列表解析成 `Conversation`；哪些会话是和人的聊天见
+  `USER_SESSION_TYPES`；
 - 发文本消息：`ImConnection.send_text()`，格式照网页版。
 
 2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳，2026-10-31 实测发过一条文本消息。
@@ -51,6 +52,7 @@ from xianyu_core.mtop import MtopClient
 log = logging.getLogger(__name__)
 
 TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
+USER_QUERY_API = "mtop.taobao.idlemessage.pc.user.query"
 SPM_IM = "a21ybx.im.0.0"
 SEND_API = "/r/MessageSend/sendByReceiverScope"
 
@@ -74,6 +76,18 @@ MIN_ROTATE_AFTER = 60.0
 
 # 聊天消息推送里发送端设备的信息，不往外给
 SENDER_DEVICE_KEYS = frozenset({"clientIp", "port", "umid", "umidToken", "utdid"})
+
+# 和人聊天的会话类型（会话的 bizType，消息提醒里的 sessionType）。网页版会话列表只显示
+# 1、3、15、19、24、32、44、51、52 这几种，这里再去掉 3（"通知消息"，平台的活动推广）和
+# 24（"闲小蜜"，客服机器人）。别的类型（活动推送号、通知号之类）网页版也不显示
+USER_SESSION_TYPES = frozenset({"1", "15", "19", "32", "44", "51", "52"})
+SYSTEM_USER_ID = "0"  # 系统会话里"对方"的 ID
+
+# 人自己打的文字、发的图片（内层内容类型 1、2），提醒里的 reminderNotice 是这句，这时 reminderTitle
+# 才是发送人昵称。自动回复的 reminderNotice 是"～"、标题是"你有一条新消息"；交易卡片之类有时也是
+# 这句，标题却是"交易消息"，所以还要看内容类型
+PERSON_NOTICE = "发来一条新消息"
+PERSON_CONTENT_TYPES = frozenset({1, 2})
 
 _REJECT_TOKEN_WORDS = ("invalid token", "token invalid", "not auth", "device id or appkey")
 _REJECT_LIMIT_WORDS = ("connect limit", "too many", "session remove")
@@ -192,11 +206,12 @@ class ChatMessage:
     message_id: str
     cid: str  # 会话 ID，不带 @goofish
     sender_id: str
-    sender_name: str
+    sender_name: str  # 发送人昵称；交易卡片、自动回复之类看不出来，是空字符串（见 PERSON_NOTICE）
     sent_at: float | None  # 秒级时间戳
     content_type: int | None  # 内层内容类型，1 是文本
     text: str  # 文本消息是正文，别的类型是平台给的摘要
     item_id: str
+    session_type: str = ""  # 所在会话的类型，见 USER_SESSION_TYPES；没带是空字符串
     raw: dict[str, Any] = field(repr=False, default_factory=dict)  # 去掉了发送端设备信息
 
     @classmethod
@@ -264,15 +279,20 @@ class ChatMessage:
         if text is None:
             text = summary or reminder.get("reminderContent") or ""
         url_args = parse_qs(urlsplit(str(reminder.get("reminderUrl") or "")).query)
+        content_type = _int_or_none(content.get("contentType", inner_type))
+        by_person = (
+            reminder.get("reminderNotice") == PERSON_NOTICE and content_type in PERSON_CONTENT_TYPES
+        )
         return cls(
             message_id=str(message_id or ""),
             cid=cid,
             sender_id=str(reminder.get("senderUserId") or strip_goofish(sender_uid)),
-            sender_name=str(reminder.get("reminderTitle") or ""),
+            sender_name=str(reminder.get("reminderTitle") or "") if by_person else "",
             sent_at=sent_ms / 1000 if isinstance(sent_ms, int | float) else None,
-            content_type=_int_or_none(content.get("contentType", inner_type)),
+            content_type=content_type,
             text=str(text),
             item_id=(url_args.get("itemId") or [""])[0],
+            session_type=str(reminder.get("sessionType") or ""),
             raw=raw,
         )
 
@@ -312,7 +332,9 @@ class Conversation:
 
     cid: str
     peer_id: str
+    # 对方昵称：最后一条消息是对方本人发的才知道，别的时候是空字符串，要查见 fetch_peer_nick
     peer_name: str
+    peer_type: str  # 对方的用户类型，查昵称要用；普通用户是 "0"，系统账号是 "10"
     biz_type: str  # "1" 是商品会话，别的是系统通知之类
     item_id: str
     item_title: str
@@ -321,6 +343,11 @@ class Conversation:
     unread: int
     updated_at: float | None  # 秒级时间戳
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+    @property
+    def with_user(self) -> bool:
+        """是不是和人的聊天。不是的是平台的活动推广、通知号、客服机器人之类，对方 ID 是 "0"。"""
+        return self.biz_type in USER_SESSION_TYPES and self.peer_id not in ("", SYSTEM_USER_ID)
 
     @classmethod
     def parse(cls, row: dict[str, Any], unb: str) -> Conversation | None:
@@ -335,10 +362,15 @@ class Conversation:
         peer = next((p for p in pair if p and p != unb), "")
         ext = conv.get("extension") or {}
         modified = user_conv.get("modifyTime")
+        # 会话两边一个是 owner、一个是 ext，extUserId 是自己的话对方就是 owner
+        own_ext = str(ext.get("extUserId") or "") == unb
+        peer_type = ext.get("ownerUserType") if own_ext else ext.get("extUserType")
+        # 注意 squadName_<userId> 不是昵称，是商品的简称（"取暖器"之类）
         return cls(
             cid=cid,
             peer_id=peer,
-            peer_name=str(ext.get(f"squadName_{peer}") or ""),
+            peer_name=_last_message_nick(user_conv.get("lastMessage"), peer),
+            peer_type="" if peer_type is None else str(peer_type),
             biz_type=str(conv.get("bizType") or ""),
             item_id=str(ext.get("itemId") or ""),
             item_title=str(ext.get("itemTitle") or ""),
@@ -350,11 +382,41 @@ class Conversation:
         )
 
 
+def _last_message_nick(last_message: Any, peer: str) -> str:
+    """会话最后一条消息是对方本人发的，就能看出对方昵称（见 ChatMessage.sender_name）。"""
+    message = ChatMessage.from_history(last_message) if isinstance(last_message, dict) else None
+    if message and peer and message.sender_id == peer:
+        return message.sender_name
+    return ""
+
+
 @dataclass
 class ConversationPage:
     conversations: list[Conversation]
     has_more: bool
     next_cursor: int | None
+
+
+async def fetch_peer_nick(mtop: MtopClient, cid: str, *, session_type: str, peer_type: str) -> str:
+    """会话里对方的昵称，和网页版会话列表、聊天标题显示的一样：有闲鱼昵称（fishNick）用它，
+    没有用打了码的账号名（nick，"x***0" 这样）。查不到是空字符串。
+
+    网页版也是一个会话调一次 `mtop.taobao.idlemessage.pc.user.query`（4.0），按会话 ID 和对方的
+    用户类型查，isOwner 是"查的是不是自己"。
+    """
+    data = await mtop.call(
+        USER_QUERY_API,
+        {
+            "type": int(peer_type or 0),
+            "sessionType": int(session_type or 1),
+            "sessionId": cid,
+            "isOwner": False,
+        },
+        version="4.0",
+        spm_cnt=SPM_IM,
+    )
+    info = data.get("userInfo") if isinstance(data.get("userInfo"), dict) else {}
+    return str(info.get("fishNick") or info.get("nick") or "")
 
 
 def _json_dict(value: Any) -> dict[str, Any]:

@@ -97,8 +97,9 @@ function UnreadCount({ n }: { n: number }) {
   return <span className="text-xs text-muted-foreground tabular-nums">{n > 99 ? "99+" : n}</span>
 }
 
+/** 对方昵称。还没查到的（打开会话时会去查）先显示"闲鱼用户"，不显示一串数字 ID */
 function peerName(c: Conversation): string {
-  return c.peer_name || c.peer_id || (c.biz_type === "1" ? "买家" : "系统消息")
+  return c.peer_name || "闲鱼用户"
 }
 
 function Avatar({ name, className }: { name: string; className?: string }) {
@@ -197,7 +198,7 @@ function Composer({
   if (conversation.biz_type !== "1") {
     return (
       <div className="border-t px-4 py-2.5 text-center text-xs text-muted-foreground">
-        系统通知不能回复
+        只能回复商品会话
       </div>
     )
   }
@@ -286,12 +287,13 @@ function Thread({
   const anchor = useRef<{ height: number; top: number } | null>(null)
 
   const online = im?.state === "online"
-  // 打开时本地没跟上平台就补拉一次；没连上时先看本地的，连上以后再拉
+  // 打开时本地没跟上平台、或者还不知道对方昵称，就补拉一次（后台顺便查昵称）；没连上时先看本地的
+  const needsFetch = conversation.stale || !conversation.peer_name
   useEffect(() => {
-    if (!conversation.stale || !online || tried.current) return
+    if (!needsFetch || !online || tried.current) return
     tried.current = true
     fetchMessages({ cid, older: false }, { onError: (e) => toast.error(errorMessage(e)) })
-  }, [conversation.stale, online, cid, fetchMessages])
+  }, [needsFetch, online, cid, fetchMessages])
 
   const messages = thread.data?.messages ?? []
   const fresh = thread.data?.conversation ?? conversation

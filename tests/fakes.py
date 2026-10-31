@@ -37,6 +37,8 @@ class FakePlatform:
         self.renew_ok = True
         self.renews = 0  # silentHasLogin 被调了几次
         self.im_tokens = 0  # 即时消息的 accessToken 发了几个
+        self.user_queries: list[dict] = []  # 查会话对方昵称的请求
+        self.nicks: dict[str, str] = {}  # 会话 ID → 对方的闲鱼昵称，没有的回打码的账号名
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "passport.goofish.com":
@@ -78,6 +80,11 @@ class FakePlatform:
         self.im_tokens += 1
         expires_ms = int((time.time() + 86400) * 1000)
         return {"accessToken": f"im{self.im_tokens}", "accessTokenExpiredTime": str(expires_ms)}
+
+    def mtop_taobao_idlemessage_pc_user_query(self, data):
+        self.user_queries.append(data)
+        nick = self.nicks.get(data["sessionId"], "")
+        return {"userInfo": {"fishNick": nick, "nick": "x***9", "type": data["type"], "logo": ""}}
 
     def mtop_idle_web_xyh_item_list(self, data):
         cards = [

@@ -140,6 +140,7 @@ def test_chat_message_parse_and_scrub():
     assert message.content_type == 1
     assert message.sent_at == 1793378126.437
     assert message.item_id == "300"
+    assert message.session_type == "1"
     reminder = message.raw["1"]["10"]
     assert not im.SENDER_DEVICE_KEYS & reminder.keys()
     assert json.loads(reminder["extJson"]) == {"messageId": "1793378126001.PNM", "tag": "u"}
@@ -152,12 +153,39 @@ def test_history_message_parses_like_push():
     model = history_message()
     message = ChatMessage.from_history(model)
     assert message is not None and pushed is not None
-    fields = ("message_id", "cid", "sender_id", "sender_name", "sent_at", "content_type", "text")
+    fields = (
+        "message_id",
+        "cid",
+        "sender_id",
+        "sender_name",
+        "sent_at",
+        "content_type",
+        "text",
+        "session_type",
+    )
     assert [getattr(message, f) for f in fields] == [getattr(pushed, f) for f in fields]
     assert message.item_id == "300"
     assert not im.SENDER_DEVICE_KEYS & message.raw["message"]["extension"].keys()
     assert model["message"]["extension"]["clientIp"] == "10.0.0.1"  # 原对象不动
     assert ChatMessage.from_history({"readStatus": 2}) is None
+
+
+@pytest.mark.parametrize(
+    ("notice", "content_type", "named"),
+    [
+        ("发来一条新消息", 1, True),  # 人打的字
+        ("发来一条新消息", 2, True),  # 人发的图片
+        ("～", 1, False),  # 自动回复："你有一条新消息"
+        ("发来一条新消息", 14, False),  # 交易卡片，标题可能是"交易消息"
+    ],
+)
+def test_sender_name_only_for_messages_from_the_person(notice, content_type, named):
+    model = history_message(notice=notice)
+    data = json.dumps({"contentType": content_type}).encode()
+    model["message"]["content"]["custom"]["data"] = base64.b64encode(data).decode()
+    message = ChatMessage.from_history(model)
+    assert message is not None and message.content_type == content_type
+    assert (message.sender_name != "") is named
 
 
 def test_chat_message_parse_ignores_other_entries():
@@ -170,9 +198,60 @@ def test_conversation_parse_finds_peer():
     conv = Conversation.parse(conversation("777", "42", "200", unread=2), "42")
     assert conv is not None
     assert (conv.cid, conv.peer_id, conv.peer_name) == ("777", "200", "买家小王")
-    assert (conv.item_id, conv.item_title, conv.biz_type, conv.unread) == ("300", "洗衣机", "1", 2)
-    assert conv.updated_at == 1793378003.908
+    assert (conv.item_id, conv.item_title, conv.biz_type, conv.unread) == (
+        "300",
+        "九成新洗衣机",
+        "1",
+        2,
+    )
+    assert conv.updated_at == 1793378003.908 and conv.peer_type == "0"
     assert Conversation.parse({"type": 2}, "42") is None
+
+
+@pytest.mark.parametrize("last_from", ["me", None])
+def test_conversation_peer_name_only_from_peer_text(last_from):
+    """最后一条是自己发的、或者没有最后一条时不知道昵称；squadName 是商品简称，不能当昵称。"""
+    conv = Conversation.parse(conversation("777", "42", "200", last_from=last_from), "42")
+    assert conv is not None and conv.peer_name == ""
+    # 自己是 owner 时，对方的用户类型在 ext 那边
+    row = conversation("777", "42", "200")
+    ext = row["singleChatUserConversation"]["singleChatConversation"]["extension"]
+    ext.update(ownerUserId="42", ownerUserType="0", extUserId="200", extUserType="3")
+    swapped = Conversation.parse(row, "42")
+    assert swapped is not None and swapped.peer_type == "3"
+
+
+def test_fetch_peer_nick_asks_like_the_web_page(platform):
+    platform.nicks["777"] = "山里的松鼠"
+
+    async def go():
+        credential = Credential(cookies={"unb": "42", "_m_h5_tk": "tok_1"})
+        async with MtopClient(credential, transport=httpx.MockTransport(platform)) as mtop:
+            named = await im.fetch_peer_nick(mtop, "777", session_type="1", peer_type="0")
+            masked = await im.fetch_peer_nick(mtop, "778", session_type="1", peer_type="")
+        return named, masked
+
+    assert run(go()) == ("山里的松鼠", "x***9")  # 没有闲鱼昵称时用打了码的账号名
+    assert platform.user_queries == [
+        {"type": 0, "sessionType": 1, "sessionId": "777", "isOwner": False},
+        {"type": 0, "sessionType": 1, "sessionId": "778", "isOwner": False},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("biz_type", "peer", "with_user"),
+    [
+        ("1", "200", True),  # 商品会话
+        ("15", "200", True),  # 网页版也显示的别的聊天类型
+        ("3", "0", False),  # 通知消息（活动推广）
+        ("24", "0", False),  # 闲小蜜
+        ("66", "201", False),  # 网页版不显示的类型，哪怕对方是个账号
+        ("1", "0", False),  # 对方是系统
+    ],
+)
+def test_conversation_with_user(biz_type, peer, with_user):
+    conv = Conversation.parse(conversation("777", "42", peer, biz_type=biz_type), "42")
+    assert conv is not None and conv.with_user is with_user
 
 
 # ---------- 一条连接 ----------
