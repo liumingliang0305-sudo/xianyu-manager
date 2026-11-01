@@ -11,10 +11,10 @@ import asyncio
 import logging
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from xianyu_core.auth import QRLogin, QRStatus
+from xianyu_core.clock import beijing_time
 from xianyu_core.credential import Credential
 from xianyu_core.errors import AuthRequiredError, VerificationRequiredError, XianyuError
 from xianyu_core.mtop import MtopClient
@@ -40,7 +40,7 @@ def _keep_login_text(credential: Credential) -> str:
     until = credential.keep_login_until
     if not until:
         return "没有开启保持登录，会话过期后要重新扫码"
-    return f"保持登录到 {time.strftime('%Y-%m-%d %H:%M', time.localtime(until))}"
+    return f"保持登录到 {beijing_time(until)}"
 
 
 async def _whoami(credential: Credential) -> tuple[str, bool]:

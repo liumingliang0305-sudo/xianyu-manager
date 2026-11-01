@@ -15,7 +15,6 @@ import contextlib
 import dataclasses
 import logging
 import secrets
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,6 +22,7 @@ from enum import StrEnum
 import httpx
 
 from xianyu_core.auth import QRLogin, QRStatus
+from xianyu_core.clock import beijing_time
 from xianyu_core.constants import KEEP_LOGIN_COOKIES
 from xianyu_core.credential import Credential
 from xianyu_core.errors import QRLoginError, VerificationRequiredError
@@ -201,7 +201,7 @@ def imported_text(credential: Credential) -> str:
     until = credential.keep_login_until
     if not until:
         return "这份登录没有开保持登录，会话过期后要重新登录"
-    return f"保持登录到 {_clock(until)}"
+    return f"保持登录到 {beijing_time(until)}"
 
 
 def _keep_login_text(settings: KeepLoginSettings | None, credential: Credential) -> str:
@@ -209,11 +209,7 @@ def _keep_login_text(settings: KeepLoginSettings | None, credential: Credential)
         return "开启保持登录时出错，会话过期后要重新扫码"
     until = credential.keep_login_until
     if settings.enabled and until:
-        return f"保持登录到 {_clock(until)}"
+        return f"保持登录到 {beijing_time(until)}"
     if not settings.can_open:
         return "平台不给这次登录开保持登录，会话过期后要重新扫码"
     return "平台没有确认开启保持登录，会话过期后要重新扫码"
-
-
-def _clock(seconds: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(seconds))

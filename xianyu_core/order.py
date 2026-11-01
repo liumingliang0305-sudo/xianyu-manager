@@ -14,9 +14,10 @@ import asyncio
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
+from xianyu_core.clock import BEIJING
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.mtop import MtopClient
 
@@ -66,7 +67,6 @@ _STATUS_RULES: list[tuple[tuple[str, ...], str]] = [
 ]
 
 _MONEY = re.compile(r"-?\d+(?:\.\d{1,2})?")
-_CHINA = timezone(timedelta(hours=8))
 
 
 def order_status(text: str, in_refund: bool = False) -> str:
@@ -339,7 +339,7 @@ def parse_time(value: Any) -> float | None:
         return number / 1000 if number > 1e11 else number
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y.%m.%d %H:%M"):
         try:
-            return datetime.strptime(text, fmt).replace(tzinfo=_CHINA).timestamp()
+            return datetime.strptime(text, fmt).replace(tzinfo=BEIJING).timestamp()
         except ValueError:
             continue
     return None

@@ -7,7 +7,11 @@ const $ = (id) => document.getElementById(id)
 function render({ status, server = DEFAULT_SERVER }) {
   if (document.activeElement !== $("server")) $("server").value = server
   if (!status) return
-  const time = new Date(status.at).toLocaleString("zh-CN", { hour12: false })
+  // 和管理后台一样按北京时间显示
+  const time = new Date(status.at).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hourCycle: "h23",
+  })
   $("status").className = status.ok ? "ok" : "error"
   $("status").textContent = status.ok
     ? `已同步（账号 ${status.account}）${status.changed ? "" : "，登录没变"}`

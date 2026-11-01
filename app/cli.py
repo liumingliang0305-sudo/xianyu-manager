@@ -31,7 +31,6 @@ import argparse
 import asyncio
 import logging
 import sys
-import time
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING
@@ -48,6 +47,7 @@ from app.accounts import (
 from app.items import ItemRecord, ItemService, PriceGuardError
 from app.messages import ConversationRecord, MessageStore
 from app.orders import OrderRecord, OrderService
+from xianyu_core.clock import beijing_time
 from xianyu_core.errors import CircuitOpenError, XianyuError
 from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
 from xianyu_core.order import STATUS_TEXT as ORDER_STATUS_TEXT
@@ -73,7 +73,7 @@ def _count(value: int | None) -> str:
 
 
 def _time(ts: float | None) -> str:
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
+    return beijing_time(ts) if ts else "-"
 
 
 def _confirm(question: str, yes: bool) -> bool:
@@ -126,9 +126,8 @@ def _print_conversations(conversations: list[ConversationRecord]) -> None:
     for c in conversations:
         peer = c.peer_name or c.peer_id or "-"
         last = c.last_text.replace("\n", " ")[:30] or c.item_title[:20]
-        print(
-            f"{c.cid:<14} {c.unread or '':>4}  {_time(c.updated_at):<16}  {peer[:10]:<10}  {last}"
-        )
+        when = _time(c.updated_at)
+        print(f"{c.cid:<14} {c.unread or '':>4}  {when:<16}  {peer[:10]:<10}  {last}")
 
 
 def _parse_fees(pairs: list[str]) -> dict[str, int]:
@@ -282,7 +281,7 @@ async def run_orders(args: argparse.Namespace) -> int:
         if not ops:
             print("还没有改动记录")
         for op in ops:
-            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(op.created_at))
+            when = beijing_time(op.created_at, "%Y-%m-%d %H:%M:%S")
             result = "成功" if op.ok else f"失败：{op.error}"
             change = ""
             if op.action == "price":
@@ -359,7 +358,7 @@ async def run_items(args: argparse.Namespace) -> int:
         if not ops:
             print("还没有改动记录")
         for op in ops:
-            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(op.created_at))
+            when = beijing_time(op.created_at, "%Y-%m-%d %H:%M:%S")
             result = "成功" if op.ok else f"失败：{op.error}"
             change = ""
             if op.action == "price":
@@ -372,8 +371,7 @@ def _print_login(account_id: str, status: LoginStatus) -> None:
     note = "（刚做了免密续期）" if status.renewed else ""
     print(f"{account_id}  {LOGIN_TEXT[status.state]}{note}")
     if status.keep_login_until:
-        until = time.strftime("%Y-%m-%d %H:%M", time.localtime(status.keep_login_until))
-        print(f"  保持登录到 {until}")
+        print(f"  保持登录到 {beijing_time(status.keep_login_until)}")
     else:
         print("  没有开启保持登录，会话过期后要重新扫码")
     if status.message:

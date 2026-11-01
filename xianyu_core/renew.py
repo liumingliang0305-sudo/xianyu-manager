@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from xianyu_core.clock import beijing_time
 from xianyu_core.constants import PASSPORT_HOST, WEB_HOST
 from xianyu_core.credential import cookie_time, jar_to_cookies
 from xianyu_core.errors import RiskControlError, XianyuError
@@ -81,7 +82,7 @@ async def silent_renew(client: httpx.AsyncClient, *, delay: float | None = None)
     if fatigue_until and fatigue_until > time.time():
         return RenewResult(
             RenewOutcome.FATIGUE,
-            f"平台限制了续期频率，{_clock(fatigue_until)} 之前不能再续",
+            f"平台限制了续期频率，{beijing_time(fatigue_until, '%m-%d %H:%M')} 之前不能再续",
         )
     if _mode(cookies) is None:
         return RenewResult(RenewOutcome.NO_KEEP_LOGIN, "没有开启保持登录，或者保持登录已经过期")
@@ -215,7 +216,3 @@ def _passport_json(resp: httpx.Response, name: str) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise XianyuError(f"{name} 返回的 JSON 不是对象")
     return body
-
-
-def _clock(seconds: float) -> str:
-    return time.strftime("%m-%d %H:%M", time.localtime(seconds))

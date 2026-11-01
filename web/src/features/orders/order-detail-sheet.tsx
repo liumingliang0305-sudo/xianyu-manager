@@ -12,18 +12,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { ItemThumb } from "@/features/items/item-bits"
 import { errorMessage, type Order, type OrderDetail } from "@/lib/api"
-import { dateTime, orderUrl, yuan } from "@/lib/format"
+import { dateTime, orderUrl, shortTime, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { OrderOpsList, OrderStatusBadge } from "./order-bits"
 import { useOrderDetail, useOrderOps } from "./queries"
-
-/** 秒级时间戳 → "9/25 16:53" */
-function shortTime(seconds: number): string {
-  const d = new Date(seconds * 1000)
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 function Steps({ steps }: { steps: OrderDetail["steps"] }) {
   if (steps.length === 0) return null

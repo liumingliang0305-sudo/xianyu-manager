@@ -32,22 +32,48 @@ export function timeAgo(seconds: number | null | undefined): string {
   return relative.format(Math.round(diff / 86400), "day")
 }
 
+// 时间统一按北京时间显示（闲鱼的时间都是北京时间），不跟电脑的时区走
+const BEIJING = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+})
+
+/** 秒级时间戳 → 北京时间的年月日时分秒（时分秒补零） */
+function beijing(seconds: number) {
+  const parts = Object.fromEntries(
+    BEIJING.formatToParts(new Date(seconds * 1000)).map((p) => [p.type, p.value]),
+  )
+  const { year, month, day, hour, minute, second } = parts
+  return { year, month, day, hour, minute, second }
+}
+
+/** "2025/10/30 12:53:20" */
 export function dateTime(seconds: number | null | undefined): string {
   if (!seconds) return "-"
-  return new Date(seconds * 1000).toLocaleString("zh-CN", { hour12: false })
+  const t = beijing(seconds)
+  return `${t.year}/${t.month}/${t.day} ${t.hour}:${t.minute}:${t.second}`
+}
+
+/** "10/30 12:53" */
+export function shortTime(seconds: number): string {
+  const t = beijing(seconds)
+  return `${t.month}/${t.day} ${t.hour}:${t.minute}`
 }
 
 /** 聊天里的时间：今天只显示时分，今年的显示月日，再早的带年份 */
 export function chatTime(seconds: number | null | undefined): string {
   if (!seconds) return ""
-  const date = new Date(seconds * 1000)
-  const now = new Date()
-  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
-  if (date.toDateString() === now.toDateString()) return time
-  const day =
-    date.getFullYear() === now.getFullYear()
-      ? `${date.getMonth() + 1}月${date.getDate()}日`
-      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
+  const t = beijing(seconds)
+  const now = beijing(Date.now() / 1000)
+  const time = `${t.hour}:${t.minute}`
+  if (t.year === now.year && t.month === now.month && t.day === now.day) return time
+  const day = t.year === now.year ? `${t.month}月${t.day}日` : `${t.year}年${t.month}月${t.day}日`
   return `${day} ${time}`
 }
 
