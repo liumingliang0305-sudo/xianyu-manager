@@ -4,7 +4,6 @@ import json
 import pytest
 from fakes import UNB
 
-from app import db
 from app.items import ItemService, PriceGuardError
 from app.orders import OrderService, parse_order_id
 from xianyu_core.errors import MtopError
@@ -16,8 +15,8 @@ def run(coro):
 
 
 @pytest.fixture
-def conn():
-    return db.connect(":memory:")
+def conn(database):
+    return database
 
 
 @pytest.fixture
@@ -35,7 +34,9 @@ def test_sync_stores_orders_newest_first(service, platform, conn):
     assert orders[0].price_cent == 36800
     assert orders[0].buyer_nick == "买家甲"
     assert [o.order_id for o in service.list(UNB, status=DONE)] == ["5001"]
-    raw = json.loads(conn.execute("SELECT raw FROM orders WHERE order_id = '5001'").fetchone()[0])
+    raw = json.loads(
+        conn.execute("SELECT raw FROM orders WHERE order_id = '5001'").fetchone()["raw"]
+    )
     assert raw["commonData"]["orderId"] == "5001"
 
     platform.orders["5002"]["status"] = "待发货"

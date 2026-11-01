@@ -24,10 +24,11 @@
   先开的退出以后自动接上
 - [x] 限流和风控熔断：每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
-- [x] 业务层第一块：商品管理，同步到本地 SQLite、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
+- [x] 业务层第一块：商品管理，同步到本地库、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
 - [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
 - [x] 订单管理：按订单号添加、刷新进行中的订单、按状态查看、实时详情、改价、改动记录（[app/orders.py](app/orders.py)，后台"订单"页）
+- [x] 本地库换成 PostgreSQL（本机用 docker 跑），表结构用 Alembic 迁移管理；以前 SQLite 里的数据用 `xym import-sqlite` 一次导过来（见下面"数据库"）
 - [ ] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），等即时消息做好后从交易消息里记
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
@@ -35,20 +36,22 @@
 
 ## 快速上手
 
-需要 [uv](https://docs.astral.sh/uv/) 和 Python 3.12 以上；管理后台的前端还要 Node.js 20 以上。
+需要 [uv](https://docs.astral.sh/uv/) 和 Python 3.12 以上、Docker（跑本机的 PostgreSQL，Mac 上用 OrbStack 或 Docker Desktop）；管理后台的前端还要 Node.js 20 以上。
 
 ```bash
 uv sync                                      # 安装依赖
+docker compose up -d                         # 启动本机的 PostgreSQL
+uv run alembic upgrade head                  # 建表；以后拉了新代码也跑一次，把表结构升到最新
 uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫（也可以在管理后台里扫）
 uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效，会话过期时先试免密续期
-uv run pytest                                # 跑测试
+uv run pytest                                # 跑测试（用到数据库的连 docker 里的 xianyu_test 库，没有会自动建）
 ```
 
 商品管理用 `xym`（业务层命令）。只有一个账号时不用指定，多个账号加 `--account <unb>`：
 
 ```bash
 uv run xym accounts check          # 各账号登录态；会话过期时先试免密续期，不行就提示重新扫码
-uv run xym items sync --stats      # 把主页上的商品同步到 data/xianyu.db，--stats 顺带拉浏览、收藏数
+uv run xym items sync --stats      # 把主页上的商品同步到本地库，--stats 顺带拉浏览、收藏数
 uv run xym items list              # 看本地库里的商品，--status online/sold 过滤，--all 含已下架
 uv run xym items show <商品ID>      # 实时详情
 uv run xym items price <商品ID> 299 # 改价，会先确认；降价超过一半或涨价超过一倍要加 --force
@@ -89,7 +92,7 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 
 ### 管理后台
 
-后台接口没有登录鉴权，只监听本机（127.0.0.1）。
+后台接口没有登录鉴权，只监听本机（127.0.0.1）。启动前数据库要先起来（`docker compose up -d`），表结构不是最新时 `xym serve` 会直接报错退出。
 
 前端用 pnpm，版本固定在 `web/package.json` 的 `packageManager` 里。没装过的话先运行一次 `corepack enable pnpm`（Node 自带的 corepack 会按这个版本下载 pnpm）。
 
@@ -126,6 +129,34 @@ pnpm -C web dev
 旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删；
 `<unb>.im.lock` 是文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开。
 
+### 数据库
+
+本地库是 PostgreSQL 16。连接串取环境变量 `DATABASE_URL`（命令行也可以 `--db` 指定），没设时连本机 docker 里的
+`postgresql://xianyu:xianyu@localhost:5432/xianyu`（[docker-compose.yml](docker-compose.yml)，端口只绑 127.0.0.1）。
+数据在 docker 卷里，`docker compose down` 不会丢，`docker compose down -v` 才会删。
+
+表结构写在 [app/schema.py](app/schema.py)，迁移在 [migrations/versions/](migrations/versions/)。改表的步骤：
+
+```bash
+# 1. 改 app/schema.py
+uv run alembic revision --autogenerate -m "说明"   # 2. 生成迁移，打开生成的文件检查一遍（改列名、数据要搬的得手写）
+uv run alembic upgrade head                        # 3. 升级本机的库
+uv run pytest tests/test_db.py                      # 4. 确认迁移和 app/schema.py 对得上、能降回去
+```
+
+以前的 SQLite 库（`data/xianyu.db`）里的数据，建好表以后导一次就行，只能导进空库，出错整个回滚：
+
+```bash
+uv run xym import-sqlite data/xianyu.db
+```
+
+部署到服务器（比如华为云 ECS + RDS for PostgreSQL）时：
+
+- 设好 `DATABASE_URL=postgresql://用户:密码@数据库地址:5432/库名`，密码里有 `@`、`:` 之类的字符要 URL 编码；
+- 每次发版先 `uv run alembic upgrade head` 再重启 `xym serve`。想先看要执行的 SQL：`uv run alembic upgrade head --sql`；
+- 凭证（`data/accounts/`）和熔断状态（`data/guard.json`）还是本地文件，要一起放到服务器上，权限收紧；
+- 后台接口没有登录鉴权，不要直接监听公网地址，先加鉴权或者只通过 SSH 隧道访问。
+
 在代码里用：
 
 ```python
@@ -156,7 +187,9 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回，顺手记下登录态
-  db.py            本地 SQLite（data/xianyu.db）：商品、订单、它们的改动记录，消息的会话和消息
+  db.py            本地库（PostgreSQL）：连接、启动时确认表结构是最新的
+  schema.py        表结构：商品、订单、它们的改动记录，消息的会话和消息；Alembic 从这里生成迁移
+  sqlite_import.py 一次性把以前 SQLite 库里的数据导进 PostgreSQL（xym import-sqlite）
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   login.py         管理后台的登录：扫码（后台任务跑 QRLogin，前端轮询进度，同一时间只有一张码）和导入浏览器的 Cookie
@@ -165,7 +198,8 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
-tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网）
+migrations/      Alembic 迁移（alembic.ini 在项目根目录）
+tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）

@@ -23,17 +23,18 @@ from xianyu_core.guard import FileBlockStore, Guard
 from xianyu_core.im import new_device_id
 
 DEFAULT_DIR = Path("data/accounts")
+GUARD_PATH = Path("data/guard.json")
 # 只读接口，只返回 userId（等于 unb），用来确认登录态
 LOGIN_USER_API = "mtop.taobao.idlemessage.pc.loginuser.get"
 # 有效的登录态多久以后要重新确认，秒
 CHECK_INTERVAL = 600
 
 
-def make_guard(db_path: str | Path) -> Guard:
-    """限流和熔断。熔断状态放在本地库旁边（默认 data/guard.json），内存库（测试）就放内存里。"""
-    if str(db_path) == ":memory:":
+def make_guard(path: str | Path | None = GUARD_PATH) -> Guard:
+    """限流和熔断。熔断状态存在 `path` 文件里，命令行和 xym serve 共用；None 时只放内存。"""
+    if path is None:
         return Guard()
-    return Guard(FileBlockStore(Path(db_path).parent / "guard.json"))
+    return Guard(FileBlockStore(path))
 
 
 class AccountNotFoundError(LookupError):

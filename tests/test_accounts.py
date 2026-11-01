@@ -5,7 +5,6 @@ import pytest
 from fakes import UNB, keep_login_cookies
 
 from app.accounts import LoginState
-from app.db import connect
 from app.items import ItemService
 from xianyu_core.credential import Credential
 from xianyu_core.errors import AuthRequiredError
@@ -25,10 +24,10 @@ def stored_cookies(accounts):
     return json.loads(accounts.path(UNB).read_text())["cookies"]
 
 
-def test_renewed_cookies_are_written_back(accounts, platform):
+def test_renewed_cookies_are_written_back(accounts, platform, database):
     save_credential(accounts, **keep_login_cookies())
     platform.session_expired = True
-    service = ItemService(connect(":memory:"), accounts, interval=0)
+    service = ItemService(database, accounts, interval=0)
 
     result = run(service.sync(UNB))
 
@@ -95,9 +94,9 @@ def test_login_status_is_rechecked_after_relogin_or_timeout(accounts, platform):
     assert accounts.login_status(UNB) is None
 
 
-def test_items_error_updates_login_status(accounts, platform):
+def test_items_error_updates_login_status(accounts, platform, database):
     platform.session_expired = True
-    service = ItemService(connect(":memory:"), accounts, interval=0)
+    service = ItemService(database, accounts, interval=0)
 
     with pytest.raises(AuthRequiredError):
         run(service.fetch_detail(UNB, "1001"))

@@ -3,7 +3,6 @@ import asyncio
 import pytest
 from fakes import UNB
 
-from app import db
 from app.accounts import AccountNotFoundError, Accounts
 from app.items import ItemService, PriceGuardError
 from xianyu_core.credential import Credential
@@ -15,8 +14,8 @@ def run(coro):
 
 
 @pytest.fixture
-def service(accounts):
-    return ItemService(db.connect(":memory:"), accounts, interval=0)
+def service(accounts, database):
+    return ItemService(database, accounts, interval=0)
 
 
 def apis(platform):

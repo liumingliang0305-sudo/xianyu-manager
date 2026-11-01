@@ -13,13 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sqlite3
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from app.accounts import Accounts
+from app.db import Database, Row
 from app.items import check_price_change
 from xianyu_core.errors import MtopError
 from xianyu_core.order import (
@@ -70,8 +70,8 @@ class OrderRecord:
     synced_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> OrderRecord:
-        return cls(**dict(row))
+    def from_row(cls, row: Row) -> OrderRecord:
+        return cls(**row)
 
 
 @dataclass
@@ -86,8 +86,8 @@ class OrderOp:
     created_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> OrderOp:
-        return cls(**{**dict(row), "detail": json.loads(row["detail"]), "ok": bool(row["ok"])})
+    def from_row(cls, row: Row) -> OrderOp:
+        return cls(**{**row, "detail": json.loads(row["detail"])})
 
 
 @dataclass
@@ -116,7 +116,7 @@ class OrderService:
 
     def __init__(
         self,
-        db: sqlite3.Connection,
+        db: Database,
         accounts: Accounts,
         *,
         interval: float = 1.5,
@@ -149,11 +149,11 @@ class OrderService:
         known = {
             row["order_id"]: row["status"]
             for row in self._db.execute(
-                "SELECT order_id, status FROM orders WHERE account_id = ?", (account_id,)
+                "SELECT order_id, status FROM orders WHERE account_id = %s", (account_id,)
             )
         }
         result = OrderSyncResult()
-        with self._db:
+        with self._db.transaction():
             for order in orders:
                 self._upsert(account_id, order, now)
                 if order.order_id not in known:
@@ -165,17 +165,17 @@ class OrderService:
         return result
 
     def list(self, account_id: str, *, status: str | None = None) -> list[OrderRecord]:
-        sql = _SELECT + " WHERE o.account_id = ?"
+        sql = _SELECT + " WHERE o.account_id = %s"
         args: list[Any] = [account_id]
         if status:
-            sql += " AND o.status = ?"
+            sql += " AND o.status = %s"
             args.append(status)
         sql += " ORDER BY COALESCE(o.created_at, o.first_seen_at) DESC, o.order_id DESC"
         return [OrderRecord.from_row(r) for r in self._db.execute(sql, args)]
 
     def get(self, account_id: str, order_id: str) -> OrderRecord | None:
         row = self._db.execute(
-            _SELECT + " WHERE o.account_id = ? AND o.order_id = ?", (account_id, order_id)
+            _SELECT + " WHERE o.account_id = %s AND o.order_id = %s", (account_id, order_id)
         ).fetchone()
         return OrderRecord.from_row(row) if row else None
 
@@ -191,7 +191,7 @@ class OrderService:
             raise ValueError(f"订单 {order_id} 是你买到的，不是卖出的")
         if not detail.title and not detail.status_title:
             raise ValueError(f"查不到订单 {order_id}，确认订单号没抄错")
-        with self._db:
+        with self._db.transaction():
             before = self._save_detail(account_id, detail, time.time())
         record = self.get(account_id, order_id)
         assert record is not None
@@ -199,9 +199,9 @@ class OrderService:
 
     def remove(self, account_id: str, order_id: str) -> bool:
         """从本地列表里移除（加错了的时候用），不动平台上的订单。改动记录保留。"""
-        with self._db:
+        with self._db.transaction():
             cursor = self._db.execute(
-                "DELETE FROM orders WHERE account_id = ? AND order_id = ?", (account_id, order_id)
+                "DELETE FROM orders WHERE account_id = %s AND order_id = %s", (account_id, order_id)
             )
         return cursor.rowcount > 0
 
@@ -210,7 +210,7 @@ class OrderService:
         async with self._accounts.mtop(account_id) as mtop:
             detail = await OrderApi(mtop).detail(order_id)
         if self.get(account_id, order_id):
-            with self._db:
+            with self._db.transaction():
                 self._save_detail(account_id, detail, time.time())
         return detail
 
@@ -222,12 +222,12 @@ class OrderService:
     def history(
         self, account_id: str, order_id: str | None = None, limit: int = 50
     ) -> list[OrderOp]:
-        sql = "SELECT * FROM order_ops WHERE account_id = ?"
+        sql = "SELECT * FROM order_ops WHERE account_id = %s"
         args: list[Any] = [account_id]
         if order_id:
-            sql += " AND order_id = ?"
+            sql += " AND order_id = %s"
             args.append(order_id)
-        sql += " ORDER BY id DESC LIMIT ?"
+        sql += " ORDER BY id DESC LIMIT %s"
         args.append(limit)
         return [OrderOp.from_row(r) for r in self._db.execute(sql, args)]
 
@@ -272,9 +272,9 @@ class OrderService:
             await self._record(
                 account_id, order_id, "price", change, api.adjust_price(order_id, new)
             )
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE orders SET price_cent = ? WHERE account_id = ? AND order_id = ?",
+                "UPDATE orders SET price_cent = %s WHERE account_id = %s AND order_id = %s",
                 (new_total, account_id, order_id),
             )
         return old_total, new_total
@@ -293,7 +293,7 @@ class OrderService:
             except MtopError:
                 result.failed.append(order_id)
                 continue
-            with self._db:
+            with self._db.transaction():
                 before = self._save_detail(account_id, detail, time.time())
             result.updated.append(order_id)
             if detail.status not in (OTHER, before):
@@ -306,7 +306,7 @@ class OrderService:
         详情页的状态标题认不出来时，不覆盖原来的状态。
         """
         row = self._db.execute(
-            "SELECT status FROM orders WHERE account_id = ? AND order_id = ?",
+            "SELECT status FROM orders WHERE account_id = %s AND order_id = %s",
             (account_id, detail.order_id),
         ).fetchone()
         self._db.execute(
@@ -314,14 +314,14 @@ class OrderService:
             INSERT INTO orders (account_id, order_id, item_id, title, pic_url, status, status_text,
                                 price_cent, quantity, buyer_id, buyer_nick, created_at, raw,
                                 first_seen_at, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (account_id, order_id) DO UPDATE SET
                 item_id = COALESCE(NULLIF(excluded.item_id, ''), orders.item_id),
                 title = COALESCE(NULLIF(excluded.title, ''), orders.title),
                 pic_url = COALESCE(NULLIF(excluded.pic_url, ''), orders.pic_url),
-                status = CASE WHEN excluded.status = ? THEN orders.status
+                status = CASE WHEN excluded.status = %s THEN orders.status
                               ELSE excluded.status END,
-                status_text = CASE WHEN excluded.status = ? THEN orders.status_text
+                status_text = CASE WHEN excluded.status = %s THEN orders.status_text
                                    ELSE excluded.status_text END,
                 price_cent = COALESCE(excluded.price_cent, orders.price_cent),
                 quantity = excluded.quantity,
@@ -378,11 +378,11 @@ class OrderService:
         *,
         error: str | None,
     ) -> None:
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
                 "INSERT INTO order_ops"
                 " (account_id, order_id, action, detail, ok, error, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     account_id,
                     order_id,
@@ -400,7 +400,7 @@ class OrderService:
             INSERT INTO orders (account_id, order_id, item_id, title, pic_url, status, status_text,
                                 price_cent, quantity, buyer_id, buyer_nick, created_at, raw,
                                 first_seen_at, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (account_id, order_id) DO UPDATE SET
                 item_id = excluded.item_id,
                 title = COALESCE(NULLIF(excluded.title, ''), orders.title),

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api import create_app
 from xianyu_core.auth.qr_login import H5_TOKEN_API
 from xianyu_core.credential import Credential
+from xianyu_core.guard import Guard
 
 QUERY = "/newlogin/qrcode/query.do"
 
@@ -37,9 +38,10 @@ def accounts_dir(tmp_path):
 
 
 @pytest.fixture
-def client(accounts_dir, platform, fake_login):
+def client(accounts_dir, platform, fake_login, database_url):
     app = create_app(
-        db_path=":memory:",
+        database_url=database_url,
+        guard=Guard(),
         accounts_dir=accounts_dir,
         transport=route(fake_login, platform),
         interval=0,

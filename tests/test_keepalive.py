@@ -11,6 +11,7 @@ from app import keepalive
 from app.accounts import LoginState
 from app.api import create_app
 from xianyu_core.credential import Credential
+from xianyu_core.guard import Guard
 
 LOGIN_USER_API = "mtop.taobao.idlemessage.pc.loginuser.get"
 
@@ -99,11 +100,12 @@ def test_renewable():
     assert not keepalive.renewable(Credential(cookies={}), now)
 
 
-def test_serve_checks_logins_in_background(accounts, platform):
+def test_serve_checks_logins_in_background(accounts, platform, database_url):
     save_credential(accounts, **keep_login_cookies())
     platform.session_expired = True
     app = create_app(
-        db_path=":memory:",
+        database_url=database_url,
+        guard=Guard(),
         accounts_dir=accounts.root,
         transport=httpx.MockTransport(platform),
         web_dist=None,
