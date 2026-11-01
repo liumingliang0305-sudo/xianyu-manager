@@ -1,7 +1,7 @@
 import { ImageOffIcon } from "lucide-react"
 import { useState } from "react"
 
-import { Badge } from "@/components/ui/badge"
+import { StatusPill, type Tone } from "@/components/status-pill"
 import { STATE_LABEL, thumb, type ItemState } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -15,7 +15,7 @@ export function ItemThumb({
   className?: string
 }) {
   const [failed, setFailed] = useState(false)
-  const box = cn("shrink-0 overflow-hidden rounded-lg bg-muted", className)
+  const box = cn("shrink-0 overflow-hidden rounded-md bg-muted", className)
   if (!url || failed) {
     return (
       <div className={cn(box, "flex items-center justify-center text-muted-foreground")} style={{ width: size, height: size }}>
@@ -27,6 +27,8 @@ export function ItemThumb({
     <img
       src={thumb(url, size * 2)}
       alt=""
+      width={size}
+      height={size}
       loading="lazy"
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
@@ -36,12 +38,12 @@ export function ItemThumb({
   )
 }
 
-const STATE_CLASS: Record<ItemState, string> = {
-  online: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  sold: "bg-secondary text-secondary-foreground",
-  gone: "border-border bg-transparent text-muted-foreground",
+const STATE_TONE: Record<ItemState, Tone> = {
+  online: "positive",
+  sold: "neutral",
+  gone: "outline",
 }
 
 export function StateBadge({ state }: { state: ItemState }) {
-  return <Badge className={STATE_CLASS[state]}>{STATE_LABEL[state]}</Badge>
+  return <StatusPill tone={STATE_TONE[state]}>{STATE_LABEL[state]}</StatusPill>
 }

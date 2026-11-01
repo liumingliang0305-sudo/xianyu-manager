@@ -20,6 +20,9 @@ data/
 cookies*.json
 logs/
 
+# design-taste-frontend 的工作文件（截图里有真实的商品和买家）
+.taste-skill/
+
 # 编辑器 / 系统
 .DS_Store
 .idea/

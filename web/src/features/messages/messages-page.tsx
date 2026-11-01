@@ -2,24 +2,24 @@ import {
   ArrowLeftIcon,
   ExternalLinkIcon,
   Loader2Icon,
-  MessageSquareIcon,
   RefreshCwIcon,
-  SearchIcon,
   SendHorizontalIcon,
 } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
+import { PageHeader } from "@/components/page-header"
+import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { ItemThumb } from "@/features/items/item-bits"
 import { useCurrentAccount } from "@/hooks/use-account"
+import { useUrlParam } from "@/hooks/use-url-param"
 import {
   ApiError,
   errorMessage,
@@ -52,11 +52,11 @@ const MAX_TEXT = 500
 type Tab = "all" | "unread"
 
 const IM_LOOK: Record<ImState, { dot: string; label: string }> = {
-  online: { dot: "bg-emerald-500", label: "实时接收中" },
-  connecting: { dot: "bg-amber-500 animate-pulse", label: "正在连接…" },
-  waiting: { dot: "bg-amber-500", label: "连接断了，稍后自动重连" },
+  online: { dot: "bg-positive", label: "实时接收中" },
+  connecting: { dot: "bg-warning-ink animate-pulse", label: "正在连接…" },
+  waiting: { dot: "bg-warning-ink", label: "连接断了，稍后自动重连" },
   stopped: { dot: "bg-destructive", label: "已停止接收" },
-  off: { dot: "bg-muted-foreground/50", label: "没有连接" },
+  off: { dot: "bg-muted-foreground", label: "没有连接" },
 }
 
 function imHint(im: ImStatus): string {
@@ -76,8 +76,8 @@ function ImStatusBar({ account, im }: { account: string; im: ImStatus | undefine
     im.state === "waiting" ||
     (im.state === "stopped" && (im.needs === "reconnect" || im.needs === null))
   return (
-    <div className="flex min-w-0 items-center gap-2 text-sm">
-      <span className={cn("size-2 shrink-0 rounded-full", look.dot)} />
+    <div className="flex min-h-8 max-w-full min-w-0 items-center gap-2 text-sm">
+      <span className={cn("size-2 shrink-0 rounded-full", look.dot)} aria-hidden />
       <span className="shrink-0">{look.label}</span>
       {hint && <span className="truncate text-muted-foreground" title={hint}>{hint}</span>}
       {canReconnect && (
@@ -96,8 +96,18 @@ function ImStatusBar({ account, im }: { account: string; im: ImStatus | undefine
   )
 }
 
-function UnreadCount({ n }: { n: number }) {
-  return <span className="text-xs text-muted-foreground tabular-nums">{n > 99 ? "99+" : n}</span>
+/** 未读数：要处理的队列才用红色计数 */
+function UnreadCount({ n, className }: { n: number; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-medium text-white tabular-nums",
+        className,
+      )}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  )
 }
 
 /** 对方昵称。还没查到的（打开会话时会去查）先显示"闲鱼用户"，不显示一串数字 ID */
@@ -138,30 +148,24 @@ function ConversationRow({
       type="button"
       onClick={onOpen}
       className={cn(
-        "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/60",
-        active && "bg-muted hover:bg-muted",
+        "flex w-full items-center gap-3 px-4 py-3 text-left transition-colors outline-none [contain-intrinsic-size:auto_65px] [content-visibility:auto] hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset",
+        active && "bg-sidebar-accent hover:bg-sidebar-accent",
       )}
     >
       <Avatar name={peerName(c)} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate font-medium">{peerName(c)}</span>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
             {c.updated_at ? timeAgo(c.updated_at) : ""}
           </span>
         </div>
         <div className="mt-0.5 flex items-center gap-2">
-          <span className="truncate text-xs text-muted-foreground">{preview}</span>
-          {c.unread > 0 && (
-            <Badge variant="destructive" className="ml-auto tabular-nums">
-              {c.unread}
-            </Badge>
-          )}
+          <span className="truncate text-[13px] text-muted-foreground">{preview}</span>
+          {c.unread > 0 && <UnreadCount n={c.unread} className="ml-auto" />}
         </div>
       </div>
-      {c.item_pic && (
-        <img src={thumb(c.item_pic, 80)} alt="" className="size-10 shrink-0 rounded-md object-cover" />
-      )}
+      {c.item_pic && <ItemThumb url={c.item_pic} size={40} />}
     </button>
   )
 }
@@ -222,9 +226,9 @@ function Bubble({ message: m }: { message: ChatMessage }) {
       <div
         className={cn(
           "max-w-[75%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
-          m.mine ? "rounded-br-md bg-[#FFE60F] text-black" : "rounded-bl-md bg-muted",
+          m.mine ? "rounded-br-md bg-brand text-brand-foreground" : "rounded-bl-md bg-muted",
           m.content_type !== 1 && "text-muted-foreground italic",
-          m.mine && m.content_type !== 1 && "text-black/60",
+          m.mine && m.content_type !== 1 && "text-brand-foreground/70",
         )}
       >
         {m.text || "（没有文字内容）"}
@@ -411,7 +415,7 @@ function Thread({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2.5">
+      <div className="flex items-center gap-2 border-b px-4 py-2.5">
         <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={onBack} aria-label="返回会话列表">
           <ArrowLeftIcon />
         </Button>
@@ -447,7 +451,7 @@ function Thread({
           const el = e.currentTarget
           atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
         }}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3"
       >
         {thread.isPending ? (
           <div className="flex flex-col gap-3">
@@ -456,7 +460,7 @@ function Thread({
             <Skeleton className="h-9 w-56" />
           </div>
         ) : thread.isError ? (
-          <p className="py-10 text-center text-destructive">{errorMessage(thread.error)}</p>
+          <LoadError what="读取聊天记录" error={thread.error} onRetry={() => void thread.refetch()} />
         ) : messages.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
             {fetchingNewest
@@ -512,7 +516,7 @@ export function MessagesPage() {
   useMessageStream(account)
   const query = useConversations(account)
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<Tab>("all")
+  const [tab, setTab] = useUrlParam<Tab>("view", "all", ["all", "unread"])
   const [search, setSearch] = useState("")
 
   const selected = params.get("c")
@@ -529,79 +533,79 @@ export function MessagesPage() {
         c.item_title.toLowerCase().includes(text) ||
         c.last_text.toLowerCase().includes(text)),
   )
-  const open = (cid: string | null) => setParams(cid ? { c: cid } : {})
+  // 只换会话，留着网址里的筛选（?view=unread）
+  const open = (cid: string | null) =>
+    setParams((prev) => {
+      const p = new URLSearchParams(prev)
+      if (cid) p.set("c", cid)
+      else p.delete("c")
+      return p
+    })
+
+  let list
+  if (query.isPending) list = <RowsSkeleton rows={6} />
+  else if (query.isError)
+    list = <LoadError what="读取会话" error={query.error} onRetry={() => void query.refetch()} />
+  else if (conversations.length === 0)
+    list = (
+      <EmptyState title="还没有会话">
+        {im?.state === "online" || im?.state === "connecting"
+          ? "正在从闲鱼拉取会话列表…"
+          : "即时消息连上以后会自动拉取会话列表"}
+      </EmptyState>
+    )
+  else if (visible.length === 0)
+    list = <EmptyState>{tab === "unread" && !text ? "没有未读的会话" : "没有符合条件的会话"}</EmptyState>
+  else
+    list = (
+      <div className="divide-y divide-rule">
+        {visible.map((c) => (
+          <ConversationRow
+            key={c.cid}
+            account={account}
+            conversation={c}
+            active={c.cid === selected}
+            onOpen={() => open(c.cid)}
+          />
+        ))}
+      </div>
+    )
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">消息</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            买家发来的消息实时收到这里，也能直接回复{unread > 0 ? ` · ${unread} 条未读` : ""}
-          </p>
-        </div>
-        <ImStatusBar account={account} im={im} />
-      </div>
+      <PageHeader
+        title="消息"
+        description={
+          query.isPending
+            ? "买家的商品会话"
+            : `${conversations.length} 个会话${unread > 0 ? ` · ${unread} 条未读` : " · 没有未读"}`
+        }
+        actions={<ImStatusBar account={account} im={im} />}
+      />
 
-      <Card className="grid h-[calc(100svh-13rem)] min-h-[28rem] grid-cols-1 gap-0 py-0 md:grid-cols-[20rem_1fr]">
-        <div className={cn("flex min-h-0 flex-col border-r", selected && "hidden md:flex")}>
-          <div className="flex flex-col gap-2 border-b p-3">
+      {/* 高度撑满一屏：减掉顶栏、标题行和上下留白，会话列表和聊天记录各自滚动 */}
+      <Card className="grid h-[calc(100svh-12rem)] min-h-[28rem] grid-cols-1 gap-0 py-0 md:grid-cols-[20rem_1fr] lg:h-[calc(100svh-10rem)]">
+        <div className={cn("flex min-h-0 flex-col md:border-r", selected && "hidden md:flex")}>
+          <div className="flex flex-col gap-3 border-b px-4 pt-3">
+            <SearchInput
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜买家、商品或消息…"
+              aria-label="搜索会话"
+            />
             <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-              <TabsList className="w-full">
-                <TabsTrigger value="all">全部</TabsTrigger>
-                <TabsTrigger value="unread">
+              <TabsList variant="line" className="h-9 gap-5 p-0">
+                <TabsTrigger value="all" className="flex-none px-0 group-data-horizontal/tabs:after:bottom-0">
+                  全部
+                </TabsTrigger>
+                <TabsTrigger value="unread" className="flex-none px-0 group-data-horizontal/tabs:after:bottom-0">
                   未读
                   {unread > 0 && <UnreadCount n={unread} />}
                 </TabsTrigger>
               </TabsList>
             </Tabs>
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜买家、商品或消息"
-                className="pl-8"
-              />
-            </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {query.isPending ? (
-              <div className="flex flex-col gap-3 p-3">
-                {Array.from({ length: 5 }, (_, i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : query.isError ? (
-              <p className="p-6 text-center text-destructive">{errorMessage(query.error)}</p>
-            ) : conversations.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
-                <MessageSquareIcon className="size-8 text-muted-foreground" />
-                <p className="font-medium">还没有会话</p>
-                <p className="text-sm text-muted-foreground">
-                  {im?.state === "online" || im?.state === "connecting"
-                    ? "正在从闲鱼拉取会话列表…"
-                    : "即时消息连上以后会自动拉取会话列表"}
-                </p>
-              </div>
-            ) : visible.length === 0 ? (
-              <p className="px-6 py-14 text-center text-sm text-muted-foreground">
-                {tab === "unread" && !text ? "没有未读的会话" : "没有符合条件的会话"}
-              </p>
-            ) : (
-              <div className="divide-y">
-                {visible.map((c) => (
-                  <ConversationRow
-                    key={c.cid}
-                    account={account}
-                    conversation={c}
-                    active={c.cid === selected}
-                    onOpen={() => open(c.cid)}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{list}</div>
         </div>
 
         <div className={cn("min-h-0", !selected && "hidden md:block")}>
@@ -614,10 +618,9 @@ export function MessagesPage() {
               onBack={() => open(null)}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-              <MessageSquareIcon className="size-8" />
-              {selected && !query.isPending ? "找不到这个会话" : "选一个会话看消息"}
-            </div>
+            <EmptyState className="h-full justify-center">
+              {selected && !query.isPending ? "找不到这个会话，可能已经在 App 里删掉了" : "选一个会话看消息"}
+            </EmptyState>
           )}
         </div>
       </Card>

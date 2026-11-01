@@ -48,7 +48,9 @@ export function ItemDetailSheet({
         <SheetHeader className="border-b">
           <div className="flex items-center gap-2">
             <StateBadge state={itemState(item)} />
-            <span className="font-mono text-xs text-muted-foreground">{item.item_id}</span>
+            <span className="font-mono text-xs text-muted-foreground" translate="no">
+              {item.item_id}
+            </span>
           </div>
           <SheetTitle className="pr-6 leading-snug">{d?.title ?? item.title}</SheetTitle>
           <SheetDescription className="sr-only">商品详情</SheetDescription>

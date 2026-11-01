@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Loader2Icon, ShieldAlertIcon } from "lucide-react"
+import { Loader2Icon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
+import { Callout } from "@/components/callout"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,38 +50,39 @@ export function GuardBanner() {
   const minutes = Math.max(1, Math.round((block.until - now) / 60))
 
   return (
-    <div className="mb-6 flex flex-wrap items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
-      <ShieldAlertIcon className="mt-0.5 size-5 shrink-0 text-destructive" />
-      <div className="min-w-0 flex-1">
-        <p className="font-medium">账号触发了闲鱼风控，已暂停所有请求</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {dateTime(block.since)} 起暂停，{minutes} 分钟后自动恢复。先到闲鱼 App
-          或网页完成验证（比如滑块），完成后可以提前解除。
-        </p>
-        <p className="mt-1 truncate text-xs text-muted-foreground" title={block.reason}>
-          原因：{block.reason}
-        </p>
-      </div>
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button variant="outline" size="sm" disabled={unblock.isPending}>
-            {unblock.isPending && <Loader2Icon className="animate-spin" />}
-            已完成验证，解除
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>提前解除熔断？</AlertDialogTitle>
-            <AlertDialogDescription>
-              确认已经在闲鱼 App 或网页上完成了验证。还没验证就解除，接着发请求很可能再次触发风控，严重的会被限制账号。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={() => unblock.mutate()}>解除</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+    <Callout
+      tone="negative"
+      title="账号触发了闲鱼风控，已暂停所有请求"
+      action={
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="outline" size="sm" disabled={unblock.isPending}>
+              {unblock.isPending && <Loader2Icon className="animate-spin" />}
+              已完成验证，解除
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>提前解除熔断？</AlertDialogTitle>
+              <AlertDialogDescription>
+                确认已经在闲鱼 App 或网页上完成了验证。还没验证就解除，接着发请求很可能再次触发风控，严重的会被限制账号。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={() => unblock.mutate()}>解除</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      }
+    >
+      <p>
+        {dateTime(block.since)} 起暂停，{minutes} 分钟后自动恢复。先到闲鱼 App
+        或网页完成验证（比如滑块），完成后可以提前解除。
+      </p>
+      <p className="truncate text-xs opacity-80" title={block.reason}>
+        原因：{block.reason}
+      </p>
+    </Callout>
   )
 }

@@ -39,82 +39,132 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    /* 自定义：外框、品牌黄、状态色对（见 docs/design.md） */
+    --color-frame: var(--frame);
+    --color-rule: var(--rule);
+    --color-brand: var(--brand);
+    --color-brand-foreground: var(--brand-foreground);
+    --color-positive: var(--positive);
+    --color-positive-soft: var(--positive-soft);
+    --color-positive-ink: var(--positive-ink);
+    --color-negative-soft: var(--negative-soft);
+    --color-negative-line: var(--negative-line);
+    --color-negative-ink: var(--negative-ink);
+    --color-warning-soft: var(--warning-soft);
+    --color-warning-line: var(--warning-line);
+    --color-warning-ink: var(--warning-ink);
+    /* 圆角只用这几档，一层套一层往小走：工作区 16 → 面板 10 → 按钮、输入框 8 → 小按钮、菜单项 6 → 小标签 4 */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+    --radius-2xl: 16px;
+    --radius-3xl: 20px;
+    --radius-4xl: 9999px;
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    /* 滚动条、输入框、日期选择这些浏览器自带的部分跟着深浅色走 */
+    color-scheme: light;
+    /* 外框：侧栏和窄屏顶栏的底色，带一点暖的石色；工作区（白纸）放在上面 */
+    --frame: #f5f5f2;
+    --background: #ffffff;
+    --foreground: #111111;
+    --card: #ffffff;
+    --card-foreground: #111111;
+    --popover: #ffffff;
+    --popover-foreground: #111111;
+    /* 主按钮用近黑，不用品牌色 */
+    --primary: #1d1f20;
+    --primary-foreground: #ffffff;
+    --secondary: #f2f2ef;
+    --secondary-foreground: #111111;
+    --muted: #f4f4f1;
+    /* 次要文字在白底和外框上都要到 4.5:1 */
+    --muted-foreground: #5f5f5b;
+    --accent: #f2f2ef;
+    --accent-foreground: #111111;
+    --destructive: #c4242a;
+    /* 线分三档：面板边 --border，表格行线 --rule 更浅，输入框边 --input 更深 */
+    --border: #e8e8e4;
+    --rule: #f0f0ec;
+    --input: #d4d4cf;
+    --ring: #a3a39e;
+    /* 闲鱼黄：只用在标志、选中的筛选卡片、自己发的消息上 */
+    --brand: #ffe60f;
+    --brand-foreground: #111111;
+    --positive: #247b50;
+    --positive-soft: #dcfae5;
+    --positive-ink: #0b4a26;
+    --negative-soft: #ffedea;
+    --negative-line: #fbcfc8;
+    --negative-ink: #831c1e;
+    --warning-soft: #fffbeb;
+    --warning-line: #fde68a;
+    --warning-ink: #92400e;
+    --chart-1: #111111;
+    --chart-2: #5f5f5b;
+    --chart-3: #a3a39e;
+    --chart-4: #d4d4cf;
+    --chart-5: #ecece8;
+    --radius: 8px;
+    --sidebar: var(--frame);
+    --sidebar-foreground: #111111;
+    --sidebar-primary: #1d1f20;
+    --sidebar-primary-foreground: #ffffff;
+    /* 侧栏选中项：外框上一块中性灰 */
+    --sidebar-accent: #e8e8e3;
+    --sidebar-accent-foreground: #111111;
+    --sidebar-border: #e8e8e4;
+    --sidebar-ring: #a3a39e;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    color-scheme: dark;
+    --frame: #0a0a0a;
+    --background: #141414;
+    --foreground: #f5f5f5;
+    --card: #141414;
+    --card-foreground: #f5f5f5;
+    --popover: #1c1c1c;
+    --popover-foreground: #f5f5f5;
+    --primary: #f5f5f5;
+    --primary-foreground: #111111;
+    --secondary: #222222;
+    --secondary-foreground: #f5f5f5;
+    --muted: #1f1f1f;
+    --muted-foreground: #a8a8a8;
+    --accent: #242424;
+    --accent-foreground: #f5f5f5;
+    --destructive: #e5566f;
+    --border: #262626;
+    --rule: #1f1f1f;
+    --input: #3a3a3a;
+    --ring: #6b6b6b;
+    --brand: #ffe60f;
+    --brand-foreground: #111111;
+    --positive: #3fc07a;
+    --positive-soft: #172a1d;
+    --positive-ink: #5fd393;
+    --negative-soft: #2c1a1d;
+    --negative-line: #4a2229;
+    --negative-ink: #f07a8c;
+    --warning-soft: #2a2312;
+    --warning-line: #4a3d18;
+    --warning-ink: #f2c45a;
+    --chart-1: #f5f5f5;
+    --chart-2: #a8a8a8;
+    --chart-3: #6b6b6b;
+    --chart-4: #3a3a3a;
+    --chart-5: #262626;
+    --sidebar: var(--frame);
+    --sidebar-foreground: #f5f5f5;
+    --sidebar-primary: #f5f5f5;
+    --sidebar-primary-foreground: #111111;
+    --sidebar-accent: #1f1f1f;
+    --sidebar-accent-foreground: #ffffff;
+    --sidebar-border: #262626;
+    --sidebar-ring: #6b6b6b;
 }
 
 @layer base {
@@ -122,9 +172,28 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-frame text-foreground;
     }
   html {
     @apply font-sans;
+    -webkit-tap-highlight-color: transparent;
     }
+  /* 1024px 以下顶栏是 sticky 的，键盘切换焦点、跳到锚点时别让它挡住 */
+  @media (width < 64rem) {
+    html {
+      scroll-padding-top: 3.5rem;
+    }
+  }
+  a, button, [role="tab"], input, textarea, label {
+    touch-action: manipulation;
+    }
+  /* 系统设置了减少动态效果：弹窗、抽屉不再滑动，骨架屏不闪，转圈图标停住（还看得见） */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }

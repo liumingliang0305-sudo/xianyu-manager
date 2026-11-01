@@ -1,10 +1,12 @@
 import type { Item, OrderStatus } from "@/lib/api"
 
-/** 35800 → "¥358"，1050 → "¥10.5"，-139 → "-¥1.39" */
+// 最多两位小数，末尾的 0 不显示（和闲鱼一样），千位加逗号
+const YUAN = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 })
+
+/** 35800 → "¥358"，1050 → "¥10.5"，-139 → "-¥1.39"，140000 → "¥1,400" */
 export function yuan(cents: number | null | undefined): string {
   if (cents == null) return "-"
-  const text = (Math.abs(cents) / 100).toFixed(2).replace(/\.?0+$/, "")
-  return `${cents < 0 ? "-" : ""}¥${text}`
+  return `${cents < 0 ? "-" : ""}¥${YUAN.format(Math.abs(cents) / 100)}`
 }
 
 /** 用户输入的元（字符串）→ 分；不合法返回 null。和后端 yuan_to_cent 规则一致：最多两位小数。 */

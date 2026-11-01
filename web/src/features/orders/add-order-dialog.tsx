@@ -63,13 +63,16 @@ export function AddOrderDialog({
               placeholder="5127…"
               value={text}
               aria-invalid={error ? true : undefined}
+              aria-describedby="order-id-error"
               onChange={(e) => {
                 setText(e.target.value)
                 setError(null)
               }}
               className="font-mono"
             />
-            <p className="min-h-4 text-xs text-destructive">{error}</p>
+            <p id="order-id-error" aria-live="polite" className="min-h-4 text-xs text-destructive">
+              {error}
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={mutation.isPending}>

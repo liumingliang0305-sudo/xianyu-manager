@@ -113,6 +113,7 @@ export function OrderPriceDialog({
                 autoFocus={i === 0}
                 placeholder={field.price_cent != null ? String(field.price_cent / 100) : "必填"}
                 invalid={Boolean(text) && cents === null}
+                describedBy="fee-error"
                 onChange={(v) => {
                   setValues((prev) => ({ ...prev, [field.key]: v }))
                   setGuard(null)
@@ -141,11 +142,17 @@ export function OrderPriceDialog({
               </span>
             </div>
           )}
-          {invalid && <p className="text-xs text-destructive">金额最多两位小数</p>}
-          {newTotal === 0 && <p className="text-xs text-destructive">订单总价必须大于 0</p>}
+          {(invalid || newTotal === 0) && (
+            <p id="fee-error" role="alert" className="text-xs text-destructive">
+              {invalid ? "金额最多两位小数" : "订单总价必须大于 0"}
+            </p>
+          )}
 
           {guard && (
-            <div className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+            <div
+              role="alert"
+              className="flex gap-2 rounded-lg border border-warning-line bg-warning-soft p-3 text-warning-ink"
+            >
               <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
               <p>{guard}，确认没输错的话点「仍然修改」。</p>
             </div>

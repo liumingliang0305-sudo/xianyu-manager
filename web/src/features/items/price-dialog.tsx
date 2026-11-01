@@ -26,6 +26,7 @@ export function YuanInput({
   invalid,
   autoFocus,
   placeholder,
+  describedBy,
 }: {
   id: string
   value: string
@@ -33,6 +34,8 @@ export function YuanInput({
   invalid?: boolean
   autoFocus?: boolean
   placeholder?: string
+  /** 输入框下面提示或报错那一行的 id，读屏时跟着输入框一起读 */
+  describedBy?: string
 }) {
   return (
     <div className="relative">
@@ -47,6 +50,7 @@ export function YuanInput({
         placeholder={placeholder}
         value={value}
         aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         onChange={(e) => onChange(e.target.value)}
         className="pl-6 tabular-nums"
       />
@@ -123,12 +127,15 @@ export function PriceDialog({
               autoFocus
               placeholder={(item.price_cent / 100).toString()}
               invalid={priceInvalid}
+              describedBy="price-hint"
               onChange={(v) => {
                 setPrice(v)
                 setGuard(null)
               }}
             />
             <p
+              id="price-hint"
+              aria-live="polite"
               className={cn(
                 "min-h-4 text-xs text-muted-foreground",
                 priceInvalid && "text-destructive",
@@ -152,15 +159,24 @@ export function PriceDialog({
               id="orig-price"
               value={orig}
               invalid={origInvalid}
+              describedBy="orig-price-hint"
               onChange={(v) => {
                 setOrig(v)
                 setGuard(null)
               }}
             />
+            {origInvalid && (
+              <p id="orig-price-hint" role="alert" className="text-xs text-destructive">
+                请输入金额，最多两位小数；不要划线价就留空
+              </p>
+            )}
           </div>
 
           {guard && (
-            <div className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+            <div
+              role="alert"
+              className="flex gap-2 rounded-lg border border-warning-line bg-warning-soft p-3 text-warning-ink"
+            >
               <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
               <p>{guard}，确认没输错的话点「仍然修改」。</p>
             </div>

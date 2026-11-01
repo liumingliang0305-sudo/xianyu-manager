@@ -53,9 +53,11 @@ function DescForm({
           onChange={(e) => setText(e.target.value)}
           rows={14}
           className="max-h-[50vh] resize-y"
+          aria-label="商品描述"
+          aria-describedby="desc-hint"
           autoFocus
         />
-        <p className="flex justify-between text-xs text-muted-foreground">
+        <p id="desc-hint" className="flex justify-between text-xs text-muted-foreground">
           <span>标题由闲鱼从描述开头截取</span>
           <span className="tabular-nums">{text.length} 字</span>
         </p>

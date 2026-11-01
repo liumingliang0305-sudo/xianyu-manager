@@ -1,20 +1,15 @@
-import {
-  HistoryIcon,
-  Loader2Icon,
-  PlusIcon,
-  RefreshCwIcon,
-  SearchIcon,
-  ShoppingCartIcon,
-} from "lucide-react"
+import { Loader2Icon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { CountFilter } from "@/components/count-filter"
+import { PageHeader, Section } from "@/components/page-header"
+import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCurrentAccount } from "@/hooks/use-account"
+import { useUrlParam } from "@/hooks/use-url-param"
 import { errorMessage, type Order, type OrderStatus } from "@/lib/api"
 import { ORDER_STATUS_LABEL, timeAgo, yuan } from "@/lib/format"
 
@@ -34,18 +29,6 @@ const TABS: Tab[] = ["all", "unpaid", "to_ship", "shipped", "refund", "done", "c
 const SOLD: OrderStatus[] = ["to_ship", "shipped", "done", "refund"]
 
 const DAY = 86_400
-
-function SummaryCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <Card size="sm">
-      <CardContent>
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="mt-1 font-heading text-2xl font-semibold tabular-nums">{value}</div>
-        {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
-      </CardContent>
-    </Card>
-  )
-}
 
 /** 个人卖家没有卖出订单列表，"刷新"是逐个拉本地还没结束的订单；专业卖家会整页同步。 */
 function RefreshButton({ account }: { account: string }) {
@@ -81,7 +64,7 @@ export function OrdersPage() {
   const account = useCurrentAccount()
   const orders = useOrders(account)
   const ops = useOrderOps(account)
-  const [tab, setTab] = useState<Tab>("all")
+  const [tab, setTab] = useUrlParam<Tab>("status", "all", TABS)
   const [search, setSearch] = useState("")
   const [action, setAction] = useState<{ kind: OrderActionKind; order: Order } | null>(null)
   const [adding, setAdding] = useState(false)
@@ -108,7 +91,8 @@ export function OrdersPage() {
 
   const counted = (status: OrderStatus) => byStatus.get(status)?.length ?? 0
   const query = search.trim().toLowerCase()
-  const visible = (tab === "all" ? all : (byStatus.get(tab) ?? [])).filter(
+  const inTab = tab === "all" ? all : (byStatus.get(tab) ?? [])
+  const visible = inTab.filter(
     (o) =>
       !query ||
       o.title.toLowerCase().includes(query) ||
@@ -116,115 +100,108 @@ export function OrdersPage() {
       o.buyer_nick.toLowerCase().includes(query),
   )
   const pending = orders.isPending
+  const toShip = counted("to_ship")
   const close = () => setAction(null)
+  const add = (
+    <Button onClick={() => setAdding(true)}>
+      <PlusIcon />
+      添加订单
+    </Button>
+  )
+
+  let body
+  if (pending) body = <RowsSkeleton height="h-14" />
+  else if (orders.isError)
+    body = <LoadError what="读取本地订单" error={orders.error} onRetry={() => void orders.refetch()} />
+  else if (all.length === 0)
+    body = (
+      <EmptyState title="还没有订单" action={add}>
+        网页端拿不到个人卖家的卖出订单列表。在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。
+      </EmptyState>
+    )
+  else if (visible.length === 0)
+    body = (
+      <EmptyState>
+        {query
+          ? `「${search.trim()}」没有匹配的订单`
+          : `没有${tab === "all" ? "" : ORDER_STATUS_LABEL[tab]}的订单`}
+      </EmptyState>
+    )
+  else body = <OrdersTable orders={visible} onAction={(kind, order) => setAction({ kind, order })} />
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">订单</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            卖出的订单 · 上次更新：{pending ? "…" : timeAgo(orders.data?.last_synced_at)}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {all.length > 0 && <RefreshButton account={account} />}
-          <Button onClick={() => setAdding(true)}>
-            <PlusIcon />
-            添加订单
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="订单"
+        description={
+          pending ? (
+            "卖出的订单"
+          ) : (
+            <>
+              {toShip > 0 ? (
+                <span className="text-foreground">{toShip} 笔待发货，要到闲鱼 App 里发货</span>
+              ) : (
+                "卖出的订单"
+              )}
+              <span title="不含待付款和已关闭的订单">
+                {" "}
+                · 近 30 天成交 <span className="tabular-nums">{yuan(recentSales)}</span>
+              </span>
+              {" "}· 上次更新 {timeAgo(orders.data?.last_synced_at)}
+            </>
+          )
+        }
+        actions={
+          <>
+            {all.length > 0 && <RefreshButton account={account} />}
+            {all.length > 0 && add}
+          </>
+        }
+      />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <SummaryCard
-          label="待发货"
-          value={pending ? "…" : String(counted("to_ship"))}
-          hint={counted("to_ship") > 0 ? "去闲鱼 App 发货" : undefined}
+      <div className="flex flex-col gap-3">
+        <CountFilter
+          label="订单状态"
+          value={tab}
+          onChange={setTab}
+          options={TABS.map((value) => ({
+            value,
+            label: value === "all" ? "全部" : ORDER_STATUS_LABEL[value],
+            count: pending ? null : value === "all" ? all.length : counted(value),
+          }))}
         />
-        <SummaryCard label="待付款" value={pending ? "…" : String(counted("unpaid"))} />
-        <SummaryCard label="退款中" value={pending ? "…" : String(counted("refund"))} />
-        <SummaryCard
-          label="近 30 天成交"
-          value={pending ? "…" : yuan(recentSales)}
-          hint="不含待付款和已关闭"
-        />
-      </div>
-
-      <Card className="gap-0 py-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          {/* 状态多，窄屏时标签横向滚动 */}
-          <Tabs
-            value={tab}
-            onValueChange={(v) => setTab(v as Tab)}
-            className="max-w-full overflow-x-auto"
-          >
-            <TabsList>
-              {TABS.map((value) => (
-                <TabsTrigger key={value} value={value}>
-                  {value === "all" ? "全部" : ORDER_STATUS_LABEL[value]}
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {value === "all" ? all.length : counted(value)}
-                  </span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <div className="relative w-full sm:w-60">
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
+        <Card className="gap-0 py-0">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-3">
+            <SearchInput
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜商品、订单号或买家"
-              className="pl-8"
+              placeholder="搜商品、订单号或买家…"
+              aria-label="搜索订单"
+              className="w-full sm:w-64"
             />
+            {query && inTab.length > 0 && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {visible.length} / {inTab.length} 笔
+              </span>
+            )}
           </div>
-        </div>
+          {body}
+        </Card>
+      </div>
 
-        {pending ? (
-          <div className="flex flex-col gap-3 p-4">
-            {Array.from({ length: 4 }, (_, i) => (
-              <Skeleton key={i} className="h-12 w-full" />
-            ))}
-          </div>
-        ) : orders.isError ? (
-          <p className="p-6 text-center text-destructive">{errorMessage(orders.error)}</p>
-        ) : all.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
-            <ShoppingCartIcon className="size-8 text-muted-foreground" />
-            <p className="font-medium">还没有订单</p>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              网页端拿不到个人卖家的卖出订单列表。在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。
-            </p>
-            <Button className="mt-2" onClick={() => setAdding(true)}>
-              <PlusIcon />
-              添加订单
-            </Button>
-          </div>
-        ) : visible.length === 0 ? (
-          <p className="px-6 py-14 text-center text-sm text-muted-foreground">没有符合条件的订单</p>
+      <Section title="最近的改动" aside="通过本系统做的，成功失败都记">
+        {!ops.data ? (
+          <Skeleton className="h-16 w-full" />
+        ) : ops.data.length === 0 ? (
+          <OrderOpsList ops={[]} />
         ) : (
-          <div className="px-1">
-            <OrdersTable orders={visible} onAction={(kind, order) => setAction({ kind, order })} />
-          </div>
+          <Card className="py-0">
+            <div className="px-4">
+              <OrderOpsList ops={ops.data.slice(0, 20)} titles={titles} />
+            </div>
+          </Card>
         )}
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <HistoryIcon className="size-4 text-muted-foreground" />
-            最近的改动
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {ops.data ? (
-            <OrderOpsList ops={ops.data.slice(0, 20)} titles={titles} />
-          ) : (
-            <Skeleton className="h-16 w-full" />
-          )}
-        </CardContent>
-      </Card>
+      </Section>
 
       {action?.kind === "detail" && (
         <OrderDetailSheet

@@ -1,3 +1,4 @@
+import { EmptyNote } from "@/components/states"
 import type { ItemOp } from "@/lib/api"
 import { dateTime, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -20,16 +21,16 @@ function change(op: ItemOp): string {
 /** 改动记录。`titles` 用来把商品 ID 换成标题，找不到时显示 ID。 */
 export function OpsList({ ops, titles }: { ops: ItemOp[]; titles?: Map<string, string> }) {
   if (ops.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">还没有改动记录</p>
+    return <EmptyNote>还没有改动记录。在这里改价、改描述、下架或删除后，结果会记在这里</EmptyNote>
   }
   return (
-    <ul className="divide-y">
+    <ul className="divide-y divide-rule">
       {ops.map((op) => (
         <li key={op.id} className="flex items-start gap-3 py-2.5 text-sm">
           <span
             className={cn(
               "mt-1.5 size-2 shrink-0 rounded-full",
-              op.ok ? "bg-emerald-500" : "bg-destructive",
+              op.ok ? "bg-positive" : "bg-destructive",
             )}
             aria-label={op.ok ? "成功" : "失败"}
           />

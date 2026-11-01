@@ -28,7 +28,7 @@ function Steps({ steps }: { steps: OrderDetail["steps"] }) {
             <span className={cn("h-px flex-1", i > 0 && (step.done ? "bg-primary" : "bg-border"))} />
             <span
               className={cn(
-                "flex size-5 items-center justify-center rounded-full border text-[10px]",
+                "flex size-5 items-center justify-center rounded-full border text-[11px]",
                 step.done ? "border-primary bg-primary text-primary-foreground" : "bg-background",
               )}
             >
@@ -45,7 +45,7 @@ function Steps({ steps }: { steps: OrderDetail["steps"] }) {
             {step.title}
           </span>
           {step.time && (
-            <span className="text-[10px] leading-tight text-muted-foreground tabular-nums">
+            <span className="text-[11px] leading-tight text-muted-foreground tabular-nums">
               {shortTime(step.time)}
             </span>
           )}
@@ -87,7 +87,9 @@ export function OrderDetailSheet({
         <SheetHeader className="border-b">
           <div className="flex items-center gap-2">
             <OrderStatusBadge status={status} text={d?.status_title || order.status_text} />
-            <span className="font-mono text-xs text-muted-foreground">{order.order_id}</span>
+            <span className="font-mono text-xs text-muted-foreground" translate="no">
+              {order.order_id}
+            </span>
           </div>
           <SheetTitle className="pr-6 leading-snug">
             {d?.status_title || order.status_text || "订单详情"}
@@ -137,7 +139,7 @@ export function OrderDetailSheet({
                 </div>
                 {d.income_cent != null && (
                   <Row label={d.income_title || "到手"}>
-                    <span className="font-medium text-emerald-700 tabular-nums dark:text-emerald-400">
+                    <span className="font-medium text-positive tabular-nums">
                       {yuan(d.income_cent)}
                     </span>
                   </Row>

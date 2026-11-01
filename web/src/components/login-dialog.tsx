@@ -217,7 +217,8 @@ function LoginPanel({ onDone }: { onDone: () => void }) {
   } else if (phase === "scanned") {
     overlay = <SmartphoneIcon className="size-8" />
   } else if (phase === "done") {
-    overlay = <CheckIcon className="size-8 text-emerald-600" />
+    // 码框固定白底，用浅色主题的绿，深色主题下也看得清
+    overlay = <CheckIcon className="size-8 text-[#247b50]" />
   }
 
   return (
@@ -228,6 +229,8 @@ function LoginPanel({ onDone }: { onDone: () => void }) {
           <img
             src={svgUrl(qr.data.qr_svg)}
             alt="闲鱼登录二维码"
+            width={192}
+            height={192}
             className={cn("size-full transition-opacity", overlay !== null && "opacity-10")}
           />
         )}

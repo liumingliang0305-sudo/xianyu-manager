@@ -112,6 +112,7 @@ uv run xym serve                            # 接口和打包好的页面都在 
 ```
 
 改前端时：开两个终端，一个跑接口，一个跑 Vite 开发服务器（改代码自动刷新，`/api` 会转给 8000 端口），打开 http://localhost:5173 。
+页面的样式和结构按 [docs/design.md](docs/design.md)（颜色、字号、列表页结构、状态标签、空和出错状态）。
 
 ```bash
 uv run xym serve
