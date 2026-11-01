@@ -47,6 +47,9 @@ uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效�
 uv run pytest                                # 跑测试（用到数据库的连 docker 里的 xianyu_test 库，没有会自动建）
 ```
 
+每个 PR 和推到 main 的提交，GitHub Actions 会跑一遍同样的检查（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：
+后端 `ruff check`、`ruff format --check`、`pytest`（连一个 PostgreSQL 16 服务容器），前端 `pnpm lint`、`pnpm build`。
+
 商品管理用 `xym`（业务层命令）。只有一个账号时不用指定，多个账号加 `--account <unb>`：
 
 ```bash
@@ -199,6 +202,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
+.github/workflows/ci.yml  GitHub Actions：后端 ruff + pytest，前端 oxlint + 构建
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型
