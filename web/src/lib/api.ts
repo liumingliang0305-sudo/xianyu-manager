@@ -1,4 +1,7 @@
 // 后端接口（app/api.py）。金额：响应里是分（*_cent），请求里的价格是元的字符串。
+// 除了登录本身，请求都带访问令牌（lib/auth.ts）；令牌过期、作废了换一个再试一次，换不到就回登录页。
+
+import { acceptSession, accessToken, tokenRejected, type AuthSession } from "@/lib/auth"
 
 /** 风控熔断：从 since 到 until（秒级时间戳）这个账号不发任何请求 */
 export interface AccountBlock {
@@ -267,13 +270,38 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function withToken(init: RequestInit | undefined, token: string | null): RequestInit {
+  return {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
+  }
+}
+
+async function isTokenRejected(resp: Response): Promise<boolean> {
+  if (resp.status !== 401) return false
+  const body = await resp.clone().json().catch(() => null)
+  return body?.code === "unauthenticated"
+}
+
+/** 带上访问令牌的 fetch。接口说令牌不行了（401 unauthenticated），换一个新的再试一次 */
+async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = await accessToken()
+  const resp = await fetch(url, withToken(init, token))
+  if (!token || !(await isTokenRejected(resp))) return resp
+  const fresh = await tokenRejected()
+  return fresh ? fetch(url, withToken(init, fresh)) : resp
+}
+
+async function request<T>(path: string, init?: RequestInit, { auth = true } = {}): Promise<T> {
   let resp: Response
   try {
-    resp = await fetch(`/api${path}`, {
-      ...init,
-      headers: { "content-type": "application/json", ...init?.headers },
-    })
+    resp = auth
+      ? await authorizedFetch(`/api${path}`, init)
+      : await fetch(`/api${path}`, withToken(init, null))
   } catch {
     throw new ApiError(0, "network", "连不上后台，确认 uv run xym serve 在运行")
   }
@@ -291,11 +319,89 @@ const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)
 const convPath = (account: string, cid: string) =>
   `/accounts/${encodeURIComponent(account)}/conversations/${encodeURIComponent(cid)}`
 
-/** 新消息、补拉完、连接状态变了都会推一条（Server-Sent Events） */
-export const messageStreamUrl = (account: string) =>
-  `/api/accounts/${encodeURIComponent(account)}/messages/stream`
+/** 断了以后过多久重连 */
+const STREAM_RETRY_MS = 3000
+
+/**
+ * 订阅新消息推送（Server-Sent Events）：新消息、补拉完、连接状态变了都会推一条。
+ * 用 fetch 读而不是 EventSource：EventSource 带不了 Authorization 头，令牌只能放进网址，会被记进访问日志。
+ * 连上时调 onOpen；断了过一会儿自己重连（令牌过期了先换新的）；没登录、账号不归自己了就不再连。signal 中止时停。
+ */
+export async function subscribeMessages(
+  account: string,
+  signal: AbortSignal,
+  onOpen: () => void,
+  onEvent: (type: string, data: string) => void,
+) {
+  const url = `/api/accounts/${encodeURIComponent(account)}/messages/stream`
+  while (!signal.aborted) {
+    try {
+      const resp = await authorizedFetch(url, { signal, headers: { accept: "text/event-stream" } })
+      if (resp.status === 401 || resp.status === 404) return
+      if (resp.ok && resp.body) {
+        onOpen()
+        await readEvents(resp.body, onEvent)
+      }
+    } catch {
+      // 网络断了、后台重启了，或者是中止了
+    }
+    if (signal.aborted) return
+    await new Promise((resolve) => setTimeout(resolve, STREAM_RETRY_MS))
+  }
+}
+
+/** 按 SSE 的格式拆事件：空行分隔，event: 是类型，data: 是内容；": ping" 这种注释行没有 data，跳过 */
+async function readEvents(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (type: string, data: string) => void,
+) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buffer += decoder.decode(value, { stream: true })
+    let end = buffer.indexOf("\n\n")
+    while (end >= 0) {
+      let type = "message"
+      const data: string[] = []
+      for (const line of buffer.slice(0, end).split("\n")) {
+        if (line.startsWith("event:")) type = line.slice(6).trim()
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""))
+      }
+      if (data.length) onEvent(type, data.join("\n"))
+      buffer = buffer.slice(end + 2)
+      end = buffer.indexOf("\n\n")
+    }
+  }
+}
 
 export const api = {
+  /** 用户名密码登录，成功后记下访问令牌 */
+  signIn: (username: string, password: string) =>
+    request<AuthSession>(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify({ username, password }) },
+      { auth: false },
+    ).then(acceptSession),
+
+  /** 改密码：别处的登录全部作废，这个页面换一套新令牌 */
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<AuthSession>("/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }).then(acceptSession),
+
+  /** 生成过插件令牌没有（令牌本身只在生成时给一次） */
+  pluginToken: () => request<{ created_at: number | null }>("/auth/plugin-token"),
+
+  /** 生成浏览器插件用的令牌，之前的作废 */
+  newPluginToken: () =>
+    request<{ token: string; created_at: number }>("/auth/plugin-token", { method: "POST" }),
+
+  dropPluginToken: () => request<{ ok: true }>("/auth/plugin-token", { method: "DELETE" }),
+
   accounts: () => request<{ accounts: Account[] }>("/accounts").then((r) => r.accounts),
 
   checkAccount: (account: string) =>

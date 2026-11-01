@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Double,
+    ForeignKey,
     Identity,
     Index,
     Integer,
@@ -20,8 +21,54 @@ from sqlalchemy import (
     text,
 )
 
-# 主键名和 PostgreSQL 默认起的一样，自动生成迁移时才不会对出差异
-metadata = MetaData(naming_convention={"pk": "%(table_name)s_pkey"})
+# 主键、外键名和 PostgreSQL 默认起的一样，自动生成迁移时才不会对出差异
+metadata = MetaData(
+    naming_convention={
+        "pk": "%(table_name)s_pkey",
+        "fk": "%(table_name)s_%(column_0_name)s_fkey",
+    }
+)
+
+# 管理后台的用户，见 app/users.py。由命令行 xym users add 建，没有注册入口
+users = Table(
+    "users",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("username", Text, nullable=False),
+    Column("password_hash", Text, nullable=False),  # argon2id
+    # 改密码、停用时加一，之前签发的访问令牌跟着作废
+    Column("token_version", Integer, nullable=False, server_default=text("0")),
+    Column("disabled", Boolean, nullable=False, server_default=text("false")),
+    # 登录同步插件用的令牌，只存 SHA-256；没生成过是 NULL
+    Column("plugin_token_hash", Text),
+    Column("plugin_token_at", Double),
+    Column("created_at", Double, nullable=False),
+    Index("users_username", "username", unique=True),
+    Index("users_plugin_token", "plugin_token_hash", unique=True),
+)
+
+# 刷新令牌：一次登录一个，放在浏览器的 HttpOnly cookie 里，库里只存 SHA-256。
+# 用一次往后顺延，太久没用或者到了最长期限就过期；退出登录时删掉
+refresh_tokens = Table(
+    "refresh_tokens",
+    metadata,
+    Column("token_hash", Text, primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("created_at", Double, nullable=False),
+    Column("used_at", Double, nullable=False),
+    Index("refresh_tokens_user", "user_id"),
+)
+
+# 闲鱼账号归哪个用户：一个账号只归一个用户。没有归属的账号（有用户以前就登录过的）谁都看不到，
+# 用 xym accounts assign 分给用户
+account_owners = Table(
+    "account_owners",
+    metadata,
+    Column("account_id", Text, primary_key=True),  # 账号 unb
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("created_at", Double, nullable=False),
+    Index("account_owners_user", "user_id"),
+)
 
 items = Table(
     "items",

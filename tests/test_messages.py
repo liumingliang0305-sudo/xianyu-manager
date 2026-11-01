@@ -8,7 +8,7 @@ from collections import defaultdict
 import httpx
 import pytest
 from fake_im import FakeIm, chat_message, conversation, entry, history_message
-from fakes import UNB
+from fakes import UNB, add_user, sign_in
 from fastapi.testclient import TestClient
 
 from app import messages
@@ -635,6 +635,23 @@ def test_sse_sends_status_then_events_and_pings(accounts, store):
         'event: message\ndata: {"type": "message", "cid": "777", "message_id": "m1"}\n\n'
     )
     assert third == ": ping\n\n"
+
+
+def test_sse_ends_when_access_is_gone(accounts, store):
+    """流开着的时候账号转给了别人、用户被停用：下一次 ping 时结束，页面重连时就进不来了。"""
+    hub = make_hub(store, accounts, FakeIm())
+    allowed = [True]
+
+    async def go():
+        stream = sse_events(hub, UNB, ping=0.01, allowed=lambda: allowed[0])
+        await anext(stream)
+        assert await anext(stream) == ": ping\n\n"
+        allowed[0] = False
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+
+    run(go())
+    assert not hub._subscribers[UNB]
     assert not hub._subscribers[UNB]
 
 
@@ -670,7 +687,9 @@ def test_api_reads_local_messages_when_im_off(accounts, platform, store, databas
         transport=httpx.MockTransport(platform),
         web_dist=None,
     )
+    add_user(database_url, accounts=[UNB])
     with TestClient(app) as client:
+        sign_in(client)
         check_local_api(client)
 
 
@@ -708,7 +727,9 @@ def test_api_with_im_online(accounts, platform, database_url):
         im_options=IM_OPTIONS,
     )
     url = f"/api/accounts/{UNB}"
+    add_user(database_url, accounts=[UNB])
     with TestClient(app) as client:
+        sign_in(client)
         deadline = time.monotonic() + 3
         while True:
             body = client.get(f"{url}/conversations").json()

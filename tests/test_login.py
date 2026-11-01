@@ -2,7 +2,7 @@ import time
 
 import httpx
 import pytest
-from fakes import UNB, FakePlatform, FakeXianyu
+from fakes import UNB, FakePlatform, FakeXianyu, add_user, sign_in
 from fastapi.testclient import TestClient
 
 from app.api import create_app
@@ -48,7 +48,9 @@ def client(accounts_dir, platform, fake_login, database_url):
         web_dist=None,
         login_poll_interval=0.01,
     )
+    add_user(database_url)
     with TestClient(app) as client:
+        sign_in(client)
         yield client
 
 
@@ -97,8 +99,11 @@ def test_keep_login_dialog_is_confirmed_in_web_login(client, accounts_dir, fake_
     assert Credential.load(accounts_dir / f"{UNB}.json").keep_login_until is not None
 
 
-def test_relogin_replaces_expired_credential(client, accounts_dir, platform, fake_login):
+def test_relogin_replaces_expired_credential(
+    client, accounts_dir, platform, fake_login, database_url
+):
     Credential(cookies={"unb": UNB, "cookie2": "old"}).save(accounts_dir / f"{UNB}.json")
+    add_user(database_url, accounts=[UNB])
     platform.session_expired = True
     assert client.get("/api/accounts").json()["accounts"][0]["login"]["state"] == "expired"
 
@@ -234,3 +239,56 @@ def test_import_cookie_of_another_account_is_rejected(client, accounts_dir):
     resp = import_login(client, "unb=43; cookie2=b2")
     assert resp.status_code == 401
     assert not (accounts_dir / "43.json").exists()
+
+
+# ---- 多个用户 ----
+
+
+def test_scan_login_of_someone_elses_account_is_refused(
+    client, accounts_dir, fake_login, database_url
+):
+    add_user(database_url, "bob", accounts=[UNB])
+    session = client.post("/api/login").json()["id"]
+    fake_login.statuses = ["CONFIRMED"]
+    assert "别的用户" in wait_for(client, session, "failed")["message"]
+    assert not (accounts_dir / f"{UNB}.json").exists()
+    assert client.get("/api/accounts").json() == {"accounts": []}
+
+
+def test_scan_sessions_are_per_user(client, database_url):
+    mine = client.post("/api/login").json()["id"]
+    add_user(database_url, "bob")
+    sign_in(client, "bob")
+    assert client.get(f"/api/login/{mine}").status_code == 404  # 看不到别人的扫码进度
+    assert client.delete(f"/api/login/{mine}").json() == {"ok": False}
+    client.post("/api/login")  # 也不会顶掉别人的码
+    sign_in(client)
+    assert client.get(f"/api/login/{mine}").json()["phase"] == "waiting"
+
+
+def test_import_of_someone_elses_account_is_refused(client, accounts_dir, platform, database_url):
+    add_user(database_url, "bob", accounts=[UNB])
+    resp = import_login(client, BROWSER_COOKIE)
+    assert (resp.status_code, resp.json()["code"]) == (409, "account_taken")
+    assert platform.calls == []  # 没去问平台
+    assert not (accounts_dir / f"{UNB}.json").exists()
+
+
+def test_plugin_token_can_only_push_logins(client, database_url):
+    assert client.get("/api/auth/plugin-token").json() == {"created_at": None}
+    token = client.post("/api/auth/plugin-token").json()["token"]
+    assert token.startswith("xymp_")
+    assert client.get("/api/auth/plugin-token").json()["created_at"] is not None
+
+    plugin = {"authorization": f"Bearer {token}"}
+    resp = client.post("/api/login/import", json={"cookie": BROWSER_COOKIE}, headers=plugin)
+    assert resp.status_code == 200
+    # 推过来的账号归令牌的主人
+    assert [a["id"] for a in client.get("/api/accounts").json()["accounts"]] == [UNB]
+    # 插件令牌别的接口都不认
+    assert client.get("/api/accounts", headers=plugin).status_code == 401
+
+    client.post("/api/auth/plugin-token")  # 重新生成，旧的作废
+    resp = client.post("/api/login/import", json={"cookie": BROWSER_COOKIE}, headers=plugin)
+    assert (resp.status_code, resp.json()["code"]) == (401, "unauthenticated")
+    assert "插件令牌" in resp.json()["message"]

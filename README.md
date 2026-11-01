@@ -29,6 +29,8 @@
 - [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
 - [x] 订单管理：按订单号添加、刷新进行中的订单、按状态查看、实时详情、改价、改动记录（[app/orders.py](app/orders.py)，后台"订单"页）
 - [x] 本地库换成 PostgreSQL（本机用 docker 跑），表结构用 Alembic 迁移管理；以前 SQLite 里的数据用 `xym import-sqlite` 一次导过来（见下面"数据库"）
+- [x] 管理后台的用户登录：用户名密码登录，访问令牌（JWT）加刷新令牌；一个用户可以有多个闲鱼账号，每个用户只看得到、
+  只能操作自己名下的账号。用户由命令行建，没有注册入口（[app/auth.py](app/auth.py)、[app/users.py](app/users.py)，见下面"用户和登录"）
 - [ ] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），等即时消息做好后从交易消息里记
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
@@ -42,6 +44,7 @@
 uv sync                                      # 安装依赖
 docker compose up -d                         # 启动本机的 PostgreSQL
 uv run alembic upgrade head                  # 建表；以后拉了新代码也跑一次，把表结构升到最新
+uv run xym users add <用户名>                  # 建管理后台的用户，提示输入密码（第一个用户接手已有的闲鱼账号）
 uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫（也可以在管理后台里扫）
 uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效，会话过期时先试免密续期
 uv run pytest                                # 跑测试（用到数据库的连 docker 里的 xianyu_test 库，没有会自动建）
@@ -95,7 +98,8 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 
 ### 管理后台
 
-后台接口没有登录鉴权，只监听本机（127.0.0.1）。启动前数据库要先起来（`docker compose up -d`），表结构不是最新时 `xym serve` 会直接报错退出。
+打开页面先用管理后台的用户名密码登录（见下面"用户和登录"）。后台只监听本机（127.0.0.1），是明文 http，不直接对公网开。
+启动前数据库要先起来（`docker compose up -d`），表结构不是最新时 `xym serve` 会直接报错退出。
 
 前端用 pnpm，版本固定在 `web/package.json` 的 `packageManager` 里。没装过的话先运行一次 `corepack enable pnpm`（Node 自带的 corepack 会按这个版本下载 pnpm）。
 
@@ -104,11 +108,14 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 扫码登录的会话平台不给开保持登录，过期后只能重新扫。想要自动续期，用浏览器插件把 Chrome 里的登录同步过来：
 
 1. Chrome 打开 `chrome://extensions`，右上角打开"开发者模式"，点"加载已解压的扩展程序"，选这个项目的 `extension` 目录；
-2. 在 Chrome 里登录 goofish.com，头像菜单里打开"保存登录信息"；
-3. 插件会把登录推给本机的管理后台（默认 http://127.0.0.1:8000，插件弹窗里能改，只能填本机地址）。
+2. 在管理后台左下角的用户菜单里点「浏览器插件令牌」生成一个，复制到插件弹窗的「插件令牌」里。
+   推过来的账号归到这个令牌的主人名下；令牌只能用来推登录，别的接口都不认；
+3. 在 Chrome 里登录 goofish.com，头像菜单里打开"保存登录信息"；
+4. 插件会把登录推给本机的管理后台（默认 http://127.0.0.1:8000，插件弹窗里能改，只能填本机地址）。
    之后浏览器里登录变了（重新登录、网页端自动续期）都会自动同步，另外每 10 分钟对一次。点插件图标能看同步结果。
 
 插件只读 goofish.com 的 cookie，只发给本机的后台。后台和浏览器共用这次登录，浏览器里退出登录这里也会失效。
+插件令牌忘了或者泄露了，在用户菜单里重新生成，旧的马上作废。
 后台收到登录先向平台确认能用再保存；和已保存的一样就不请求平台；浏览器那份已经过期就拒绝，不替它续期，留着后台自己那份。
 没装插件时，登录弹窗的「导入浏览器登录」可以手动粘贴开发者工具里 www.goofish.com 那条请求的 Cookie 请求头，效果一样。
 
@@ -131,6 +138,34 @@ pnpm -C web dev
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
 旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删；
 `<unb>.im.lock` 是文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开。
+
+### 用户和登录
+
+一个用户可以有多个闲鱼账号，一个闲鱼账号只归一个用户。每个用户在后台里只看得到、只能操作自己名下的账号：
+商品、订单、消息、改动记录都跟着账号走；别人的账号在接口上和不存在一样（404）。
+扫码登录、导入 Cookie、插件推过来的账号归到当前用户；已经归别人的拒绝，凭证也不保存。
+
+用户由命令行建，没有注册入口。命令行是管理员工具，不分用户：
+
+```bash
+uv run xym users add alice          # 建用户，提示输两遍密码（至少 8 位）
+uv run xym users list               # 每个用户名下的闲鱼账号
+uv run xym users passwd alice       # 重设密码，这个用户已经登录的地方都要重新登录
+uv run xym users disable alice      # 停用：登录不了，已经登录的地方马上失效，插件令牌也不认；enable 恢复
+uv run xym accounts assign <unb> bob  # 把闲鱼账号分给用户（从别人名下转过来时先确认）
+```
+
+有用户以前就登录过的闲鱼账号没有归属，谁都看不到；**建第一个用户时自动归给这个用户**，之后的用 `xym accounts assign` 分。
+
+登录鉴权（[app/auth.py](app/auth.py)）：
+
+- 登录后拿到**访问令牌**（JWT，HS256，15 分钟），前端只放在内存里，每个请求带在 `Authorization: Bearer` 头上；
+- **刷新令牌**放在 HttpOnly cookie 里（只发给 `/api/auth`，SameSite=Strict，页面脚本读不到），访问令牌过期了拿它换新的。
+  7 天没打开就过期，最长 30 天要重新输密码。退出登录时在服务端删掉；
+- 改密码、停用时，这个用户之前发的访问令牌立即作废（每个请求查一次用户）；
+- 同一个用户名 15 分钟里输错 5 次密码，要等这 15 分钟过去才能再试；
+- 签名密钥在 `data/auth.key`，第一次启动时生成。删掉它再重启，发出去的访问令牌全部作废（刷新令牌还在，页面会自动换新的）；
+- 消息推送（SSE）用 fetch 读，访问令牌放在请求头里，不放进网址（网址会被记进访问日志）。
 
 ### 数据库
 
@@ -204,14 +239,25 @@ deploy/deploy.sh            # 默认主机 huawei
 排在 `pg-tunnel` 后面启动，连不上数据库就 5 秒后重试；除了 `data/` 别的目录都只读。连接串在 `/etc/xym.env`（root 才能读）。
 看日志：`journalctl -u xym -f`。
 
-访问后台：接口没有登录鉴权，不对公网开，从自己电脑开一条隧道（用 18000，免得和本机开发用的 8000 撞上）：
+访问后台：接口是明文 http，不对公网开，从自己电脑开一条隧道（用 18000，免得和本机开发用的 8000 撞上）：
 
 ```bash
 ssh -N -L 18000:127.0.0.1:8000 huawei
 ```
 
-然后打开 http://127.0.0.1:18000 。服务器上的账号单独登录：页面上点「登录闲鱼」用 App 扫码，凭证存在服务器的
-`data/accounts/`，不从本机拷。登录同步插件要推给服务器的话，把插件里的地址改成 http://127.0.0.1:18000 。
+然后打开 http://127.0.0.1:18000 。服务器上的用户和闲鱼账号都和本机分开：
+
+- 用户在服务器上建。在自己电脑上用 `deploy/xym.sh` 跑服务器上的 `xym` 命令（SSH 过去、带上 `/etc/xym.env`、
+  以 `xym` 用户运行，密码在本机终端里输）：
+
+  ```bash
+  deploy/xym.sh users add alice
+  deploy/xym.sh users list
+  ```
+
+  第一个用户会接手服务器上以前扫码登录的闲鱼账号。
+- 闲鱼账号在页面上点「登录闲鱼」用 App 扫码，凭证存在服务器的 `data/accounts/`，不从本机拷。
+  登录同步插件要推给服务器的话，把插件里的地址改成 http://127.0.0.1:18000 ，令牌在服务器的页面上生成。
 
 应用服务器第一次装（root）：
 
@@ -259,31 +305,35 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回，顺手记下登录态
+  users.py         管理后台的用户：密码（argon2id）、刷新令牌、插件令牌、闲鱼账号归属
+  auth.py          登录鉴权：访问令牌（JWT）、签名密钥、输错密码限次
   db.py            本地库（PostgreSQL）：连接、启动时确认表结构是最新的
-  schema.py        表结构：商品、订单、它们的改动记录，消息的会话和消息；Alembic 从这里生成迁移
+  schema.py        表结构：用户、刷新令牌、账号归属，商品、订单、它们的改动记录，消息的会话和消息；Alembic 从这里生成迁移
   sqlite_import.py 一次性把以前 SQLite 库里的数据导进 PostgreSQL（xym import-sqlite）
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
-  login.py         管理后台的登录：扫码（后台任务跑 QRLogin，前端轮询进度，同一时间只有一张码）和导入浏览器的 Cookie
+  login.py         登录闲鱼：扫码（后台任务跑 QRLogin，前端轮询进度，每个用户同一时间只有一张码）和导入浏览器的 Cookie
   keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
   messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连；回复
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
-deploy/          部署：deploy.sh 发版，xym.service 跑后台，pg-tunnel.service 连数据库的 SSH 隧道
+deploy/          部署：deploy.sh 发版，xym.sh 在服务器上跑 xym 命令，xym.service 跑后台，pg-tunnel.service 连数据库的 SSH 隧道
 .github/workflows/ci.yml  GitHub Actions：后端 ruff + pytest，前端 oxlint + 构建
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
-  src/lib/api.ts       后端接口和类型
+  src/lib/api.ts       后端接口和类型；请求都带访问令牌，过期了自动换新的
+  src/lib/auth.ts      登录状态：访问令牌放在内存里，打开页面时拿 cookie 里的刷新令牌换
+  src/features/auth/   登录页、改密码、浏览器插件令牌
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
   src/features/orders/ 订单管理页：添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
   src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史、回复，新消息通过 SSE 实时刷新
 extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理后台（manifest v3，不用打包，直接加载目录）
-  background.js    cookie 变化和每 10 分钟时推给 /api/login/import，登录没变不推
+  background.js    cookie 变化和每 10 分钟时推给 /api/login/import（带插件令牌），登录没变不推
   lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址），可以直接用 node 测
-  popup.html/js    弹窗：同步结果、立即同步、管理后台地址
+  popup.html/js    弹窗：同步结果、立即同步、管理后台地址、插件令牌
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
 ```

@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
 import { createContext, useContext, useState, type ReactNode } from "react"
 
+import { useUser } from "@/hooks/use-auth"
 import { api, type Account } from "@/lib/api"
 
-const STORAGE_KEY = "xym.account"
+// 每个用户记自己上次选的账号
+const storageKey = (userId: number) => `xym.account.${userId}`
 
 interface AccountContextValue {
   accounts: Account[]
@@ -16,24 +18,25 @@ interface AccountContextValue {
 
 const AccountContext = createContext<AccountContextValue | null>(null)
 
-function readStored(): string | null {
+function readStored(key: string): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY)
+    return localStorage.getItem(key)
   } catch {
     return null
   }
 }
 
 export function AccountProvider({ children }: { children: ReactNode }) {
+  const key = storageKey(useUser().id)
   const query = useQuery({ queryKey: ["accounts"], queryFn: api.accounts })
-  const [selected, setSelected] = useState(readStored)
+  const [selected, setSelected] = useState(() => readStored(key))
   const accounts = query.data ?? []
   const account = accounts.find((a) => a.id === selected)?.id ?? accounts[0]?.id ?? null
 
   const setAccount = (id: string) => {
     setSelected(id)
     try {
-      localStorage.setItem(STORAGE_KEY, id)
+      localStorage.setItem(key, id)
     } catch {
       // 隐私模式等情况下存不了，只影响下次打开时默认选哪个账号
     }

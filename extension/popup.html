@@ -68,6 +68,9 @@
         margin-bottom: 4px;
         font-size: 12px;
       }
+      label.spaced {
+        margin-top: 10px;
+      }
       input {
         box-sizing: border-box;
         width: 100%;
@@ -89,6 +92,9 @@
     <label for="server">管理后台地址（只能是本机）</label>
     <input id="server" type="url" spellcheck="false" />
     <p id="server-error" class="error" hidden>只能填本机地址，比如 http://127.0.0.1:8000</p>
+    <label for="token" class="spaced">插件令牌（管理后台左下角用户菜单里生成）</label>
+    <input id="token" type="password" spellcheck="false" autocomplete="off" placeholder="xymp_…" />
+    <p id="token-error" class="error" hidden>不像插件令牌，要 xymp_ 开头，从管理后台整串复制过来</p>
     <p class="muted">浏览器里点“退出登录”，管理后台的登录也会失效。</p>
     <script type="module" src="popup.js"></script>
   </body>

@@ -1,12 +1,39 @@
-"""测试共用的假平台。"""
+"""测试共用的假平台，和管理后台的测试用户。"""
 
+import asyncio
 import json
 import time
 from urllib.parse import parse_qs
 
 import httpx
 
+from app import db
+from app.users import Users
+
 UNB = "42"
+PASSWORD = "test-password"
+
+
+def add_user(database_url, username="tester", accounts=()):
+    """建管理后台的用户（已经有就直接用），把 `accounts` 里的闲鱼账号归给这个用户。返回用户 ID。"""
+    conn = db.connect(database_url)
+    try:
+        users = Users(conn)
+        user = users.find(username) or asyncio.run(users.create(username, PASSWORD))
+        for account_id in accounts:
+            users.assign(account_id, user.id)
+        return user.id
+    finally:
+        conn.close()
+
+
+def sign_in(client, username="tester", password=PASSWORD):
+    """登录，之后这个 client 的请求都带上访问令牌。返回访问令牌。"""
+    resp = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["access_token"]
+    client.headers["authorization"] = f"Bearer {token}"
+    return token
 
 
 RENEW_OK = {"content": {"data": {"processFinished": True, "resultCode": 100}}}

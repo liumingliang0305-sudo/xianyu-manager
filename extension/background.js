@@ -1,5 +1,6 @@
 // 登录同步插件的后台：闲鱼的登录 cookie 变了（登录、退出、网页端续期）就推给本机的管理后台，
 // 另外每 10 分钟看一次，补上后台没开时漏掉的。推之前比一下登录指纹，没变就不推。
+// 推的时候带上插件令牌（管理后台用户菜单里生成），推过来的账号归到令牌的主人名下。
 
 import {
   DEFAULT_SERVER,
@@ -33,14 +34,25 @@ async function sync({ force = false } = {}) {
     return
   }
   const key = loginKey(cookies)
-  const { lastKey, server = DEFAULT_SERVER } = await chrome.storage.local.get(["lastKey", "server"])
+  const {
+    lastKey,
+    server = DEFAULT_SERVER,
+    token,
+  } = await chrome.storage.local.get(["lastKey", "server", "token"])
+  if (!token) {
+    await setStatus({
+      ok: false,
+      message: "还没填插件令牌：在管理后台左下角的用户菜单里生成，填到这里",
+    })
+    return
+  }
   if (!force && key === lastKey) return
 
   let resp
   try {
     resp = await fetch(`${server}/api/login/import`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ cookie: cookieHeader(cookies) }),
     })
   } catch {
@@ -60,10 +72,12 @@ async function sync({ force = false } = {}) {
     return
   }
   if (isFinalFailure(resp.status)) await chrome.storage.local.set({ lastKey: key })
-  const message =
-    resp.status === 401
-      ? "浏览器里的闲鱼登录已经失效，打开 goofish.com 刷新一下（网页会自动续期），续上以后会再同步"
-      : (body?.message ?? `管理后台返回 HTTP ${resp.status}`)
+  let message = body?.message ?? `管理后台返回 HTTP ${resp.status}`
+  if (body?.code === "unauthenticated") {
+    message = "插件令牌不对或者已经作废，到管理后台用户菜单里重新生成，填到这里"
+  } else if (resp.status === 401) {
+    message = "浏览器里的闲鱼登录已经失效，打开 goofish.com 刷新一下（网页会自动续期），续上以后会再同步"
+  }
   await setStatus({ ok: false, message })
 }
 

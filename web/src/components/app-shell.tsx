@@ -2,20 +2,24 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   CheckIcon,
   ChevronsUpDownIcon,
-  FishIcon,
+  KeyRoundIcon,
+  LogOutIcon,
   MessageSquareIcon,
   MoonIcon,
   PackageIcon,
+  PlugIcon,
   QrCodeIcon,
   RefreshCwIcon,
   ShoppingCartIcon,
   SunIcon,
+  UserIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useState, type ComponentType } from "react"
 import { NavLink, Outlet } from "react-router"
 import { toast } from "sonner"
 
+import { Brand } from "@/components/brand"
 import { Callout } from "@/components/callout"
 import { GuardBanner } from "@/components/guard-banner"
 import { LoginDialog } from "@/components/login-dialog"
@@ -30,8 +34,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
+import { PasswordDialog } from "@/features/auth/password-dialog"
+import { PluginTokenDialog } from "@/features/auth/plugin-token-dialog"
 import { useAccount } from "@/hooks/use-account"
+import { useUser } from "@/hooks/use-auth"
 import { api, errorMessage, type Account, type LoginState, type LoginStatus } from "@/lib/api"
+import { signOut } from "@/lib/auth"
 import { dateTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -46,17 +54,6 @@ const NAV: NavEntry[] = [
   { to: "/orders", label: "订单", icon: ShoppingCartIcon },
   { to: "/messages", label: "消息", icon: MessageSquareIcon },
 ]
-
-function Brand({ compact = false }: { compact?: boolean }) {
-  return (
-    <div className="flex items-center gap-2 text-[15px] font-semibold">
-      <span className="flex size-7 items-center justify-center rounded-lg bg-brand text-brand-foreground">
-        <FishIcon className="size-4" />
-      </span>
-      <span className={cn(compact && "sr-only sm:not-sr-only")}>闲鱼管理</span>
-    </div>
-  )
-}
 
 const NAV_ITEM =
   "flex items-center gap-2 rounded-lg text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -223,6 +220,57 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
   )
 }
 
+/** 登录的用户：改密码、插件令牌、退出登录。宽屏放在侧栏底下，窄屏是顶栏右边一个图标。 */
+function UserMenu({ compact = false }: { compact?: boolean }) {
+  const { username } = useUser()
+  const [dialog, setDialog] = useState<"password" | "plugin" | null>(null)
+  const close = () => setDialog(null)
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          {compact ? (
+            <Button variant="ghost" size="icon-sm" aria-label={`用户 ${username}`}>
+              <UserIcon />
+            </Button>
+          ) : (
+            <button
+              type="button"
+              className={cn(NAV_ITEM, NAV_IDLE, "h-8 w-full px-2.5 aria-expanded:bg-sidebar-accent")}
+            >
+              <UserIcon className="size-4" />
+              <span className="min-w-0 flex-1 truncate text-left">{username}</span>
+              <ChevronsUpDownIcon className="size-4 shrink-0" />
+            </button>
+          )}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align={compact ? "end" : "start"} side={compact ? "bottom" : "top"} className="w-56">
+          <DropdownMenuLabel>
+            <span className="block text-xs font-normal text-muted-foreground">已登录</span>
+            <span className="block truncate">{username}</span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setDialog("password")}>
+            <KeyRoundIcon />
+            修改密码
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setDialog("plugin")}>
+            <PlugIcon />
+            浏览器插件令牌
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => void signOut()}>
+            <LogOutIcon />
+            退出登录
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {dialog === "password" && <PasswordDialog onClose={close} />}
+      {dialog === "plugin" && <PluginTokenDialog onClose={close} />}
+    </>
+  )
+}
+
 function ThemeToggle({ labelled = false }: { labelled?: boolean }) {
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme === "dark"
@@ -357,7 +405,8 @@ export function AppShell() {
         </div>
         <AccountSwitcher onLogin={openLogin} />
         <SideNav />
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col gap-0.5">
+          <UserMenu />
           <ThemeToggle labelled />
         </div>
       </aside>
@@ -367,6 +416,7 @@ export function AppShell() {
         <div className="flex-1" />
         <AccountSwitcher onLogin={openLogin} compact />
         <ThemeToggle />
+        <UserMenu compact />
       </header>
       <main id="main" tabIndex={-1} className="min-h-[calc(100svh-3rem)] outline-none min-w-0 flex-1 bg-background lg:my-2 lg:mr-2 lg:min-h-[calc(100svh-1rem)] lg:rounded-2xl lg:border">
         <div className="mx-auto max-w-[1200px] px-4 pt-5 pb-10 sm:px-6 lg:pt-6">

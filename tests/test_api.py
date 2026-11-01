@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from fakes import UNB, keep_login_cookies
+from fakes import UNB, add_user, keep_login_cookies, sign_in
 from fastapi.testclient import TestClient
 
 from app.api import create_app
@@ -18,7 +18,9 @@ def client(tmp_path, accounts, platform, database_url):
         interval=0,
         web_dist=None,
     )
+    add_user(database_url, accounts=[UNB])
     with TestClient(app) as client:
+        sign_in(client)
         yield client
 
 

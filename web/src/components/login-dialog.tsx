@@ -51,7 +51,7 @@ export function LoginDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>登录闲鱼</DialogTitle>
-          <DialogDescription>登录凭证只保存在本机，不要外传。</DialogDescription>
+          <DialogDescription>登录凭证保存在管理后台所在的机器上，登录的账号归到你名下。</DialogDescription>
         </DialogHeader>
         {/* 切走时扫码面板会卸载，后台跟着取消这张码；切回来换一张新的 */}
         <Tabs defaultValue="qr" className="gap-4">
@@ -111,8 +111,8 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
       }}
     >
       <p className="rounded-md bg-muted px-2.5 py-2 text-xs">
-        装了浏览器插件“闲鱼管理 · 登录同步”（在项目的 extension 目录）就不用粘贴，
-        浏览器里的登录会自动同步过来。下面是没装插件时的办法。
+        装了浏览器插件“闲鱼管理 · 登录同步”（在项目的 extension 目录）、填好插件令牌（左下角用户菜单里生成）
+        就不用粘贴，浏览器里的登录会自动同步过来。下面是没装插件时的办法。
       </p>
       <ol className="list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
         <li>在电脑浏览器登录 goofish.com，头像菜单里打开“保存登录信息”</li>

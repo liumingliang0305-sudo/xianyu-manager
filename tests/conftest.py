@@ -12,11 +12,12 @@ import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
+from argon2 import PasswordHasher
 from fakes import UNB, FakePlatform
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app import db, schema
+from app import auth, db, schema, users
 from app.accounts import Accounts
 from xianyu_core import renew
 from xianyu_core.credential import Credential
@@ -71,6 +72,20 @@ def database(database_url):
     conn = db.connect(database_url)
     yield conn
     conn.close()
+
+
+@pytest.fixture(autouse=True)
+def auth_key(tmp_path, monkeypatch):
+    """访问令牌的签名密钥放在临时目录里，不碰 data/auth.key。"""
+    path = tmp_path / "auth.key"
+    monkeypatch.setattr(auth, "KEY_PATH", path)
+    return path
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hash(monkeypatch):
+    """测试里算密码哈希用最低的参数，不然每建一个用户、每登录一次都要几十毫秒。"""
+    monkeypatch.setattr(users, "_hasher", PasswordHasher(time_cost=1, memory_cost=8, parallelism=1))
 
 
 @pytest.fixture(autouse=True)

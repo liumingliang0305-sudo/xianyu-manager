@@ -7,6 +7,7 @@ import { BrowserRouter } from "react-router"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ApiError } from "@/lib/api"
+import { checkSession, getAuthState, subscribeAuth } from "@/lib/auth"
 
 import App from "./App"
 import "./index.css"
@@ -33,6 +34,12 @@ const queryClient: QueryClient = new QueryClient({
     },
   },
 })
+
+// 退出登录（包括别的标签页里退出、登录过期）时清掉缓存的数据，下一个登录的用户看不到上一个用户的
+subscribeAuth(() => {
+  if (getAuthState().status === "signed-out") queryClient.clear()
+})
+void checkSession()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

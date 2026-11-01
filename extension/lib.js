@@ -56,9 +56,16 @@ export function normalizeServer(text) {
   return url.origin
 }
 
+/** 插件令牌：管理后台用户菜单里生成的，xymp_ 开头。不像令牌时返回 null */
+export function normalizeToken(text) {
+  const token = text.trim()
+  return /^xymp_[\w-]{20,}$/.test(token) ? token : null
+}
+
 /**
  * 推送失败以后要不要等 cookie 变了再推。
- * 4xx 是这份 cookie 本身的问题（过期、缺字段、不是这个账号），原样再推也一样；
+ * 4xx 是这份 cookie 本身的问题（过期、缺字段、不是这个账号、归了别的用户）或者插件令牌不对，
+ * 原样再推也一样（换了令牌会重新推）；
  * 429 限流和 5xx（风控、平台出错）是暂时的，定时任务会再试。
  */
 export function isFinalFailure(status) {

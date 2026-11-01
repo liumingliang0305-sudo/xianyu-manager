@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 
-import { api, messageStreamUrl, type Conversation, type ImStatus } from "@/lib/api"
+import { api, subscribeMessages, type Conversation, type ImStatus } from "@/lib/api"
 
 export const messageKeys = {
   conversations: (account: string) => ["conversations", account] as const,
@@ -72,14 +72,16 @@ function setIm(client: ReturnType<typeof useQueryClient>, account: string, im: I
 /** 补拉时一下子来很多条通知，攒一小会儿再刷新 */
 const REFRESH_DELAY = 200
 
+const REFRESH_EVENTS = new Set(["message", "messages", "conversations"])
+
 /**
  * 订阅后台的消息推送：有新消息、补拉完就刷新会话和消息，连接状态直接写进缓存。
- * 断了浏览器会自己重连，重连上先刷新一次，补上断开期间漏掉的通知。
+ * 断了会自己重连，重连上先刷新一次，补上断开期间漏掉的通知。
  */
 export function useMessageStream(account: string) {
   const client = useQueryClient()
   useEffect(() => {
-    const source = new EventSource(messageStreamUrl(account))
+    const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const refresh = () => {
       if (timer) return
@@ -89,17 +91,17 @@ export function useMessageStream(account: string) {
         client.invalidateQueries({ queryKey: ["messages", account] })
       }, REFRESH_DELAY)
     }
-    const onStatus = (event: MessageEvent<string>) => {
-      const { type: _type, ...im } = JSON.parse(event.data) as ImStatus & { type: string }
-      setIm(client, account, im)
+    const onEvent = (type: string, data: string) => {
+      if (type === "status") {
+        const { type: _type, ...im } = JSON.parse(data) as ImStatus & { type: string }
+        setIm(client, account, im)
+      } else if (REFRESH_EVENTS.has(type)) {
+        refresh()
+      }
     }
-    source.addEventListener("open", refresh)
-    source.addEventListener("status", onStatus)
-    for (const type of ["message", "messages", "conversations"]) {
-      source.addEventListener(type, refresh)
-    }
+    void subscribeMessages(account, controller.signal, refresh, onEvent)
     return () => {
-      source.close()
+      controller.abort()
       clearTimeout(timer)
     }
   }, [account, client])

@@ -1,6 +1,12 @@
 """业务命令行。
 
+uv run xym users add <用户名>                    建管理后台的用户（提示输入密码）
+                                                第一个用户顺带接手已有的闲鱼账号
+uv run xym users list                           每个用户名下的闲鱼账号
+uv run xym users passwd <用户名>                 重设密码，这个用户已经登录的地方都要重新登录
+uv run xym users disable|enable <用户名>         停用 / 恢复
 uv run xym accounts check                       检查各账号登录态，会话过期时先试免密续期
+uv run xym accounts assign <unb> <用户名> [-y]   把闲鱼账号分给用户（从别人名下转过来时先确认）
 uv run xym accounts unblock [-y]                手动解除风控熔断（先在闲鱼 App 完成验证）
 uv run xym items sync [--stats]                 从平台同步我的商品到本地库
 uv run xym items list [--all] [--status sold]   看本地库里的商品
@@ -24,6 +30,7 @@ uv run xym serve [--port 8000]                  启动管理后台，只监听�
 uv run xym import-sqlite [data/xianyu.db]       一次性：把以前 SQLite 库里的数据导进 PostgreSQL
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
+命令行是管理员工具，不分用户，能操作所有账号；部署在服务器上时用 deploy/xym.sh 在服务器上跑。
 数据库连接串取环境变量 DATABASE_URL（或 --db），没设时连本机 docker 里的（docker compose up -d）。
 """
 
@@ -31,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import logging
 import sys
 from pathlib import Path
@@ -52,6 +60,7 @@ from app.accounts import (
 from app.items import ItemRecord, ItemService, PriceGuardError
 from app.messages import ConversationRecord, MessageStore
 from app.orders import OrderRecord, OrderService
+from app.users import Users, normalize_username
 from xianyu_core.clock import beijing_time
 from xianyu_core.errors import CircuitOpenError, XianyuError
 from xianyu_core.item import cent_to_yuan, status_text, yuan_to_cent
@@ -147,9 +156,13 @@ def _parse_fees(pairs: list[str]) -> dict[str, int]:
 
 
 async def run(args: argparse.Namespace) -> int:
+    if args.command == "users":
+        return await run_users(args)
     if args.command == "accounts":
         if args.accounts_command == "unblock":
             return unblock_account(args)
+        if args.accounts_command == "assign":
+            return assign_account(args)
         return await check_accounts(args)
     if args.command == "orders":
         return await run_orders(args)
@@ -195,6 +208,79 @@ def run_messages(args: argparse.Namespace) -> int:
         print(f"{_time(m.sent_at)}  {who}：{m.text}")
     if conversation.stale:
         print("\n平台上还有本地没拉到的消息，在管理后台打开这个会话会补拉")
+    return 0
+
+
+def _read_password(prompt: str = "密码") -> str:
+    """终端里输两遍，不回显；不是终端时从标准输入读一行（脚本里用）。"""
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    password = getpass.getpass(f"{prompt}：")
+    if getpass.getpass("再输一遍：") != password:
+        raise ValueError("两次输的密码不一样")
+    return password
+
+
+async def run_users(args: argparse.Namespace) -> int:
+    users = Users(db.connect(args.db))
+    if args.users_command == "list":
+        rows = users.list()
+        if not rows:
+            print("还没有用户，用 xym users add <用户名> 建一个")
+            return 0
+        print(f"{'用户':<16} {'状态':<4}  闲鱼账号")
+        for user in rows:
+            owned = ", ".join(sorted(users.account_ids(user.id))) or "-"
+            print(f"{user.username:<16} {'停用' if user.disabled else '正常':<4}  {owned}")
+        return 0
+    if args.users_command == "add":
+        name = normalize_username(args.username)
+        if users.find(name):
+            raise ValueError(f"用户 {name} 已经有了")
+        first = not users.list()
+        user = await users.create(name, _read_password())
+        print(f"已建用户 {user.username}")
+        if first:
+            # 有用户以前登录的闲鱼账号都没有归属，谁都看不到，交给第一个用户
+            ownerless = [a for a in Accounts(args.accounts).ids() if users.owner(a) is None]
+            for account_id in ownerless:
+                users.assign(account_id, user.id)
+            if ownerless:
+                print(f"已有的闲鱼账号归到 {user.username} 名下：{', '.join(ownerless)}")
+        return 0
+
+    user = users.find(args.username)
+    if user is None:
+        raise ValueError(f"没有用户 {args.username}")
+    if args.users_command == "passwd":
+        await users.set_password(user.id, _read_password("新密码"))
+        print(f"{user.username} 的密码改好了，已经登录的地方要重新登录")
+    elif args.users_command == "disable":
+        users.set_disabled(user.id, True)
+        print(f"已停用 {user.username}：登录不了，已经登录的地方马上失效，插件令牌也不认了")
+    else:
+        users.set_disabled(user.id, False)
+        print(f"已恢复 {user.username}")
+    return 0
+
+
+def assign_account(args: argparse.Namespace) -> int:
+    account = Accounts(args.accounts).resolve(args.unb)
+    users = Users(db.connect(args.db))
+    user = users.find(args.username)
+    if user is None:
+        raise ValueError(f"没有用户 {args.username}")
+    owner = users.owner(account)
+    if owner == user.id:
+        print(f"账号 {account} 本来就在 {user.username} 名下")
+        return 0
+    if owner is not None:
+        previous = users.get(owner)
+        name = previous.username if previous else owner
+        if not _confirm(f"账号 {account} 现在归 {name}，转给 {user.username}？", args.yes):
+            return 1
+    users.assign(account, user.id)
+    print(f"账号 {account} 归到 {user.username} 名下了")
     return 0
 
 
@@ -418,12 +504,16 @@ def serve(args: argparse.Namespace) -> int:
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
-            f"警告：接口没有登录鉴权，监听 {args.host} 意味着别人也能操作你的闲鱼账号",
+            f"警告：接口是明文 http，监听 {args.host} 时密码、令牌、闲鱼 cookie 都在网络上明文传，"
+            "对外开要放在 HTTPS 反向代理后面",
             file=sys.stderr,
         )
     if not (WEB_DIST / "index.html").is_file():
         print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
-    db.connect(args.db).close()  # 连不上、表结构不是最新的，启动前就报出来
+    conn = db.connect(args.db)  # 连不上、表结构不是最新的，启动前就报出来
+    if not Users(conn).list():
+        print("还没有用户，页面上登录不了，先运行 xym users add <用户名>", file=sys.stderr)
+    conn.close()
     app = create_app(
         database_url=args.db,
         guard=make_guard(args.guard),
@@ -464,8 +554,24 @@ def main(argv: list[str] | None = None) -> int:
         dest="accounts_command", required=True
     )
     accounts.add_parser("check", help="检查登录态，会话过期时先试免密续期")
+    p = accounts.add_parser("assign", help="把闲鱼账号分给管理后台的用户")
+    p.add_argument("unb", help="闲鱼账号 unb")
+    p.add_argument("username")
+    p.add_argument("-y", "--yes", action="store_true", help="从别人名下转过来时不再确认")
     p = accounts.add_parser("unblock", help="手动解除风控熔断")
     p.add_argument("-y", "--yes", action="store_true", help="不再确认")
+
+    users = sub.add_parser("users", help="管理后台的用户").add_subparsers(
+        dest="users_command", required=True
+    )
+    users.add_parser("list", help="每个用户名下的闲鱼账号")
+    for name, help_text in (
+        ("add", "建用户，提示输入密码；第一个用户顺带接手已有的闲鱼账号"),
+        ("passwd", "重设密码"),
+        ("disable", "停用"),
+        ("enable", "恢复停用的用户"),
+    ):
+        users.add_parser(name, help=help_text).add_argument("username")
 
     items = sub.add_parser("items", help="商品管理").add_subparsers(
         dest="items_command", required=True
@@ -541,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("path", nargs="?", type=Path, default=Path("data/xianyu.db"))
 
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
-    p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")
+    p.add_argument("--host", default="127.0.0.1", help="明文 http，不要直接监听公网地址")
     p.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
