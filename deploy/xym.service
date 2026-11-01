@@ -1,0 +1,24 @@
+# 应用服务器上的管理后台：xym serve（接口 + 打包好的前端），只监听本机 8000，从自己电脑走 SSH 隧道访问。
+# 代码在 /opt/xianyu-manager（deploy/deploy.sh 传上来），连接串在 /etc/xym.env（DATABASE_URL=...，权限 600）。
+# 数据库走 pg-tunnel 那条隧道；启动时连不上就退出，5 秒后再试。
+[Unit]
+Description=xianyu-manager admin (xym serve)
+After=network-online.target pg-tunnel.service
+Wants=network-online.target pg-tunnel.service
+
+[Service]
+User=xym
+WorkingDirectory=/opt/xianyu-manager
+EnvironmentFile=/etc/xym.env
+ExecStart=/opt/xianyu-manager/.venv/bin/xym serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# 只有 data/（凭证、熔断状态）能写，别的都只读
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/xianyu-manager/data
+
+[Install]
+WantedBy=multi-user.target

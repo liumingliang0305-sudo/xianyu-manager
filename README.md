@@ -187,11 +187,47 @@ ssh -N -L 15432:127.0.0.1:5432 huawei-pg
 DATABASE_URL=postgresql://xianyu:密码@127.0.0.1:15432/xianyu uv run alembic current
 ```
 
-另外：
+#### 发版
 
-- 每次发版先 `uv run alembic upgrade head` 再重启 `xym serve`。想先看要执行的 SQL：`uv run alembic upgrade head --sql`；
-- 凭证（`data/accounts/`）和熔断状态（`data/guard.json`）还是本地文件，要一起放到应用服务器上，权限收紧；
-- 后台接口没有登录鉴权，不要直接监听公网地址，先加鉴权或者只通过 SSH 隧道访问。
+在自己电脑上、项目根目录运行，把已提交的代码（HEAD）部署到应用服务器：
+
+```bash
+deploy/deploy.sh            # 默认主机 huawei
+```
+
+它会：用 `git archive` 导出已提交的代码（没提交的改动不会上去），在本机打包前端，rsync 到服务器的
+`/opt/xianyu-manager`（服务器上的 `.venv` 和 `data/` 不动），然后在服务器上 `uv sync --locked --no-dev`、
+`alembic upgrade head`、重启 `xym`，等接口能访问了才算完。服务器上不用装 Node。
+第一次装依赖从 PyPI 下载比较慢（十几分钟），之后 uv 有缓存，只下变了的包。
+
+后台由 systemd 的 `xym` 服务跑（[deploy/xym.service](deploy/xym.service)）：以不能登录的 `xym` 用户运行，只监听服务器本机 8000，
+排在 `pg-tunnel` 后面启动，连不上数据库就 5 秒后重试；除了 `data/` 别的目录都只读。连接串在 `/etc/xym.env`（root 才能读）。
+看日志：`journalctl -u xym -f`。
+
+访问后台：接口没有登录鉴权，不对公网开，从自己电脑开一条隧道（用 18000，免得和本机开发用的 8000 撞上）：
+
+```bash
+ssh -N -L 18000:127.0.0.1:8000 huawei
+```
+
+然后打开 http://127.0.0.1:18000 。服务器上的账号单独登录：页面上点「登录闲鱼」用 App 扫码，凭证存在服务器的
+`data/accounts/`，不从本机拷。登录同步插件要推给服务器的话，把插件里的地址改成 http://127.0.0.1:18000 。
+
+应用服务器第一次装（root）：
+
+```bash
+# uv：装和本机一样的版本（服务器从 GitHub 下载很慢的话，在本机下载好 scp 上去，核对 sha256）
+install -m 755 uv uvx /usr/local/bin/
+useradd --system --no-create-home --home-dir /opt/xianyu-manager/data --shell /usr/sbin/nologin xym
+install -d -m 755 /opt/xianyu-manager
+install -d -m 700 -o xym -g xym /opt/xianyu-manager/data /opt/xianyu-manager/data/accounts
+# 连接串：DATABASE_URL=postgresql://xianyu:密码@127.0.0.1:5432/xianyu
+install -m 600 /dev/null /etc/xym.env && vi /etc/xym.env
+cp deploy/xym.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable xym
+# 然后在自己电脑上跑 deploy/deploy.sh
+```
+
+想先看迁移要执行的 SQL：服务器上 `cd /opt/xianyu-manager && set -a && . /etc/xym.env && .venv/bin/alembic upgrade head --sql`。
 
 在代码里用：
 
@@ -235,7 +271,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
-deploy/          部署用的文件：应用服务器连数据库的 SSH 隧道（systemd）
+deploy/          部署：deploy.sh 发版，xym.service 跑后台，pg-tunnel.service 连数据库的 SSH 隧道
 .github/workflows/ci.yml  GitHub Actions：后端 ruff + pytest，前端 oxlint + 构建
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
