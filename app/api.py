@@ -109,7 +109,7 @@ class SendIn(BaseModel):
 
 def create_app(
     *,
-    db_path: str | Path = db.DEFAULT_PATH,
+    database_url: str | None = None,
     accounts_dir: str | Path = DEFAULT_DIR,
     transport: httpx.AsyncBaseTransport | None = None,
     interval: float = 1.5,
@@ -121,12 +121,14 @@ def create_app(
     im_connect: Callable[..., Awaitable[Any]] = websockets.connect,
     im_options: dict[str, Any] | None = None,
 ) -> FastAPI:
-    """`login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
+    """`database_url`：数据库连接串，不给时用 db.default_url()（环境变量 DATABASE_URL）。
+    `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态（和命令行共用）。
+    `login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
 
     `messages`：连不连即时消息。不连时消息接口只能看本地库里已有的。
     `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
     """
-    accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard(db_path))
+    accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def save_login(credential: Credential) -> None:
@@ -139,7 +141,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        conn = db.connect(db_path)
+        conn = db.connect(database_url)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
         hub = MessageHub(

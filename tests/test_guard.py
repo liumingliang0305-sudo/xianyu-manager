@@ -178,11 +178,11 @@ def test_other_errors_do_not_trip(clock):
 
 
 def test_cli_unblock(tmp_path, accounts):
-    db_path = tmp_path / "xianyu.db"
-    make_guard(db_path).trip(UNB, "RGV587")
-    argv = ["--accounts", str(accounts.root), "--db", str(db_path), "accounts", "unblock", "-y"]
+    path = tmp_path / "guard.json"
+    make_guard(path).trip(UNB, "RGV587")
+    argv = ["--accounts", str(accounts.root), "--guard", str(path), "accounts", "unblock", "-y"]
     assert cli.main(argv) == 0
-    assert make_guard(db_path).block(UNB) is None
+    assert make_guard(path).block(UNB) is None
 
 
 def test_check_during_block_is_risk_without_request(accounts, platform):

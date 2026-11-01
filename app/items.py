@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from app.accounts import Accounts
+from app.db import Database, Row
 from xianyu_core.item import ItemApi, ItemCard, ItemDetail, cent_to_yuan
 
 T = TypeVar("T")
@@ -53,8 +53,8 @@ class ItemRecord:
     synced_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> ItemRecord:
-        return cls(**{**dict(row), "on_platform": bool(row["on_platform"])})
+    def from_row(cls, row: Row) -> ItemRecord:
+        return cls(**row)
 
 
 @dataclass
@@ -69,8 +69,8 @@ class ItemOp:
     created_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> ItemOp:
-        return cls(**{**dict(row), "detail": json.loads(row["detail"]), "ok": bool(row["ok"])})
+    def from_row(cls, row: Row) -> ItemOp:
+        return cls(**{**row, "detail": json.loads(row["detail"])})
 
 
 @dataclass
@@ -88,7 +88,7 @@ class ItemService:
 
     def __init__(
         self,
-        db: sqlite3.Connection,
+        db: Database,
         accounts: Accounts,
         *,
         interval: float = 1.5,
@@ -118,20 +118,20 @@ class ItemService:
 
         now = time.time()
         known = {
-            row["item_id"]: bool(row["on_platform"])
+            row["item_id"]: row["on_platform"]
             for row in self._db.execute(
-                "SELECT item_id, on_platform FROM items WHERE account_id = ?", (account_id,)
+                "SELECT item_id, on_platform FROM items WHERE account_id = %s", (account_id,)
             )
         }
         result = SyncResult()
-        with self._db:
+        with self._db.transaction():
             for card in cards:
                 self._upsert(account_id, card, details.get(card.item_id), now)
                 (result.updated if card.item_id in known else result.added).append(card.item_id)
             seen = {card.item_id for card in cards}
             result.gone = [i for i, on in known.items() if on and i not in seen]
             self._db.executemany(
-                "UPDATE items SET on_platform = 0 WHERE account_id = ? AND item_id = ?",
+                "UPDATE items SET on_platform = false WHERE account_id = %s AND item_id = %s",
                 [(account_id, item_id) for item_id in result.gone],
             )
         return result
@@ -139,19 +139,19 @@ class ItemService:
     def list(
         self, account_id: str, *, status: int | None = None, include_gone: bool = False
     ) -> list[ItemRecord]:
-        sql = "SELECT * FROM items WHERE account_id = ?"
+        sql = "SELECT * FROM items WHERE account_id = %s"
         args: list[Any] = [account_id]
         if status is not None:
-            sql += " AND status = ?"
+            sql += " AND status = %s"
             args.append(status)
         if not include_gone:
-            sql += " AND on_platform = 1"
+            sql += " AND on_platform"
         sql += " ORDER BY status, first_seen_at DESC"
         return [ItemRecord.from_row(r) for r in self._db.execute(sql, args)]
 
     def get(self, account_id: str, item_id: str) -> ItemRecord | None:
         row = self._db.execute(
-            "SELECT * FROM items WHERE account_id = ? AND item_id = ?", (account_id, item_id)
+            "SELECT * FROM items WHERE account_id = %s AND item_id = %s", (account_id, item_id)
         ).fetchone()
         return ItemRecord.from_row(row) if row else None
 
@@ -159,10 +159,10 @@ class ItemService:
         """从平台拉一次实时详情，顺手更新本地库里的价格和计数。"""
         async with self._accounts.mtop(account_id) as mtop:
             detail = await ItemApi(mtop).detail(item_id)
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE items SET price_cent = ?, status = ?, want_count = ?, browse_count = ?,"
-                " collect_count = ? WHERE account_id = ? AND item_id = ?",
+                "UPDATE items SET price_cent = %s, status = %s, want_count = %s, browse_count = %s,"
+                " collect_count = %s WHERE account_id = %s AND item_id = %s",
                 (
                     detail.price_cent,
                     detail.status,
@@ -176,12 +176,12 @@ class ItemService:
         return detail
 
     def history(self, account_id: str, item_id: str | None = None, limit: int = 50) -> list[ItemOp]:
-        sql = "SELECT * FROM item_ops WHERE account_id = ?"
+        sql = "SELECT * FROM item_ops WHERE account_id = %s"
         args: list[Any] = [account_id]
         if item_id:
-            sql += " AND item_id = ?"
+            sql += " AND item_id = %s"
             args.append(item_id)
-        sql += " ORDER BY id DESC LIMIT ?"
+        sql += " ORDER BY id DESC LIMIT %s"
         args.append(limit)
         return [ItemOp.from_row(r) for r in self._db.execute(sql, args)]
 
@@ -217,9 +217,9 @@ class ItemService:
                     item_id, price_cent=price_cent, orig_price_cent=orig_price_cent, detail=detail
                 ),
             )
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE items SET price_cent = ? WHERE account_id = ? AND item_id = ?",
+                "UPDATE items SET price_cent = %s WHERE account_id = %s AND item_id = %s",
                 (price_cent, account_id, item_id),
             )
         return old
@@ -243,9 +243,9 @@ class ItemService:
             await self._record(
                 account_id, item_id, "downshelf", {}, ItemApi(mtop).downshelf(item_id)
             )
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE items SET on_platform = 0 WHERE account_id = ? AND item_id = ?",
+                "UPDATE items SET on_platform = false WHERE account_id = %s AND item_id = %s",
                 (account_id, item_id),
             )
 
@@ -253,9 +253,9 @@ class ItemService:
         """删除商品，平台上不可恢复。本地记录一并删掉，改动记录保留。"""
         async with self._accounts.mtop(account_id) as mtop:
             await self._record(account_id, item_id, "delete", {}, ItemApi(mtop).delete(item_id))
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "DELETE FROM items WHERE account_id = ? AND item_id = ?", (account_id, item_id)
+                "DELETE FROM items WHERE account_id = %s AND item_id = %s", (account_id, item_id)
             )
 
     # ---- 内部 ----
@@ -288,10 +288,10 @@ class ItemService:
         *,
         error: str | None,
     ) -> None:
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
                 "INSERT INTO item_ops (account_id, item_id, action, detail, ok, error, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     account_id,
                     item_id,
@@ -311,7 +311,7 @@ class ItemService:
             INSERT INTO items (account_id, item_id, title, price_cent, status, category_id,
                                pic_url, want_count, browse_count, collect_count, on_platform,
                                first_seen_at, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s)
             ON CONFLICT (account_id, item_id) DO UPDATE SET
                 title = excluded.title,
                 price_cent = excluded.price_cent,
@@ -321,7 +321,7 @@ class ItemService:
                 want_count = excluded.want_count,
                 browse_count = COALESCE(excluded.browse_count, items.browse_count),
                 collect_count = COALESCE(excluded.collect_count, items.collect_count),
-                on_platform = 1,
+                on_platform = true,
                 synced_at = excluded.synced_at
             """,
             (

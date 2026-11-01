@@ -25,7 +25,6 @@ import fcntl
 import json
 import logging
 import os
-import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -37,6 +36,7 @@ import httpx
 import websockets
 
 from app.accounts import Accounts
+from app.db import Database, Row
 from app.login import same_login
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -88,7 +88,7 @@ SELECT c.account_id, c.cid, c.peer_id,
            SELECT sender_name FROM messages
            WHERE account_id = c.account_id AND cid = c.cid AND sender_id = c.peer_id
                  AND sender_name != ''
-           ORDER BY sent_at DESC LIMIT 1
+           ORDER BY sent_at DESC NULLS LAST LIMIT 1
        ), '') AS peer_name,
        c.peer_type, c.biz_type, c.item_id, c.item_title,
        c.item_pic, c.order_id, c.unread, c.updated_at, c.fetched_at, c.older_more,
@@ -96,11 +96,11 @@ SELECT c.account_id, c.cid, c.peer_id,
        COALESCE(m.text, '') AS last_text, COALESCE(m.sender_id, '') AS last_sender_id,
        m.sent_at AS last_sent_at
 FROM conversations c
-LEFT JOIN messages m ON m.rowid = (
-    SELECT rowid FROM messages
+LEFT JOIN LATERAL (
+    SELECT text, sender_id, sent_at FROM messages
     WHERE account_id = c.account_id AND cid = c.cid
-    ORDER BY sent_at DESC, message_id DESC LIMIT 1
-)
+    ORDER BY sent_at DESC NULLS LAST, message_id DESC LIMIT 1
+) m ON true
 """
 
 
@@ -181,17 +181,9 @@ class ConversationRecord:
     stale: bool  # 平台上有本地还没拉的消息，点开时要补拉
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> ConversationRecord:
-        data = dict(row)
-        older_more = data["older_more"]
-        fetched_at = data["fetched_at"]
-        return cls(
-            **{
-                **data,
-                "older_more": None if older_more is None else bool(older_more),
-                "stale": fetched_at is None or (data["updated_at"] or 0) > fetched_at,
-            }
-        )
+    def from_row(cls, row: Row) -> ConversationRecord:
+        fetched_at = row["fetched_at"]
+        return cls(**row, stale=fetched_at is None or (row["updated_at"] or 0) > fetched_at)
 
 
 @dataclass
@@ -210,7 +202,7 @@ class MessageRecord:
     images: list[ChatImage]  # 图片消息里的图，别的类型是空的
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> MessageRecord:
+    def from_row(cls, row: Row) -> MessageRecord:
         data = dict(row)
         raw = data.pop("raw")
         images = _stored_images(raw) if data["content_type"] == IMAGE_CONTENT_TYPE else []
@@ -228,15 +220,15 @@ def _stored_images(raw: str) -> list[ChatImage]:
 
 
 class MessageStore:
-    def __init__(self, db: sqlite3.Connection):
+    def __init__(self, db: Database):
         self._db = db
 
     # ---- 查询 ----
 
     def conversations(self, account_id: str) -> list[ConversationRecord]:
-        """最近有动静的在前。和网页版一样不给 visible 是 0 的（在 App 里删掉的会话）。"""
+        """最近有动静的在前。和网页版一样不给 visible 是 false 的（在 App 里删掉的会话）。"""
         rows = self._db.execute(
-            _CONVERSATION_SELECT + " WHERE c.account_id = ? AND c.visible = 1"
+            _CONVERSATION_SELECT + " WHERE c.account_id = %s AND c.visible"
             " ORDER BY COALESCE(c.updated_at, c.first_seen_at) DESC, c.cid",
             (account_id,),
         )
@@ -244,7 +236,7 @@ class MessageStore:
 
     def conversation(self, account_id: str, cid: str) -> ConversationRecord | None:
         row = self._db.execute(
-            _CONVERSATION_SELECT + " WHERE c.account_id = ? AND c.cid = ?", (account_id, cid)
+            _CONVERSATION_SELECT + " WHERE c.account_id = %s AND c.cid = %s", (account_id, cid)
         ).fetchone()
         return ConversationRecord.from_row(row) if row else None
 
@@ -254,8 +246,8 @@ class MessageStore:
         """一个会话最新的 `limit` 条消息（按时间正序），和本地还有没有更早的。"""
         rows = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
-            " text, item_id, received_at, raw FROM messages WHERE account_id = ? AND cid = ?"
-            " ORDER BY sent_at DESC, message_id DESC LIMIT ?",
+            " text, item_id, received_at, raw FROM messages WHERE account_id = %s AND cid = %s"
+            " ORDER BY sent_at DESC NULLS LAST, message_id DESC LIMIT %s",
             (account_id, cid, limit + 1),
         ).fetchall()
         records = [MessageRecord.from_row(r) for r in rows[:limit]]
@@ -265,7 +257,7 @@ class MessageStore:
         row = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
             " text, item_id, received_at, raw FROM messages"
-            " WHERE account_id = ? AND message_id = ?",
+            " WHERE account_id = %s AND message_id = %s",
             (account_id, message_id),
         ).fetchone()
         return MessageRecord.from_row(row) if row else None
@@ -275,7 +267,7 @@ class MessageStore:
         stale = {
             row["cid"]
             for row in self._db.execute(
-                "SELECT cid FROM conversations WHERE account_id = ?"
+                "SELECT cid FROM conversations WHERE account_id = %s"
                 " AND (fetched_at IS NULL OR COALESCE(updated_at, 0) > fetched_at)",
                 (account_id,),
             )
@@ -290,7 +282,7 @@ class MessageStore:
         rows = self._db.execute(
             """
             SELECT c.cid FROM conversations c
-            WHERE c.account_id = ? AND c.peer_name = '' AND c.named_at IS NULL
+            WHERE c.account_id = %s AND c.peer_name = '' AND c.named_at IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM messages m
                   WHERE m.account_id = c.account_id AND m.cid = c.cid AND m.sender_id = c.peer_id
@@ -304,7 +296,7 @@ class MessageStore:
     def older(self, account_id: str, cid: str) -> tuple[int | None, bool | None]:
         """往前翻历史消息的 (游标, 平台上还有没有更早的)。"""
         row = self._db.execute(
-            "SELECT older_cursor, older_more FROM conversations WHERE account_id = ? AND cid = ?",
+            "SELECT older_cursor, older_more FROM conversations WHERE account_id = %s AND cid = %s",
             (account_id, cid),
         ).fetchone()
         if row is None or row["older_more"] is None:
@@ -313,18 +305,18 @@ class MessageStore:
 
     def newest_message_id(self, account_id: str, cid: str) -> str | None:
         row = self._db.execute(
-            "SELECT message_id FROM messages WHERE account_id = ? AND cid = ?"
-            " ORDER BY sent_at DESC, message_id DESC LIMIT 1",
+            "SELECT message_id FROM messages WHERE account_id = %s AND cid = %s"
+            " ORDER BY sent_at DESC NULLS LAST, message_id DESC LIMIT 1",
             (account_id, cid),
         ).fetchone()
         return row["message_id"] if row else None
 
     def oldest_sent_at(self, account_id: str, cid: str) -> float | None:
         row = self._db.execute(
-            "SELECT MIN(sent_at) FROM messages WHERE account_id = ? AND cid = ?",
+            "SELECT MIN(sent_at) AS sent_at FROM messages WHERE account_id = %s AND cid = %s",
             (account_id, cid),
         ).fetchone()
-        return row[0]
+        return row["sent_at"]
 
     # ---- 写入 ----
 
@@ -337,14 +329,14 @@ class MessageStore:
         显示时再从消息里找）；查过的，会话列表里有新的才换。
         """
         now = time.time() if now is None else now
-        with self._db:
+        with self._db.transaction():
             for conv in conversations:
                 self._db.execute(
                     """
                     INSERT INTO conversations (account_id, cid, peer_id, peer_name, peer_type,
                                                biz_type, item_id, item_title, item_pic, order_id,
                                                unread, visible, muted, updated_at, first_seen_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (account_id, cid) DO UPDATE SET
                         peer_id = COALESCE(NULLIF(excluded.peer_id, ''), conversations.peer_id),
                         peer_name = CASE WHEN conversations.named_at IS NULL
@@ -391,7 +383,7 @@ class MessageStore:
     ) -> list[ChatMessage]:
         """存消息，已经有的跳过。返回新存的。"""
         now = time.time() if now is None else now
-        with self._db:
+        with self._db.transaction():
             return [m for m in messages if self._insert(account_id, m, now)]
 
     def add_live(self, account_id: str, message: ChatMessage, now: float | None = None) -> bool:
@@ -404,14 +396,14 @@ class MessageStore:
         mine = message.sender_id == account_id
         named = not mine and message.sender_name != ""
         at = message.sent_at or now
-        with self._db:
+        with self._db.transaction():
             if not self._insert(account_id, message, now):
                 return False
             self._db.execute(
-                "INSERT OR IGNORE INTO conversations"
+                "INSERT INTO conversations"
                 " (account_id, cid, peer_id, peer_name, biz_type, item_id, updated_at,"
                 "  first_seen_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (
                     account_id,
                     message.cid,
@@ -427,11 +419,11 @@ class MessageStore:
                 """
                 UPDATE conversations SET
                     fetched_at = CASE WHEN fetched_at >= COALESCE(updated_at, 0)
-                                      THEN MAX(fetched_at, ?) ELSE fetched_at END,
-                    updated_at = MAX(COALESCE(updated_at, 0), ?),
-                    unread = CASE WHEN ? THEN 0 ELSE unread + 1 END,
-                    visible = 1
-                WHERE account_id = ? AND cid = ?
+                                      THEN GREATEST(fetched_at, %s) ELSE fetched_at END,
+                    updated_at = GREATEST(COALESCE(updated_at, 0), %s),
+                    unread = CASE WHEN %s THEN 0 ELSE unread + 1 END,
+                    visible = true
+                WHERE account_id = %s AND cid = %s
                 """,
                 (at, at, mine, account_id, message.cid),
             )
@@ -440,10 +432,10 @@ class MessageStore:
     def mark_fetched(self, account_id: str, cid: str, now: float | None = None) -> None:
         """最新消息补拉完了：本地跟上了平台。"""
         now = time.time() if now is None else now
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE conversations SET fetched_at = COALESCE(updated_at, ?)"
-                " WHERE account_id = ? AND cid = ?",
+                "UPDATE conversations SET fetched_at = COALESCE(updated_at, %s)"
+                " WHERE account_id = %s AND cid = %s",
                 (now, account_id, cid),
             )
 
@@ -453,33 +445,33 @@ class MessageStore:
         会话类型还不知道的（推送先建出来的会话）留着，等会话列表补上类型。
         """
         types = sorted(USER_SESSION_TYPES)
-        marks = ", ".join("?" * len(types))
-        with self._db:
+        marks = ", ".join(["%s"] * len(types))
+        with self._db.transaction():
             rows = self._db.execute(
                 "SELECT account_id, cid FROM conversations"
-                f" WHERE (biz_type != '' AND biz_type NOT IN ({marks})) OR peer_id = ?",
+                f" WHERE (biz_type != '' AND biz_type NOT IN ({marks})) OR peer_id = %s",
                 (*types, SYSTEM_USER_ID),
             ).fetchall()
             for row in rows:
                 key = (row["account_id"], row["cid"])
-                self._db.execute("DELETE FROM messages WHERE account_id = ? AND cid = ?", key)
-                self._db.execute("DELETE FROM conversations WHERE account_id = ? AND cid = ?", key)
+                for table in ("messages", "conversations"):
+                    self._db.execute(f"DELETE FROM {table} WHERE account_id = %s AND cid = %s", key)
         return len(rows)
 
     def forget_unsure_names(self) -> int:
         """以前存的消息，sender_name 直接取的提醒标题，交易卡片、自动回复的标题不是昵称
         （"交易消息"、"你有一条新消息"），清掉。返回清了几条，清过一次以后是 0。"""
         types = sorted(PERSON_CONTENT_TYPES)
-        marks = ", ".join("?" * len(types))
-        with self._db:
+        marks = ", ".join(["%s"] * len(types))
+        with self._db.transaction():
             cursor = self._db.execute(
                 f"""
                 UPDATE messages SET sender_name = ''
                 WHERE sender_name != '' AND (
                     content_type IS NULL OR content_type NOT IN ({marks})
                     OR COALESCE(
-                        json_extract(raw, '$.message.extension.reminderNotice'),
-                        json_extract(raw, '$."1"."10".reminderNotice'), '') != ?)
+                        raw::json #>> '{{message,extension,reminderNotice}}',
+                        raw::json #>> '{{1,10,reminderNotice}}', '') != %s)
                 """,
                 (*types, PERSON_NOTICE),
             )
@@ -488,33 +480,33 @@ class MessageStore:
     def set_peer_name(self, account_id: str, cid: str, name: str, now: float | None = None) -> None:
         """记下向平台查到的对方昵称。查不到（空字符串）也记下查过了，不再反复查。"""
         now = time.time() if now is None else now
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE conversations SET peer_name = COALESCE(NULLIF(?, ''), peer_name),"
-                " named_at = ? WHERE account_id = ? AND cid = ?",
+                "UPDATE conversations SET peer_name = COALESCE(NULLIF(%s, ''), peer_name),"
+                " named_at = %s WHERE account_id = %s AND cid = %s",
                 (name, now, account_id, cid),
             )
 
     def clear_unread(self, account_id: str, cid: str) -> None:
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE conversations SET unread = 0 WHERE account_id = ? AND cid = ?",
+                "UPDATE conversations SET unread = 0 WHERE account_id = %s AND cid = %s",
                 (account_id, cid),
             )
 
     def set_older(self, account_id: str, cid: str, cursor: int | None, more: bool) -> None:
-        with self._db:
+        with self._db.transaction():
             self._db.execute(
-                "UPDATE conversations SET older_cursor = ?, older_more = ?"
-                " WHERE account_id = ? AND cid = ?",
+                "UPDATE conversations SET older_cursor = %s, older_more = %s"
+                " WHERE account_id = %s AND cid = %s",
                 (cursor, more, account_id, cid),
             )
 
     def _insert(self, account_id: str, m: ChatMessage, now: float) -> bool:
         cursor = self._db.execute(
-            "INSERT OR IGNORE INTO messages (account_id, message_id, cid, sender_id, sender_name,"
+            "INSERT INTO messages (account_id, message_id, cid, sender_id, sender_name,"
             " sent_at, content_type, text, item_id, raw, received_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
             (
                 account_id,
                 m.message_id,

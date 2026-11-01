@@ -2,7 +2,6 @@ import asyncio
 import base64
 import json
 import os
-import sqlite3
 import time
 from collections import defaultdict
 
@@ -12,7 +11,7 @@ from fake_im import FakeIm, chat_message, conversation, entry, history_message
 from fakes import UNB
 from fastapi.testclient import TestClient
 
-from app import db, messages
+from app import messages
 from app.api import create_app, sse_events
 from app.messages import ImLock, ImOfflineError, MessageHub, MessageStore
 from xianyu_core.credential import Credential
@@ -39,13 +38,14 @@ async def wait_until(check, timeout: float = 2.0) -> None:
             await asyncio.sleep(0.005)
 
 
-def make_store() -> MessageStore:
-    return MessageStore(db.connect(":memory:"))
+@pytest.fixture
+def store(database) -> MessageStore:
+    return MessageStore(database)
 
 
-def make_hub(accounts, server: FakeIm) -> MessageHub:
+def make_hub(store: MessageStore, accounts, server: FakeIm) -> MessageHub:
     return MessageHub(
-        make_store(), accounts, defaultdict(asyncio.Lock), connect=server.connect, **IM_OPTIONS
+        store, accounts, defaultdict(asyncio.Lock), connect=server.connect, **IM_OPTIONS
     )
 
 
@@ -73,8 +73,7 @@ def live(n: int, *, cid: str = "777", sender: str = "200") -> ChatMessage:
 # ---------- 本地库 ----------
 
 
-def test_store_conversations_and_messages():
-    store = make_store()
+def test_store_conversations_and_messages(store):
     store.save_conversations(UNB, [conv("777", "200", unread=2, modified_ms=T + 5000)])
     store.save_conversations(UNB, [conv("778", "201", modified_ms=T + 9000)])
     assert [c.cid for c in store.conversations(UNB)] == ["778", "777"]
@@ -107,8 +106,7 @@ def test_store_conversations_and_messages():
     assert store.stale(UNB, ["778", "777", "999"]) == ["778", "777"]
 
 
-def test_store_live_message_updates_conversation():
-    store = make_store()
+def test_store_live_message_updates_conversation(store):
     store.save_conversations(UNB, [conv("777", "200", unread=1, modified_ms=T)])
     store.mark_fetched(UNB, "777")
 
@@ -128,8 +126,7 @@ def test_store_live_message_updates_conversation():
     assert c.stale
 
 
-def test_store_peer_name_falls_back_to_messages_from_the_person():
-    store = make_store()
+def test_store_peer_name_falls_back_to_messages_from_the_person(store):
     nameless = conversation("777", UNB, "200", last_from="me")
     store.save_conversations(UNB, [Conversation.parse(nameless, UNB)])
     assert store.conversation(UNB, "777").peer_name == ""
@@ -145,9 +142,8 @@ def test_store_peer_name_falls_back_to_messages_from_the_person():
     assert store.nameless(UNB, ["777"]) == []
 
 
-def test_store_forgets_names_that_are_not_nicknames():
+def test_store_forgets_names_that_are_not_nicknames(store):
     """以前存的消息，sender_name 直接取的提醒标题；卡片、自动回复的那种清掉，人发的留着。"""
-    store = make_store()
     store.save_conversations(UNB, [conv("777", "200")])
     shipped, card, person = live(1), live(2), live(3)
     shipped.sender_name = "交易消息"
@@ -159,8 +155,7 @@ def test_store_forgets_names_that_are_not_nicknames():
     assert [m.sender_name for m in store.messages(UNB, "777")[0]] == ["", "", "买家小王"]
 
 
-def test_store_hides_deleted_conversations_until_a_new_message():
-    store = make_store()
+def test_store_hides_deleted_conversations_until_a_new_message(store):
     hidden = Conversation.parse(conversation("778", UNB, "201", unread=1), UNB)
     hidden.visible = False  # 在 App 里删掉了，网页版不显示，未读也不算
     store.save_conversations(UNB, [conv("777", "200"), hidden])
@@ -170,8 +165,7 @@ def test_store_hides_deleted_conversations_until_a_new_message():
     assert {c.cid for c in store.conversations(UNB)} == {"777", "778"}
 
 
-def test_store_returns_images_of_image_messages():
-    store = make_store()
+def test_store_returns_images_of_image_messages(store):
     store.save_conversations(UNB, [conv("777", "200")])
     image = ChatMessage.from_history(chat(1))
     image.content_type = 2
@@ -188,8 +182,7 @@ def test_store_returns_images_of_image_messages():
     assert store.message(UNB, "m1").images == records["m1"].images
 
 
-def test_store_name_follows_the_list_until_looked_up():
-    store = make_store()
+def test_store_name_follows_the_list_until_looked_up(store):
     store.save_conversations(UNB, [conv("777", "200")])
     assert store.conversation(UNB, "777").peer_name == "买家小王"
     # 没查过的跟着会话列表走：列表里看不出来了，就不再用列表上次给的
@@ -213,12 +206,12 @@ async def open_conn(server: FakeIm) -> ImConnection:
     )
 
 
-def test_fetch_newest_joins_local_and_older_fills_gaps(accounts, monkeypatch):
+def test_fetch_newest_joins_local_and_older_fills_gaps(accounts, monkeypatch, store):
     monkeypatch.setattr(messages, "MESSAGE_PAGE", 5)
     monkeypatch.setattr(messages, "MAX_NEWEST_PAGES", 2)
     server = FakeIm()
     server.chats["777"] = [chat(n) for n in range(12)]
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     store = hub.store
     store.save_conversations(UNB, [conv("777", "200")])
 
@@ -255,8 +248,8 @@ def test_fetch_newest_joins_local_and_older_fills_gaps(accounts, monkeypatch):
     assert not store.conversation(UNB, "777").stale
 
 
-def test_fetch_needs_im_online(accounts):
-    hub = make_hub(accounts, FakeIm())
+def test_fetch_needs_im_online(accounts, store):
+    hub = make_hub(store, accounts, FakeIm())
     with pytest.raises(ImOfflineError):
         run(hub.fetch(UNB, "777"))
 
@@ -264,7 +257,7 @@ def test_fetch_needs_im_online(accounts):
 # ---------- 长期在线 ----------
 
 
-def test_hub_backfills_on_connect_and_saves_live_messages(accounts, platform):
+def test_hub_backfills_on_connect_and_saves_live_messages(accounts, platform, store):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [
@@ -275,7 +268,7 @@ def test_hub_backfills_on_connect_and_saves_live_messages(accounts, platform):
         "777": [chat(1), chat(2, sender=UNB)],
         "778": [chat(0, cid="778", sender="201")],
     }
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     store = hub.store
     events = []
 
@@ -306,7 +299,7 @@ def test_hub_backfills_on_connect_and_saves_live_messages(accounts, platform):
     assert {"type": "message", "cid": "777", "message_id": "m9"} in events
 
 
-def test_hub_looks_up_missing_names(accounts, platform, monkeypatch):
+def test_hub_looks_up_missing_names(accounts, platform, monkeypatch, store):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [
@@ -323,7 +316,7 @@ def test_hub_looks_up_missing_names(accounts, platform, monkeypatch):
     }
     platform.nicks = {"778": "小林同学", "780": "晚风ovo"}
     monkeypatch.setattr(messages, "NAME_LOOKUPS", 1)
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     store = hub.store
 
     async def go():
@@ -342,34 +335,7 @@ def test_hub_looks_up_missing_names(accounts, platform, monkeypatch):
     assert store.nameless(UNB, ["780"]) == []  # 查过了不再查
 
 
-def test_old_database_gets_new_columns_and_drops_wrong_names(tmp_path):
-    path = tmp_path / "xianyu.db"
-    old = sqlite3.connect(path)
-    old.execute(
-        "CREATE TABLE conversations (account_id TEXT NOT NULL, cid TEXT NOT NULL,"
-        " peer_id TEXT NOT NULL DEFAULT '', peer_name TEXT NOT NULL DEFAULT '',"
-        " biz_type TEXT NOT NULL DEFAULT '', item_id TEXT NOT NULL DEFAULT '',"
-        " item_title TEXT NOT NULL DEFAULT '', item_pic TEXT NOT NULL DEFAULT '',"
-        " order_id TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0,"
-        " updated_at REAL, fetched_at REAL, older_cursor INTEGER, older_more INTEGER,"
-        " first_seen_at REAL NOT NULL, PRIMARY KEY (account_id, cid))"
-    )
-    old.execute(
-        "INSERT INTO conversations (account_id, cid, peer_id, peer_name, biz_type, first_seen_at)"
-        " VALUES (?, '777', '200', '取暖器', '1', 0)",
-        (UNB,),
-    )
-    old.commit()
-    old.close()
-
-    store = MessageStore(db.connect(path))
-    c = store.conversation(UNB, "777")
-    assert (c.peer_name, c.peer_type) == ("", "")  # 以前存的是商品简称，清掉
-    store.set_peer_name(UNB, "777", "小林同学")
-    assert MessageStore(db.connect(path)).conversation(UNB, "777").peer_name == "小林同学"
-
-
-def test_hub_keeps_only_conversations_with_people(accounts):
+def test_hub_keeps_only_conversations_with_people(accounts, store):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [
@@ -379,7 +345,7 @@ def test_hub_keeps_only_conversations_with_people(accounts):
         conversation("802", UNB, "202", modified_ms=T + 2000, biz_type="66"),  # 网页版不显示
         conversation("803", UNB, "203", modified_ms=T + 1000, biz_type="15"),
     ]
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     store = hub.store
     # 以前存进来的系统会话（类型 23，对方是 0）和它的消息，启动时删掉
     old = conv("700", "0", modified_ms=T)
@@ -410,12 +376,12 @@ def test_hub_keeps_only_conversations_with_people(accounts):
     assert store.messages(UNB, "801") == ([], False)
 
 
-def test_hub_stops_when_login_expired_and_resumes_after_new_login(accounts, platform):
+def test_hub_stops_when_login_expired_and_resumes_after_new_login(accounts, platform, store):
     platform.session_expired = True
     platform.renew_ok = False
     server = FakeIm()
     server.conversations_more = False
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
 
     async def go():
         await hub.start()
@@ -437,10 +403,10 @@ def test_hub_stops_when_login_expired_and_resumes_after_new_login(accounts, plat
     assert len(server.sockets) == 1
 
 
-def test_hub_waits_for_manual_reconnect_after_session_removed(accounts):
+def test_hub_waits_for_manual_reconnect_after_session_removed(accounts, store):
     server = FakeIm()
     server.conversations_more = False
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
 
     async def go():
         await hub.start()
@@ -476,10 +442,10 @@ def test_im_lock_one_holder_at_a_time(tmp_path):
     assert path.exists()  # 不删文件
 
 
-def test_second_hub_does_not_connect_while_another_holds_the_account(accounts):
+def test_second_hub_does_not_connect_while_another_holds_the_account(accounts, store):
     server = FakeIm()
     server.conversations_more = False
-    first, second = make_hub(accounts, server), make_hub(accounts, server)
+    first, second = make_hub(store, accounts, server), make_hub(store, accounts, server)
 
     async def go():
         await first.start()
@@ -504,7 +470,7 @@ def test_second_hub_does_not_connect_while_another_holds_the_account(accounts):
 # ---------- 标已读 ----------
 
 
-def test_hub_marks_read_with_the_newest_message(accounts):
+def test_hub_marks_read_with_the_newest_message(accounts, store):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [
@@ -513,7 +479,7 @@ def test_hub_marks_read_with_the_newest_message(accounts):
         conversation("779", UNB, "202", modified_ms=T + 1000),
     ]
     server.chats = {"777": [chat(1), chat(2)], "778": [], "779": [chat(3, cid="779")]}
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     store = hub.store
     events = []
 
@@ -537,12 +503,12 @@ def test_hub_marks_read_with_the_newest_message(accounts):
     assert {"type": "conversations"} in events
 
 
-def test_hub_mark_read_fetches_newest_first_when_behind(accounts):
+def test_hub_mark_read_fetches_newest_first_when_behind(accounts, store):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [conversation("777", UNB, "200", unread=1, modified_ms=T + 9000)]
     server.chats = {"777": [chat(1)]}
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
 
     async def go():
         await start_synced(hub)
@@ -582,10 +548,10 @@ async def start_synced(hub: MessageHub) -> None:
 
 
 @pytest.mark.parametrize("echo", ["after", "before", None])
-def test_hub_sends_reply_and_stores_it_once(accounts, echo):
+def test_hub_sends_reply_and_stores_it_once(accounts, echo, store):
     server = send_server()
     server.send_echo = echo
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
     events = []
 
     async def go():
@@ -610,9 +576,9 @@ def test_hub_sends_reply_and_stores_it_once(accounts, echo):
     assert {"type": "message", "cid": "777", "message_id": record.message_id} in events
 
 
-def test_hub_send_checks_before_sending(accounts):
+def test_hub_send_checks_before_sending(accounts, store):
     server = send_server()
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
 
     async def go():
         await start_synced(hub)
@@ -632,10 +598,10 @@ def test_hub_send_checks_before_sending(accounts):
     assert server.sends == 0
 
 
-def test_hub_send_rate_limit_and_uncertain_result(accounts):
+def test_hub_send_rate_limit_and_uncertain_result(accounts, store):
     accounts.guard = Guard(limits={SEND: 1}, max_wait=0)
     server = send_server()
-    hub = make_hub(accounts, server)
+    hub = make_hub(store, accounts, server)
 
     async def go():
         await start_synced(hub)
@@ -651,8 +617,8 @@ def test_hub_send_rate_limit_and_uncertain_result(accounts):
     assert [m.text for m in hub.store.messages(UNB, "777")[0]] == ["第1条"]
 
 
-def test_sse_sends_status_then_events_and_pings(accounts):
-    hub = make_hub(accounts, FakeIm())
+def test_sse_sends_status_then_events_and_pings(accounts, store):
+    hub = make_hub(store, accounts, FakeIm())
 
     async def go():
         stream = sse_events(hub, UNB, ping=0.05)
@@ -672,8 +638,8 @@ def test_sse_sends_status_then_events_and_pings(accounts):
     assert not hub._subscribers[UNB]
 
 
-def test_sse_ends_when_server_is_closing(accounts):
-    hub = make_hub(accounts, FakeIm())
+def test_sse_ends_when_server_is_closing(accounts, store):
+    hub = make_hub(store, accounts, FakeIm())
 
     async def go():
         stream = sse_events(hub, UNB, ping=5)
@@ -694,13 +660,12 @@ def test_sse_ends_when_server_is_closing(accounts):
 # ---------- 接口 ----------
 
 
-def test_api_reads_local_messages_when_im_off(tmp_path, accounts, platform):
-    db_path = tmp_path / "xianyu.db"
-    store = MessageStore(db.connect(db_path))
+def test_api_reads_local_messages_when_im_off(accounts, platform, store, database_url):
     store.save_conversations(UNB, [conv("777", "200", unread=1)])
     store.save_messages(UNB, [live(n) for n in range(3)])
     app = create_app(
-        db_path=db_path,
+        database_url=database_url,
+        guard=Guard(),
         accounts_dir=accounts.root,
         transport=httpx.MockTransport(platform),
         web_dist=None,
@@ -727,13 +692,14 @@ def check_local_api(client):
     assert resp.status_code == 400
 
 
-def test_api_with_im_online(accounts, platform):
+def test_api_with_im_online(accounts, platform, database_url):
     server = FakeIm()
     server.conversations_more = False
     server.conversations = [conversation("777", UNB, "200", modified_ms=T + 3000)]
     server.chats = {"777": [chat(n) for n in range(4)]}
     app = create_app(
-        db_path=":memory:",
+        database_url=database_url,
+        guard=Guard(),
         accounts_dir=accounts.root,
         transport=httpx.MockTransport(platform),
         web_dist=None,

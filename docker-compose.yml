@@ -1,0 +1,26 @@
+# 本地开发用的 PostgreSQL。前后端照旧用命令启动，见 README「快速开始」。
+#
+#   docker compose up -d      启动（数据在 docker 卷 xianyu-manager_pgdata 里，删容器不丢）
+#   docker compose down       停掉
+#
+# 账号密码只给本机用，所以端口只绑 127.0.0.1。测试用同一个实例上的 xianyu_test 库，第一次跑测试时自动建。
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: xianyu
+      POSTGRES_PASSWORD: xianyu
+      POSTGRES_DB: xianyu
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xianyu -d xianyu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

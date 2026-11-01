@@ -21,8 +21,10 @@ uv run xym orders remove <订单ID> [-y]           从本地列表移除，不�
 uv run xym messages list [--all]                看本地库里的会话（消息由 xym serve 在后台收）
 uv run xym messages show <会话ID> [-n 30]        看一个会话最近的消息
 uv run xym serve [--port 8000]                  启动管理后台，只监听本机
+uv run xym import-sqlite [data/xianyu.db]       一次性：把以前 SQLite 库里的数据导进 PostgreSQL
 
 有多个账号时用 --account <unb> 指定。改动类命令会先确认，-y 跳过确认。
+数据库连接串取环境变量 DATABASE_URL（或 --db），没设时连本机 docker 里的（docker compose up -d）。
 """
 
 from __future__ import annotations
@@ -35,9 +37,12 @@ from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING
 
+import psycopg
+
 from app import db
 from app.accounts import (
     DEFAULT_DIR,
+    GUARD_PATH,
     AccountNotFoundError,
     Accounts,
     LoginState,
@@ -150,7 +155,19 @@ async def run(args: argparse.Namespace) -> int:
         return await run_orders(args)
     if args.command == "messages":
         return run_messages(args)
+    if args.command == "import-sqlite":
+        return run_import(args)
     return await run_items(args)
+
+
+def run_import(args: argparse.Namespace) -> int:
+    from app.sqlite_import import import_sqlite
+
+    counts = import_sqlite(args.path, db.connect(args.db))
+    for table, n in counts.items():
+        print(f"{table:<14}{n} 行")
+    print(f"导完了。确认管理后台里数据都在以后，{args.path} 可以删掉")
+    return 0
 
 
 def run_messages(args: argparse.Namespace) -> int:
@@ -182,7 +199,7 @@ def run_messages(args: argparse.Namespace) -> int:
 
 
 def unblock_account(args: argparse.Namespace) -> int:
-    guard = make_guard(args.db)
+    guard = make_guard(args.guard)
     account = Accounts(args.accounts, guard=guard).resolve(args.account)
     block = guard.block(account)
     if not block:
@@ -198,7 +215,7 @@ def unblock_account(args: argparse.Namespace) -> int:
 
 
 async def run_orders(args: argparse.Namespace) -> int:
-    accounts = Accounts(args.accounts, guard=make_guard(args.db))
+    accounts = Accounts(args.accounts, guard=make_guard(args.guard))
     account = accounts.resolve(args.account)
     service = OrderService(db.connect(args.db), accounts)
     cmd = args.orders_command
@@ -291,7 +308,7 @@ async def run_orders(args: argparse.Namespace) -> int:
 
 
 async def run_items(args: argparse.Namespace) -> int:
-    accounts = Accounts(args.accounts, guard=make_guard(args.db))
+    accounts = Accounts(args.accounts, guard=make_guard(args.guard))
     account = accounts.resolve(args.account)
     service = ItemService(db.connect(args.db), accounts)
     cmd = args.items_command
@@ -383,7 +400,7 @@ def _print_login(account_id: str, status: LoginStatus) -> None:
 
 
 async def check_accounts(args: argparse.Namespace) -> int:
-    accounts = Accounts(args.accounts, guard=make_guard(args.db))
+    accounts = Accounts(args.accounts, guard=make_guard(args.guard))
     ids = [accounts.resolve(args.account)] if args.account else accounts.ids()
     if not ids:
         raise AccountNotFoundError(f"{accounts.root} 下没有账号，先用 xianyu login 登录")
@@ -406,8 +423,10 @@ def serve(args: argparse.Namespace) -> int:
         )
     if not (WEB_DIST / "index.html").is_file():
         print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
+    db.connect(args.db).close()  # 连不上、表结构不是最新的，启动前就报出来
     app = create_app(
-        db_path=args.db,
+        database_url=args.db,
+        guard=make_guard(args.guard),
         accounts_dir=args.accounts,
         login_check_interval=LOGIN_CHECK_INTERVAL,
         messages=True,
@@ -437,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
     parser.add_argument("--account", help="账号 unb，只有一个账号时可省略")
     parser.add_argument("--accounts", type=Path, default=DEFAULT_DIR, help="凭证目录")
-    parser.add_argument("--db", type=Path, default=db.DEFAULT_PATH, help="本地数据库文件")
+    parser.add_argument("--db", help="数据库连接串，默认取环境变量 DATABASE_URL")
+    parser.add_argument("--guard", type=Path, default=GUARD_PATH, help="熔断状态文件")
     sub = parser.add_subparsers(dest="command", required=True)
 
     accounts = sub.add_parser("accounts", help="账号").add_subparsers(
@@ -517,6 +537,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("cid", help="会话ID，xym messages list 里第一列")
     p.add_argument("-n", type=int, default=30, help="显示多少条，默认 30")
 
+    p = sub.add_parser("import-sqlite", help="一次性：把以前 SQLite 库里的数据导进 PostgreSQL")
+    p.add_argument("path", nargs="?", type=Path, default=Path("data/xianyu.db"))
+
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
     p.add_argument("--host", default="127.0.0.1", help="接口没有登录鉴权，不要监听公网地址")
     p.add_argument("--port", type=int, default=8000)
@@ -526,9 +549,9 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    if args.command == "serve":
-        return serve(args)
     try:
+        if args.command == "serve":
+            return serve(args)
         return asyncio.run(run(args))
     except (XianyuError, AccountNotFoundError, ValueError) as exc:
         print(f"失败：{exc}", file=sys.stderr)
@@ -537,6 +560,11 @@ def main(argv: list[str] | None = None) -> int:
                 "先到闲鱼 App 或网页完成验证；完成后可以用 xym accounts unblock 提前解除",
                 file=sys.stderr,
             )
+        return 1
+    except (db.SchemaOutdatedError, psycopg.OperationalError) as exc:
+        print(f"数据库：{exc}", file=sys.stderr)
+        if isinstance(exc, psycopg.OperationalError):
+            print("本机开发先启动数据库：docker compose up -d", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130

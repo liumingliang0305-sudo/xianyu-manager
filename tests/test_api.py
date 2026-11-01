@@ -5,12 +5,14 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from xianyu_core.credential import Credential
+from xianyu_core.guard import Guard
 
 
 @pytest.fixture
-def client(tmp_path, accounts, platform):
+def client(tmp_path, accounts, platform, database_url):
     app = create_app(
-        db_path=":memory:",
+        database_url=database_url,
+        guard=Guard(),
         accounts_dir=accounts.root,
         transport=httpx.MockTransport(platform),
         interval=0,
@@ -140,7 +142,7 @@ def test_desc_downshelf_delete(client, platform):
     assert [(it["item_id"], it["on_platform"]) for it in gone] == [("1001", False)]
 
 
-def test_serves_built_frontend_with_spa_fallback(tmp_path, accounts):
+def test_serves_built_frontend_with_spa_fallback(tmp_path, accounts, database_url):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<html>app</html>")
@@ -148,7 +150,9 @@ def test_serves_built_frontend_with_spa_fallback(tmp_path, accounts):
     (dist / "favicon.svg").write_text("<svg/>")
     (tmp_path / "secret.txt").write_text("secret")
 
-    app = create_app(db_path=":memory:", accounts_dir=accounts.root, web_dist=dist)
+    app = create_app(
+        database_url=database_url, guard=Guard(), accounts_dir=accounts.root, web_dist=dist
+    )
     with TestClient(app) as client:
         assert client.get("/").text == "<html>app</html>"
         assert client.get("/items/1001").text == "<html>app</html>"
