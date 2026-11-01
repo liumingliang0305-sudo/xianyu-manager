@@ -43,4 +43,4 @@ for _ in \$(seq 1 30); do
 done
 curl -fsS -o /dev/null http://127.0.0.1:8000/api/health || { journalctl -u xym -n 30 --no-pager; exit 1; }
 "
-echo "已部署 $REV。访问：ssh -N -L 18000:127.0.0.1:8000 $HOST，然后打开 http://127.0.0.1:18000"
+echo "已部署 $REV。访问：https://<应用服务器的公网 IP>（Caddy），或者 ssh -N -L 18000:127.0.0.1:8000 $HOST 走隧道"

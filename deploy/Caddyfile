@@ -12,6 +12,9 @@
 		issuer acme {
 			# IP 地址的证书只有短期（6 天）这一种
 			profile shortlived
+			# 只用 80 上的 http-01 验证：tls-alpn-01 握手里带的是反向解析的域名，
+			# 国内云厂商按未备案域名拦掉（2026-11-01 实测 Connection reset by peer）
+			disable_tlsalpn_challenge
 		}
 	}
 
