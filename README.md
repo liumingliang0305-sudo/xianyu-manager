@@ -365,6 +365,7 @@ extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理�
   background.js    cookie 变化和每 10 分钟时推给 /api/login/import（带插件令牌），登录没变不推
   lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址），可以直接用 node 测
   popup.html/js    弹窗：同步结果、立即同步、管理后台地址、插件令牌
+  icons/           插件图标（奶蛙回眸）；16px 的只取头部，小了也看得出眼睛
 third_party/     拷进来的开源代码（规矩见 third_party/README.md）
 docs/            调研和设计文档
 ```
