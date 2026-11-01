@@ -14,6 +14,7 @@ from fake_im import (
     entry,
     history_message,
     session_activation,
+    trade_card,
 )
 
 from xianyu_core import im
@@ -218,6 +219,94 @@ def test_image_message_from_history_and_push():
         assert message.images == [im.ChatImage(url, 884, 1919)]
         assert message.text == "[图片]"
     assert ChatMessage.from_history(history_message()).images == []
+
+
+def test_trade_card_gives_order_and_role_from_history_and_push():
+    pushed = decode_entry(entry(trade_card(push=True), packer="msgpack")["data"])
+    for message in (ChatMessage.from_history(trade_card()), ChatMessage.parse(pushed)):
+        assert message is not None and message.content_type == 26
+        assert (message.order_id, message.order_role) == ("5127299211174026539", "seller")
+        assert message.text == "[我已付款，等待你发货]"
+    # 链接里的角色大小写不定
+    bought = ChatMessage.from_history(trade_card(order_id="5127546926073005319", role="Buyer"))
+    assert (bought.order_id, bought.order_role) == ("5127546926073005319", "buyer")
+    assert ChatMessage.from_history(history_message()).order_id == ""
+
+
+def card_message(content_type: int, card: dict, task: str = "") -> ChatMessage:
+    model = history_message(text="[卡片]")
+    data = base64.b64encode(json.dumps({"contentType": content_type, **card}).encode()).decode()
+    model["message"]["content"]["custom"].update(type=content_type, data=data)
+    if task:
+        model["message"]["extension"]["bizTag"] = json.dumps({"taskName": task})
+    message = ChatMessage.from_history(model)
+    assert message is not None
+    return message
+
+
+@pytest.mark.parametrize(
+    ("content_type", "card", "task", "expected"),
+    [
+        # 交易提示"[你已发货]"不带订单号
+        (14, {"tip": {"tip": "你已发货"}}, "已发货_卖家", ("", "")),
+        # 退款卡片：链接里是 orderId，角色看 taskName
+        (
+            26,
+            {
+                "dxCard": {
+                    "item": {
+                        "main": {
+                            "targetUrl": "https://h5.m.goofish.com/refundDetail"
+                            "?kun=true&orderId=5127816672001096520"
+                        }
+                    }
+                }
+            },
+            "发起退款申请_买家",
+            ("5127816672001096520", "buyer"),
+        ),
+        # 有的提示直接带 orderId 字段，没有角色
+        (
+            14,
+            {"tip": {"argInfo": {"args": {"orderId": "5127298851039014501"}}}},
+            "神奇鱼塘-蚂蚁森林能量",
+            ("5127298851039014501", ""),
+        ),
+        # 物流卡片：链接在 HTML 里
+        (
+            6,
+            {
+                "textCard": {
+                    "content": '3天后自动确认收货 <a href="fleamarket://order_detail'
+                    '?id=5127801553318005319&role=Buyer">查看详情</a>'
+                }
+            },
+            "签收缩短收货",
+            ("5127801553318005319", "buyer"),
+        ),
+        # 链接里没写角色，看 taskName
+        (
+            26,
+            {
+                "dxCard": {
+                    "item": {
+                        "main": {"targetUrl": "fleamarket://order_detail?id=5127299211174026539"}
+                    }
+                }
+            },
+            "已拍下_未付款_卖家",
+            ("5127299211174026539", "seller"),
+        ),
+    ],
+)
+def test_order_ref_in_other_cards(content_type, card, task, expected):
+    message = card_message(content_type, card, task)
+    assert (message.order_id, message.order_role) == expected
+
+
+def test_order_link_typed_by_a_person_is_not_an_order():
+    text = "fleamarket://order_detail?id=5127299211174026539&role=seller"
+    assert ChatMessage.from_history(history_message(text=text)).order_id == ""
 
 
 def test_chat_message_parse_ignores_other_entries():

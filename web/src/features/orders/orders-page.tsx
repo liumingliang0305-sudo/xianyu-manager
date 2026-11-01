@@ -18,7 +18,7 @@ import { OrderOpsList } from "./order-bits"
 import { OrderDetailSheet } from "./order-detail-sheet"
 import { OrderPriceDialog } from "./order-price-dialog"
 import { OrdersTable, type OrderActionKind } from "./orders-table"
-import { useOrderOps, useOrders, useSyncOrders } from "./queries"
+import { useOrderOps, useOrderStream, useOrders, useSyncOrders } from "./queries"
 import { RemoveOrderDialog } from "./remove-order-dialog"
 
 type Tab = OrderStatus | "all"
@@ -62,6 +62,7 @@ function RefreshButton({ account }: { account: string }) {
 
 export function OrdersPage() {
   const account = useCurrentAccount()
+  useOrderStream(account)
   const orders = useOrders(account)
   const ops = useOrderOps(account)
   const [tab, setTab] = useUrlParam<Tab>("status", "all", TABS)
@@ -116,7 +117,7 @@ export function OrdersPage() {
   else if (all.length === 0)
     body = (
       <EmptyState title="还没有订单" action={add}>
-        网页端拿不到个人卖家的卖出订单列表。在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。
+        收到交易消息（买家拍下、付款）时会自动记下来。以前的订单在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。
       </EmptyState>
     )
   else if (visible.length === 0)

@@ -83,7 +83,8 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 > 卖家工作台 seller-workbench 0.1.68，以及 Ydisks-Xianyu-Helper（Apache-2.0）的 `internal/xianyu/mtop/`。
 > ✅ 是用个人卖家账号实测过的（只读）；🔍 是网页端代码里看到的调用，没在线上调过；📦 只在开源实现里见过。
 
-网页版主站只有"我买到的"（`mtop.idle.web.trade.bought.list`），**没有卖出的订单列表**；卖出的订单在卖家工作台
+网页版主站只有"我买到的"（`mtop.idle.web.trade.bought.list`），**没有卖出的订单列表**，本系统改从交易消息里记
+（见下面"即时消息"里的[交易消息里的订单号](#交易消息里的订单号)）；卖出的订单在卖家工作台
 `seller.goofish.com/?site=COMMONPRO#/seller-trade/order-manage`，工作台是微前端，订单页的代码是动态加载的，没读到。
 发货在网页版也没有入口（订单卡片上的"发货"按钮是弹二维码让去 App）。
 
@@ -371,6 +372,33 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `3.needPush` | 要不要给手机推通知，这次是 `"false"` |
 
 `1.10` 里还带着发送端的 `clientIp`、`umid`、`umidToken`、`utdid`，是发消息那台设备的信息，不要存，也不要写进日志。
+
+### 交易消息里的订单号
+
+✅ 2026-11-01 读本地存的消息（自己账号 8 笔订单的卡片，1 笔卖出、7 笔买到）整理。订单的每一步平台都往会话里发一条消息，
+`sender` 多半是对方（自己操作的那几步是自己），提醒里的 `receiver` 是当前账号，卡片是按收的人给的：
+同一步买卖双方看到的文字和链接不一样。内容类型有这几种：
+
+| 内容类型 | 例子 | 订单号在哪 |
+|---|---|---|
+| 26 交易卡片 | "[我已拍下，待付款]"、"[我已付款，等待你发货]"、"[我发起了退款申请]"、"[我完成了评价]" | `dxCard.item.main.targetUrl` 是 `fleamarket://order_detail?id=<订单号>&role=<角色>`；退款卡片是 `…/refundDetail?…&orderId=<订单号>`；按钮的 `exContent.button.targetUrl` 也常带（"修改价格"是 `fleamarket://adjust_price?…&bizOrderId=<订单号>`） |
+| 25 评价 | "快给ta一个评价吧～" | 按钮里的评价页链接 `…?orderId=<订单号>` |
+| 6 物流 | "[物流已签收]" | `textCard.content` 是一段 HTML，里面的 `order_detail?id=…&role=…` 链接 |
+| 14 交易提示 | "[你已发货]"、"[买家确认收货，交易成功]"、"[卖家已发货]" | **大多没有**，只有 `tip.tip` 一句话；个别（"有蚂蚁森林能量可领"）在 `tip.argInfo.args.orderId` |
+
+- `role` 是**当前账号**在这笔订单里的角色：卖出的是 `seller`，买到的是 `Buyer` 或 `buyer`（大小写不定）。
+  8 笔订单的卡片角色都和实际一致，同一笔订单的几张卡片也一致；
+- 提醒里 `bizTag` 的 `taskName` 以"_卖家"或"_买家"结尾（"已拍下_未付款_卖家"、"付款完成待发货_无需发货_买家"、
+  "已发货_卖家"），说的也是当前账号的角色。链接里没写 `role` 时用它；活动类的提示（"神奇鱼塘-蚂蚁森林能量"）没有；
+- `extJson.updateKey` 形如 `<cid>:<订单号>:1_not_pay_seller` 或 `<cid>:<订单号>:64:TRADE_PAID_DONE_BUYER:26`，
+  也带订单号，本系统没用；
+- 会话列表里会话的 `extension.orderId` 是这个会话最近一笔订单，但看不出自己是买家还是卖家。
+
+本系统的做法（`xianyu_core/im.py` 的 `_order_ref`、`app/orders.py` 的 `OrderFeed`）：内容类型不是 1、2（人发的文字、图片，
+里面贴的链接不算）的消息，先找 `order_detail?id=` 链接，再找 `orderId=` / `bizOrderId=`，角色取链接里的 `role`，没有就看
+`taskName`。新存进本地库的消息里有订单号、角色不是买家的，拉一次订单详情（`seller` 为假的不记）记进本地库。
+开源项目的做法差不多：Ydisks 从卡片 `targetUrl` 里取订单号和 `role`（`internal/automation/event_order_identity.go`），
+别的项目按"[我已付款，等待你发货]"这类文字认付款。
 
 ## 开源项目里常见的 mtop 接口
 

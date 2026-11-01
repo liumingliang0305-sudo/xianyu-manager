@@ -104,6 +104,50 @@ def history_message(
     }
 
 
+def trade_card(
+    *,
+    order_id: str = "5127299211174026539",
+    role: str = "seller",
+    title: str = "我已付款，等待你发货",
+    cid: str = "777",
+    sender: str = "200",
+    message_id: str = "1793378127001.PNM",
+    sent_ms: int = 1793378127437,
+    push: bool = False,
+) -> dict:
+    """照实测的格式造一张交易卡片（内容类型 26）：订单详情链接里的 role 是当前账号的角色，
+    提醒里 bizTag 的 taskName 以"_卖家"或"_买家"结尾。`push` 时是推送的格式，否则是历史消息。"""
+    card = {
+        "contentType": 26,
+        "dxCard": {
+            "item": {
+                "main": {
+                    "exContent": {"title": title, "desc": "请双方沟通及时确认价格"},
+                    "targetUrl": f"fleamarket://order_detail?id={order_id}&role={role}",
+                }
+            }
+        },
+    }
+    side = "卖家" if role.lower() == "seller" else "买家"
+    task = json.dumps({"taskName": f"付款完成待发货_{side}", "taskId": "t1"}, ensure_ascii=False)
+    summary = f"[{title}]"
+    if push:
+        message = chat_message(
+            cid=cid, sender=sender, text=summary, message_id=message_id, sent_ms=sent_ms
+        )
+        message[1][6][3].update({2: summary, 4: 26, 5: json.dumps(card)})
+        message[1][10]["bizTag"] = task
+        return message
+    message = history_message(
+        cid=cid, sender=sender, text=summary, message_id=message_id, sent_ms=sent_ms
+    )
+    message["message"]["content"]["custom"].update(
+        type=26, summary=summary, data=base64.b64encode(json.dumps(card).encode()).decode()
+    )
+    message["message"]["extension"]["bizTag"] = task
+    return message
+
+
 def session_activation(cid: str = "777") -> dict:
     return {"sessionId": cid, "chatType": 1, "operation": {"content": {"contentType": 8}}}
 

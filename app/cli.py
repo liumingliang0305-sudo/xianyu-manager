@@ -16,6 +16,8 @@ uv run xym items desc <商品ID> <文本文件> [-y]
 uv run xym items down <商品ID> [-y]              下架
 uv run xym items delete <商品ID> [-y]            删除，平台上不可恢复
 uv run xym items log [商品ID]                     本系统做过的改动
+uv run xym orders scan                          从本地存的消息里找卖出的订单，记进本地库
+                                                （xym serve 收到交易消息时会自动记，这个补以前的）
 uv run xym orders add <订单号或链接>              添加一笔卖出的订单（App「我卖出的」里复制）
 uv run xym orders sync                          刷新本地还没结束的订单（专业卖家会整页同步）
 uv run xym orders list [--status to_ship]       看本地库里的订单
@@ -120,7 +122,7 @@ def _print_items(items: list[ItemRecord]) -> None:
 
 def _print_orders(orders: list[OrderRecord]) -> None:
     if not orders:
-        print("本地库里没有订单，先跑一次 xym orders sync")
+        print("本地库里没有订单：xym serve 收到交易消息时会自动记，以前的用 xym orders scan 补")
         return
     print(f"{'订单ID':<20} {'状态':<5} {'金额':>8}  {'下单时间':<16}  商品")
     for o in orders:
@@ -303,10 +305,29 @@ def unblock_account(args: argparse.Namespace) -> int:
 async def run_orders(args: argparse.Namespace) -> int:
     accounts = Accounts(args.accounts, guard=make_guard(args.guard))
     account = accounts.resolve(args.account)
-    service = OrderService(db.connect(args.db), accounts)
+    conn = db.connect(args.db)
+    service = OrderService(conn, accounts)
     cmd = args.orders_command
 
-    if cmd == "add":
+    if cmd == "scan":
+        refs = MessageStore(conn).order_refs(account)
+        todo = [order_id for order_id, role in refs if role != "buyer"]
+        print(f"本地消息里有 {len(refs)} 笔订单，{len(refs) - len(todo)} 笔是买到的，跳过")
+        if not todo:
+            return 0
+        print(f"逐个拉 {len(todo)} 笔的详情（已经结束的本地订单不拉）…")
+        results = await service.track_many(account, todo)
+        labels = (
+            ("added", "新记下"),
+            ("updated", "刷新了"),
+            ("skipped", "本地已结束"),
+            ("not_mine", "是买到的或查不到"),
+            ("failed", "平台报错"),
+        )
+        print("，".join(f"{text} {len(results[key])}" for key, text in labels if results.get(key)))
+        if results.get("added"):
+            _print_orders([r for o in results["added"] if (r := service.get(account, o))])
+    elif cmd == "add":
         record, added = await service.add(account, args.order)
         state = ORDER_STATUS_TEXT.get(record.status, record.status)
         print(f"{'已添加' if added else '已在列表里，刷新了一次'}：{record.order_id}")
@@ -609,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
     orders = sub.add_parser("orders", help="订单管理（卖出的）").add_subparsers(
         dest="orders_command", required=True
     )
+    orders.add_parser("scan", help="从本地存的消息里找卖出的订单")
+
     p = orders.add_parser("add", help="添加一笔卖出的订单")
     p.add_argument("order", help="订单号，或者订单详情页的链接")
 

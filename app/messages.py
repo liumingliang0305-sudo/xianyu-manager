@@ -15,6 +15,9 @@ USER_SESSION_TYPES）列会话时跳过，推下来的消息也不存；以前�
 发出去的消息马上存库、通知页面。
 
 标已读：页面上点开有未读的会话时清掉会话的红点（mark_read），和网页版一样；不给对方发已读回执。
+
+订单：新存进来的消息里带订单号的（交易卡片之类，见 xianyu_core/im.py 的 `_order_ref`），
+交给 `on_order`，`xym serve` 里是 app/orders.py 的 `OrderFeed`，在后台把订单记进本地库。
 """
 
 from __future__ import annotations
@@ -318,6 +321,36 @@ class MessageStore:
         ).fetchone()
         return row["sent_at"]
 
+    def order_refs(self, account_id: str) -> list[tuple[str, str]]:
+        """本地存的消息里出现过的订单，每笔一条 (订单号, 当前账号的角色)，最近有动静的在前。
+
+        一笔订单有好几张卡片，角色取看得出来的那张；会话列表里记的订单号（看不出角色）也算上。
+        """
+        rows = self._db.execute(
+            "SELECT raw FROM messages WHERE account_id = %s"
+            " AND COALESCE(content_type, 0) NOT IN (1, 2)"  # 文字、图片消息不带订单号
+            " ORDER BY sent_at DESC NULLS LAST",
+            (account_id,),
+        )
+        refs: dict[str, str] = {}
+        for row in rows:
+            try:
+                data = json.loads(row["raw"])
+            except ValueError:
+                continue
+            message = ChatMessage.from_history(data) or ChatMessage.parse(data)
+            if message is None or not message.order_id:
+                continue
+            if not refs.get(message.order_id):
+                refs[message.order_id] = message.order_role
+        for row in self._db.execute(
+            "SELECT order_id FROM conversations WHERE account_id = %s AND order_id != ''"
+            " ORDER BY updated_at DESC NULLS LAST",
+            (account_id,),
+        ):
+            refs.setdefault(row["order_id"], "")
+        return list(refs.items())
+
     # ---- 写入 ----
 
     def save_conversations(
@@ -563,6 +596,8 @@ class MessageHub:
     在连）就不连，每隔 `watch_interval` 秒再抢一次，那边退出了这边自动接上。
 
     取 accessToken 走账号的锁（`locks`），和别的平台请求串行。
+
+    `on_order(账号, 订单号, 当前账号的角色)`：新存进本地库的消息里有订单号时调，一条消息调一次。
     """
 
     def __init__(
@@ -575,6 +610,7 @@ class MessageHub:
         client_options: dict[str, Any] | None = None,
         watch_interval: float = WATCH_INTERVAL,
         request_interval: float = REQUEST_INTERVAL,
+        on_order: Callable[[str, str, str], None] | None = None,
     ):
         self.store = store
         self._accounts = accounts
@@ -583,6 +619,7 @@ class MessageHub:
         self._client_options = client_options or {}
         self._watch_interval = watch_interval
         self._interval = request_interval
+        self._on_order = on_order
         self._lines: dict[str, _Line] = {}
         self._claims: dict[str, ImLock] = {}
         self._subscribers: defaultdict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
@@ -645,7 +682,8 @@ class MessageHub:
 
     @contextlib.contextmanager
     def subscribe(self, account_id: str) -> Iterator[asyncio.Queue[dict[str, Any]]]:
-        """订阅这个账号的变化：{"type": "message"|"messages"|"conversations"|"status", ...}。
+        """订阅这个账号的变化：{"type": ..., ...}，type 是 message、messages、conversations、
+        status、orders 之一。
 
         收到以后重新读本地库就行。订阅的人读得太慢时多出来的事件直接丢掉。
         收到 CLOSING 就该结束了。
@@ -672,6 +710,10 @@ class MessageHub:
                 if queue.full():
                     queue.get_nowait()
                 queue.put_nowait(CLOSING)
+
+    def publish(self, account_id: str, event: dict[str, Any]) -> None:
+        """别处的变化也从这里推给页面，比如交易消息记下了订单（{"type": "orders"}）。"""
+        self._publish(account_id, event)
 
     def _publish(self, account_id: str, event: dict[str, Any]) -> None:
         for queue in list(self._subscribers.get(account_id, ())):
@@ -811,8 +853,17 @@ class MessageHub:
             self._publish(
                 account_id, {"type": "message", "cid": event.cid, "message_id": event.message_id}
             )
+            self._saved(account_id, [event])
         else:
             log.debug("消息 %s 已经存过了（自己发的推回来、或者重复推送）", event.message_id)
+
+    def _saved(self, account_id: str, messages: list[ChatMessage]) -> None:
+        """新存进本地库的消息里有订单号的，交给 on_order。"""
+        if self._on_order is None:
+            return
+        for message in messages:
+            if message.order_id:
+                self._on_order(account_id, message.order_id, message.order_role)
 
     def _spawn(self, coro: Awaitable[Any]) -> None:
         """在后台跑，不耽误收推送；aclose() 时取消。"""
@@ -949,6 +1000,7 @@ class MessageHub:
                     await asyncio.sleep(self._interval)
                 page = await conn.list_messages(cid, cursor, MESSAGE_PAGE)
                 new = self.store.save_messages(account_id, page.messages)
+                self._saved(account_id, new)
                 added += len(new)
                 joined = len(new) < len(page.messages)
                 more = page.has_more and page.next_cursor is not None
@@ -972,7 +1024,9 @@ class MessageHub:
                 oldest = self.store.oldest_sent_at(account_id, cid)
                 cursor = round(oldest * 1000) if oldest else NEWEST_CURSOR
             page = await conn.list_messages(cid, cursor, MESSAGE_PAGE)
-            added = len(self.store.save_messages(account_id, page.messages))
+            new = self.store.save_messages(account_id, page.messages)
+            self._saved(account_id, new)
+            added = len(new)
             more = page.has_more and page.next_cursor is not None
             self.store.set_older(account_id, cid, page.next_cursor if more else None, more)
         if added:

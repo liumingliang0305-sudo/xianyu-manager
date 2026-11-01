@@ -1,8 +1,11 @@
 """订单管理：卖出的订单进本地库、查询、拉实时详情、给待付款订单改价。
 
 订单怎么进本地库：
-- 个人卖家在网页端拿不到卖出的订单列表，只能按订单号添加（从闲鱼 App「我卖出的」里复制），
-  之后"同步"会逐个刷新还没结束的订单；
+- 交易消息：`xym serve` 收到带订单号的交易卡片（"[我已付款，等待你发货]"之类）时，`OrderFeed` 在后台
+  拉一次详情记下来，之后每来一张卡片（发货、收货、评价）刷新一次状态。以前存下的消息里的订单用
+  `xym orders scan` 补一次（`track_many`）；
+- 个人卖家在网页端拿不到卖出的订单列表，也可以按订单号添加（从闲鱼 App「我卖出的」里复制），
+  "同步"会逐个刷新还没结束的订单；
 - 闲鱼专业卖家可以从卖家工作台整页拉。这条路没实测过，原始条目存进 orders.raw 备查。
 
 改价记进 order_ops，失败也记。
@@ -11,17 +14,22 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import re
 import time
-from collections.abc import Awaitable
+from collections import defaultdict
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
+
+import httpx
 
 from app.accounts import Accounts
 from app.db import Database, Row
 from app.items import check_price_change
-from xianyu_core.errors import MtopError
+from xianyu_core.errors import MtopError, XianyuError
 from xianyu_core.order import (
     CLOSED,
     DONE,
@@ -33,6 +41,8 @@ from xianyu_core.order import (
 )
 
 T = TypeVar("T")
+
+log = logging.getLogger(__name__)
 
 # 个人卖家调卖家工作台的订单列表时平台返回的错误码
 NO_PERMISSION = "PERMISSION_EXCEPTION"
@@ -196,6 +206,39 @@ class OrderService:
         record = self.get(account_id, order_id)
         assert record is not None
         return record, before is None
+
+    async def track(self, account_id: str, order_id: str) -> str:
+        """交易消息里看到的订单：本地没有就加上，有就刷新一次。
+
+        返回 added / updated；本地已经结束（交易成功、已关闭）的不再拉，返回 skipped；
+        当前账号是买家的、平台查不到的不记，返回 not_mine。
+        """
+        record = self.get(account_id, order_id)
+        if record and record.status in (DONE, CLOSED):
+            return "skipped"
+        async with self._accounts.mtop(account_id) as mtop:
+            detail = await OrderApi(mtop).detail(order_id)
+        if detail.seller is False or (not detail.title and not detail.status_title):
+            return "not_mine"
+        with self._db.transaction():
+            before = self._save_detail(account_id, detail, time.time())
+        return "added" if before is None else "updated"
+
+    async def track_many(self, account_id: str, order_ids: list[str]) -> dict[str, list[str]]:
+        """逐个 track，返回 {结果: [订单号]}。平台对某一笔报错的记在 failed，接着做下一笔；
+        登录失效、风控、限流这些直接抛出。连续向平台请求之间停 `interval` 秒。"""
+        results: defaultdict[str, list[str]] = defaultdict(list)
+        requested = False
+        for order_id in order_ids:
+            if requested:
+                await asyncio.sleep(self._interval)
+            try:
+                result = await self.track(account_id, order_id)
+            except MtopError:
+                result = "failed"
+            requested = result != "skipped"
+            results[result].append(order_id)
+        return dict(results)
 
     def remove(self, account_id: str, order_id: str) -> bool:
         """从本地列表里移除（加错了的时候用），不动平台上的订单。改动记录保留。"""
@@ -433,6 +476,89 @@ class OrderService:
                 now,
             ),
         )
+
+
+class OrderFeed:
+    """交易消息自动记订单：`xym serve` 里 MessageHub 新存了带订单号的消息就调 `notify()`，
+    这里在后台一笔一笔拉详情、记进本地库（`OrderService.track`），记下了调 `on_change(账号)`
+    通知页面。
+
+    卡片上写着当前账号是买家的不拉；看不出来的拉一次详情再看，是买到的这次运行里不再拉。
+    同一笔订单在排队时又来了卡片，只拉一次。拉的时候拿账号的锁（和别的平台请求串行），过限流和熔断。
+    出错（登录失效、风控、网络）就跳过这一笔：一笔订单从拍下到评价有好几张卡片，下一张来了会再拉，
+    订单页的"刷新状态"也会刷新本地没结束的订单。
+    """
+
+    def __init__(
+        self,
+        orders: OrderService,
+        locks: Mapping[str, asyncio.Lock],
+        *,
+        interval: float = 1.5,
+        on_change: Callable[[str], None] | None = None,
+    ):
+        self._orders = orders
+        self._locks = locks
+        self._interval = interval
+        self._on_change = on_change
+        self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._pending: set[tuple[str, str]] = set()
+        self._not_mine: set[tuple[str, str]] = set()
+        self._worker: asyncio.Task[None] | None = None
+
+    def notify(self, account_id: str, order_id: str, role: str) -> None:
+        key = (account_id, order_id)
+        if role == "buyer" or key in self._pending or key in self._not_mine:
+            return
+        self._pending.add(key)
+        self._queue.put_nowait(key)
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._run())
+
+    async def join(self) -> None:
+        """等排着的都做完。"""
+        await self._queue.join()
+
+    async def aclose(self) -> None:
+        if self._worker:
+            self._worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker
+            self._worker = None
+
+    async def _run(self) -> None:
+        while True:
+            account_id, order_id = await self._queue.get()
+            try:
+                result = await self._track(account_id, order_id)
+            finally:
+                self._pending.discard((account_id, order_id))
+                self._queue.task_done()
+            if result != "skipped":
+                await asyncio.sleep(self._interval)
+
+    async def _track(self, account_id: str, order_id: str) -> str | None:
+        try:
+            async with self._locks[account_id]:
+                result = await self._orders.track(account_id, order_id)
+        except (XianyuError, httpx.HTTPError) as exc:
+            log.warning("账号 %s：交易消息里的订单 %s 没记上：%s", account_id, order_id, exc)
+            return None
+        except Exception:
+            log.exception("账号 %s：交易消息里的订单 %s 没记上", account_id, order_id)
+            return None
+        if result == "not_mine":
+            self._not_mine.add((account_id, order_id))
+        elif result in ("added", "updated"):
+            log.info(
+                "账号 %s：从交易消息%s订单 %s",
+                account_id,
+                "记下了" if result == "added" else "刷新了",
+                order_id,
+            )
+            if self._on_change:
+                self._on_change(account_id)
+        return result
 
 
 def _fill(fields: list[PriceField], fees: dict[str, int]) -> dict[str, int]:

@@ -7,7 +7,7 @@ from collections import defaultdict
 
 import httpx
 import pytest
-from fake_im import FakeIm, chat_message, conversation, entry, history_message
+from fake_im import FakeIm, chat_message, conversation, entry, history_message, trade_card
 from fakes import UNB, add_user, sign_in
 from fastapi.testclient import TestClient
 
@@ -246,6 +246,89 @@ def test_fetch_newest_joins_local_and_older_fills_gaps(accounts, monkeypatch, st
     run(go())
     assert ids() == [f"m{n}" for n in range(26)]
     assert not store.conversation(UNB, "777").stale
+
+
+def card(n: int, order_id: str, role: str = "seller", *, cid: str = "777") -> dict:
+    """第 n 条历史消息是一张交易卡片，时间 T + n 秒。"""
+    return trade_card(
+        order_id=order_id, role=role, cid=cid, message_id=f"m{n}", sent_ms=T + n * 1000
+    )
+
+
+def test_hub_hands_orders_in_new_messages_to_on_order(accounts, monkeypatch, store):
+    monkeypatch.setattr(messages, "MESSAGE_PAGE", 3)
+    server = FakeIm()
+    server.chats["777"] = [card(0, "5001000000001"), chat(1), chat(2), chat(3), chat(4)]
+    server.chats["777"].append(card(5, "5001000000002", "Buyer"))
+    seen = []
+    hub = MessageHub(
+        store,
+        accounts,
+        defaultdict(asyncio.Lock),
+        connect=server.connect,
+        on_order=lambda *args: seen.append(args),
+        **IM_OPTIONS,
+    )
+    store.save_conversations(UNB, [conv("777", "200")])
+
+    async def go():
+        conn = await open_conn(server)
+        await hub.fetch_newest(UNB, "777", conn)
+        assert seen == [(UNB, "5001000000002", "buyer")]
+        await hub.fetch_older(UNB, "777", conn)
+        assert seen[1:] == [(UNB, "5001000000001", "seller")]
+        await hub.fetch_newest(UNB, "777", conn)  # 已经存过的不再交
+        await conn.close()
+        await hub._on_event(UNB, ChatMessage.from_history(card(6, "5001000000001")))
+
+    run(go())
+    assert seen[2:] == [(UNB, "5001000000001", "seller")]
+
+
+def test_store_order_refs_from_messages_and_conversations(store):
+    with_order = conversation("778", UNB, "201", modified_ms=T)
+    with_order["singleChatUserConversation"]["singleChatConversation"]["extension"]["orderId"] = (
+        "5001000000009"
+    )
+    store.save_conversations(UNB, [conv("777", "200"), Conversation.parse(with_order, UNB)])
+    tip = history_message(text="[你已发货]", message_id="t1", sent_ms=T + 9000)
+    tip["message"]["content"]["custom"]["type"] = 14
+    store.save_messages(
+        UNB,
+        [
+            live(1),
+            ChatMessage.from_history(card(2, "5001000000001")),
+            ChatMessage.from_history(card(3, "5001000000002", "buyer")),
+            ChatMessage.parse(
+                decode_entry(
+                    entry(
+                        trade_card(
+                            order_id="5001000000003", message_id="p4", sent_ms=T + 4000, push=True
+                        ),
+                        packer="msgpack",
+                    )["data"]
+                )
+            ),
+            ChatMessage.from_history(tip),
+        ],
+    )
+    assert store.order_refs(UNB) == [
+        ("5001000000003", "seller"),
+        ("5001000000002", "buyer"),
+        ("5001000000001", "seller"),
+        ("5001000000009", ""),
+    ]
+
+
+def test_hub_publish_reaches_subscribers(accounts, store):
+    hub = make_hub(store, accounts, FakeIm())
+
+    async def go():
+        with hub.subscribe(UNB) as queue:
+            hub.publish(UNB, {"type": "orders"})
+            return queue.get_nowait()
+
+    assert run(go()) == {"type": "orders"}
 
 
 def test_fetch_needs_im_online(accounts, store):
@@ -761,3 +844,65 @@ def test_api_with_im_online(accounts, platform, database_url):
 
         assert client.post(f"{url}/im/reconnect").status_code == 200
     assert all(s.closed for s in server.sockets)
+
+
+def test_api_records_orders_from_trade_messages(accounts, platform, database_url):
+    """补拉到的、实时推来的交易卡片里的订单，自动记进本地库，状态跟着卡片刷新。"""
+    sold, bought = "5003000000001", "5003000000002"
+    for order_id, extra in ((sold, {}), (bought, {"bought": True})):
+        platform.orders[order_id] = {
+            "item_id": "1001",
+            "status": "等待买家付款",
+            "price": 35800,
+            "post": 0,
+            "created": 1761900000000,
+            **extra,
+        }
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [
+        conversation("777", UNB, "200", modified_ms=T + 3000),
+        conversation("778", UNB, "201", modified_ms=T + 2000),
+    ]
+    server.chats = {
+        "777": [chat(1), card(2, sold)],
+        "778": [card(1, bought, "buyer", cid="778")],
+    }
+    app = create_app(
+        database_url=database_url,
+        guard=Guard(),
+        accounts_dir=accounts.root,
+        transport=httpx.MockTransport(platform),
+        interval=0,
+        web_dist=None,
+        messages=True,
+        im_connect=server.connect,
+        im_options=IM_OPTIONS,
+    )
+    url = f"/api/accounts/{UNB}"
+    add_user(database_url, accounts=[UNB])
+
+    def orders(client) -> dict[str, str]:
+        return {o["order_id"]: o["status"] for o in client.get(f"{url}/orders").json()["orders"]}
+
+    def wait_for(client, expected: dict[str, str]) -> None:
+        deadline = time.monotonic() + 3
+        while orders(client) != expected:
+            assert time.monotonic() < deadline, orders(client)
+            time.sleep(0.01)
+
+    with TestClient(app) as client:
+        sign_in(client)
+        wait_for(client, {sold: "unpaid"})  # 补拉到的卡片
+        platform.orders[sold]["status"] = "等待卖家发货"
+        server.last.push_entries(
+            [
+                entry(
+                    trade_card(order_id=sold, message_id="c9", sent_ms=T + 9000, push=True),
+                    packer="msgpack",
+                )
+            ]
+        )
+        wait_for(client, {sold: "to_ship"})
+    details = [d["tid"] for api, d in platform.calls if api.endswith("order.detail")]
+    assert bought not in details  # 卡片上写着是买家的不拉

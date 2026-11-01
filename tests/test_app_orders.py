@@ -1,12 +1,13 @@
 import asyncio
 import json
+from collections import defaultdict
 
 import pytest
 from fakes import UNB
 
 from app.items import ItemService, PriceGuardError
-from app.orders import OrderService, parse_order_id
-from xianyu_core.errors import MtopError
+from app.orders import OrderFeed, OrderService, parse_order_id
+from xianyu_core.errors import MtopError, RiskControlError
 from xianyu_core.order import DONE, TO_SHIP, UNPAID
 
 
@@ -134,6 +135,76 @@ def test_add_rejects_bought_and_missing_orders(service, platform):
     with pytest.raises(MtopError):
         run(service.add(UNB, "5009999999999"))
     assert service.list(UNB) == []
+
+
+def details(platform) -> list[str]:
+    return [d["tid"] for api, d in platform.calls if api.endswith("order.detail")]
+
+
+def test_track_adds_refreshes_and_skips_finished(service, platform):
+    order_id = add_long_order(platform, status="等待买家付款")
+    assert run(service.track(UNB, order_id)) == "added"
+    assert service.get(UNB, order_id).status == UNPAID
+    platform.orders[order_id]["status"] = "等待卖家发货"
+    assert run(service.track(UNB, order_id)) == "updated"
+    assert service.get(UNB, order_id).status == TO_SHIP
+
+    platform.orders[order_id]["status"] = "交易成功"
+    run(service.track(UNB, order_id))
+    platform.calls.clear()
+    assert run(service.track(UNB, order_id)) == "skipped"  # 已经结束的不再请求
+    assert platform.calls == []
+
+
+def test_track_does_not_keep_bought_orders(service, platform):
+    order_id = add_long_order(platform, bought=True)
+    assert run(service.track(UNB, order_id)) == "not_mine"
+    assert service.list(UNB) == []
+
+
+def test_track_many_goes_on_after_one_order_fails(service, platform):
+    good = add_long_order(platform, "5003000000001")
+    bought = add_long_order(platform, "5003000000002", bought=True)
+    missing = "5009999999999"
+    results = run(service.track_many(UNB, [good, missing, bought, good]))
+    assert results == {
+        "added": [good],
+        "failed": [missing],
+        "not_mine": [bought],
+        "updated": [good],
+    }
+
+
+def test_track_many_stops_on_risk_control(service, platform):
+    order_id = add_long_order(platform)
+    platform.fail["mtop.idle.web.trade.order.detail"] = "RGV587_ERROR::SM::哎哟喂,被挤爆啦"
+    with pytest.raises(RiskControlError):
+        run(service.track_many(UNB, [order_id, "5003000000002"]))
+    assert details(platform) == [order_id]
+
+
+def test_feed_records_orders_from_trade_messages(service, platform):
+    sold = add_long_order(platform, "5003000000001")
+    bought = add_long_order(platform, "5003000000002", bought=True)
+    changes = []
+
+    async def go():
+        feed = OrderFeed(service, defaultdict(asyncio.Lock), interval=0, on_change=changes.append)
+        feed.notify(UNB, sold, "seller")
+        feed.notify(UNB, sold, "seller")  # 排着队的同一笔只拉一次
+        feed.notify(UNB, "5003000000003", "buyer")  # 卡片上写着是买家的不拉
+        feed.notify(UNB, bought, "")  # 看不出来的拉一次
+        await feed.join()
+        feed.notify(UNB, bought, "")  # 知道是买到的了，不再拉
+        feed.notify(UNB, "5009999999999", "seller")  # 平台报错的跳过，不影响别的
+        feed.notify(UNB, sold, "seller")  # 下一张卡片来了再刷新
+        await feed.join()
+        await feed.aclose()
+
+    run(go())
+    assert details(platform) == [sold, bought, "5009999999999", sold]
+    assert changes == [UNB, UNB]
+    assert [o.order_id for o in service.list(UNB)] == [sold]
 
 
 def test_sync_without_list_permission_refreshes_open_orders(service, platform):

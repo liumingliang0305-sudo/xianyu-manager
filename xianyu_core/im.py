@@ -8,7 +8,9 @@
 - `ImClient`：一个账号长期在线，断了自动重连，每次连接都重新取 accessToken（网页版也是这样）；
 - 聊天消息解析成 `ChatMessage`，会话列表解析成 `Conversation`；哪些会话是和人的聊天见
   `USER_SESSION_TYPES`；
-- 发文本消息：`ImConnection.send_text()`，格式照网页版。
+- 发文本消息：`ImConnection.send_text()`，格式照网页版；
+- 交易卡片（"[我已付款，等待你发货]"之类）里的订单号和当前账号的角色解析进 `ChatMessage.order_id`、
+  `order_role`，见 `_order_ref`。
 
 2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳，2026-10-31 实测发过一条文本消息。
 2026-10-31 也实测过清会话红点（`clear_red_point`）。给对方发已读回执还没有做。
@@ -27,7 +29,7 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -99,6 +101,15 @@ _SEND_REFUSALS = (
     ("USER_NEED_REALNAME_VERIFY", "平台要求先完成实名认证，在闲鱼 App 里发一条消息，按提示操作"),
     ("USER_NEED_VERIFY", "平台要求先完成身份验证，在闲鱼 App 里发一条消息，按提示操作"),
 )
+
+# 交易卡片点进去是订单详情：fleamarket://order_detail?id=<订单号>&role=seller，role 是当前账号
+# 在这笔订单里的角色，大小写不定（见过 seller、Buyer、buyer）。退款、评价、物流卡片的链接里是
+# orderId=<订单号>
+_ORDER_LINK = re.compile(r"order_detail\?id=(\d{10,})(?:&role=([A-Za-z]+))?")
+_ORDER_ARG = re.compile(r"(?:^|[?&])(?:bizOrderId|orderId)=(\d{10,})")
+ORDER_ROLES = frozenset({"seller", "buyer"})
+# 卡片提醒里 bizTag 的 taskName 以"_卖家"、"_买家"结尾（"已发货_卖家"），说的也是当前账号的角色
+_TASK_ROLES = (("_卖家", "seller"), ("_买家", "buyer"))
 
 _uuid_seq = itertools.count(1)
 
@@ -223,6 +234,8 @@ class ChatMessage:
     item_id: str
     session_type: str = ""  # 所在会话的类型，见 USER_SESSION_TYPES；没带是空字符串
     images: list[ChatImage] = field(default_factory=list)  # 图片消息（内容类型 2）里的图
+    order_id: str = ""  # 交易卡片之类带的订单号，见 _order_ref
+    order_role: str = ""  # 当前账号在这笔订单里是 seller 还是 buyer，看不出来是空字符串
     raw: dict[str, Any] = field(repr=False, default_factory=dict)  # 去掉了发送端设备信息
 
     @classmethod
@@ -294,6 +307,9 @@ class ChatMessage:
         by_person = (
             reminder.get("reminderNotice") == PERSON_NOTICE and content_type in PERSON_CONTENT_TYPES
         )
+        # 人打的字里贴的订单链接不算，只认平台发的卡片
+        by_platform = content_type not in PERSON_CONTENT_TYPES
+        order_id, order_role = _order_ref(content, reminder) if by_platform else ("", "")
         return cls(
             message_id=str(message_id or ""),
             cid=cid,
@@ -305,6 +321,8 @@ class ChatMessage:
             item_id=(url_args.get("itemId") or [""])[0],
             session_type=str(reminder.get("sessionType") or ""),
             images=_images(content),
+            order_id=order_id,
+            order_role=order_role,
             raw=raw,
         )
 
@@ -318,6 +336,40 @@ def _images(content: dict[str, Any]) -> list[ChatImage]:
         for pic in pics
         if isinstance(pic, dict) and pic.get("url")
     ]
+
+
+def _order_ref(content: dict[str, Any], reminder: dict[str, Any]) -> tuple[str, str]:
+    """交易消息里的 (订单号, 当前账号的角色)，不带订单号的是 ("", "")，角色看不出来是空字符串。
+
+    交易卡片（内容类型 26）、评价（25）、物流（6）里有订单详情或者退款、评价页的链接；
+    交易提示（14，"[你已发货]"这种）大多没有订单号。
+    """
+    texts = list(_leaves(content))
+    for text in texts:
+        if match := _ORDER_LINK.search(text):
+            role = (match.group(2) or "").lower()
+            return match.group(1), role if role in ORDER_ROLES else _task_role(reminder)
+    for text in texts:
+        if match := _ORDER_ARG.search(text):
+            return match.group(1), _task_role(reminder)
+    return "", ""
+
+
+def _leaves(value: Any, key: str = "") -> Iterator[str]:
+    """嵌套的字典、列表里的每个值，写成"键=值"：链接在值里，有的卡片直接是 orderId 字段。"""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _leaves(v, str(k))
+    elif isinstance(value, list):
+        for v in value:
+            yield from _leaves(v, key)
+    elif isinstance(value, str | int) and not isinstance(value, bool):
+        yield f"{key}={value}"
+
+
+def _task_role(reminder: dict[str, Any]) -> str:
+    task = str(_json_dict(reminder.get("bizTag")).get("taskName") or "")
+    return next((role for suffix, role in _TASK_ROLES if task.endswith(suffix)), "")
 
 
 def _scrub_reminder(reminder: dict[str, Any]) -> dict[str, Any]:

@@ -58,7 +58,7 @@ from app.login import (
     same_login,
 )
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
-from app.orders import OrderService
+from app.orders import OrderFeed, OrderService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -216,8 +216,20 @@ def create_app(
         app.state.users = Users(conn)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
+        # 交易消息里的订单自动记进本地库，记下了推给页面（hub 在下面建，回调时才用到）
+        feed = OrderFeed(
+            app.state.orders,
+            locks,
+            interval=interval,
+            on_change=lambda account_id: hub.publish(account_id, {"type": "orders"}),
+        )
         hub = MessageHub(
-            MessageStore(conn), accounts, locks, connect=im_connect, **(im_options or {})
+            MessageStore(conn),
+            accounts,
+            locks,
+            connect=im_connect,
+            on_order=feed.notify,
+            **(im_options or {}),
         )
         app.state.messages = hub
         if messages:
@@ -235,6 +247,7 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await keeper
             await hub.aclose()
+            await feed.aclose()
             for login in logins.values():
                 await login.aclose()
             conn.close()

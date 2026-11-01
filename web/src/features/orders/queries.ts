@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect } from "react"
 
-import { api } from "@/lib/api"
+import { api, subscribeMessages } from "@/lib/api"
 
 export const orderKeys = {
   list: (account: string) => ["orders", account] as const,
@@ -13,6 +14,23 @@ export const orderKeys = {
 /** 本地库里的订单，读本地，不请求闲鱼。 */
 export function useOrders(account: string) {
   return useQuery({ queryKey: orderKeys.list(account), queryFn: () => api.orders(account) })
+}
+
+/**
+ * 订阅后台的推送：交易消息自动记下、刷新了订单时推一条 orders，收到就刷新列表。
+ * 断了会自己重连，重连上先刷新一次，补上断开期间漏掉的。
+ */
+export function useOrderStream(account: string) {
+  const client = useQueryClient()
+  useEffect(() => {
+    const controller = new AbortController()
+    const refresh = () => void client.invalidateQueries({ queryKey: orderKeys.list(account) })
+    const onEvent = (type: string) => {
+      if (type === "orders") refresh()
+    }
+    void subscribeMessages(account, controller.signal, refresh, onEvent)
+    return () => controller.abort()
+  }, [account, client])
 }
 
 /** 实时详情，会请求一次闲鱼；一分钟内重复打开用缓存。 */
