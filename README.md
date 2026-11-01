@@ -150,11 +150,44 @@ uv run pytest tests/test_db.py                      # 4. 确认迁移和 app/sch
 uv run xym import-sqlite data/xianyu.db
 ```
 
-部署到服务器（比如华为云 ECS + RDS for PostgreSQL）时：
+### 部署
 
-- 设好 `DATABASE_URL=postgresql://用户:密码@数据库地址:5432/库名`，密码里有 `@`、`:` 之类的字符要 URL 编码；
+线上分两台华为云服务器（`~/.ssh/config` 里叫 `huawei-pg` 和 `huawei`）：
+
+- **数据库服务器 huawei-pg**：PostgreSQL 16 跑在 docker 里，端口只绑 127.0.0.1，不对外开；
+- **应用服务器 huawei**：只放前后端。用一条 SSH 隧道（[deploy/pg-tunnel.service](deploy/pg-tunnel.service)）
+  把本机的 127.0.0.1:5432 转到数据库服务器本机的 5432，后端照常连本机：
+  `DATABASE_URL=postgresql://xianyu:密码@127.0.0.1:5432/xianyu`（密码里有 `@`、`:` 之类的字符要 URL 编码）。
+
+两台机器内网不通，隧道走数据库服务器的公网 SSH。两边各有一个不能登录的 `pgtunnel` 用户，数据库服务器上它的公钥
+限定成只能转发到 127.0.0.1:5432（`restrict,port-forwarding,permitopen="127.0.0.1:5432"`），拿到这把钥匙也开不了 shell、
+连不了别的端口。隧道断了 5 秒后自动重连；后端那边断的那一下查询会报错，下一次自动重连。
+
+重新装一遍隧道（应用服务器上，root）：
+
+```bash
+useradd --system --create-home --home-dir /var/lib/pgtunnel --shell /usr/sbin/nologin pgtunnel
+install -d -m 700 -o pgtunnel -g pgtunnel /var/lib/pgtunnel/.ssh
+runuser -u pgtunnel -- ssh-keygen -t ed25519 -N "" -f /var/lib/pgtunnel/.ssh/id_ed25519
+# 数据库服务器的主机公钥写进 /var/lib/pgtunnel/.ssh/known_hosts（先核对指纹）
+echo "PG_SSH_HOST=<数据库服务器的 IP>" > /etc/pg-tunnel.env
+# 数据库服务器上同样建 pgtunnel 用户，authorized_keys 写：
+#   restrict,port-forwarding,permitopen="127.0.0.1:5432" <上面生成的 id_ed25519.pub>
+cp deploy/pg-tunnel.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now pg-tunnel
+systemctl status pg-tunnel                   # 看隧道状态；journalctl -u pg-tunnel 看日志
+```
+
+从自己电脑上临时连线上库（跑迁移、导数据、查数据），另开一条隧道，用 15432 免得和本机 docker 的 5432 撞上：
+
+```bash
+ssh -N -L 15432:127.0.0.1:5432 huawei-pg
+DATABASE_URL=postgresql://xianyu:密码@127.0.0.1:15432/xianyu uv run alembic current
+```
+
+另外：
+
 - 每次发版先 `uv run alembic upgrade head` 再重启 `xym serve`。想先看要执行的 SQL：`uv run alembic upgrade head --sql`；
-- 凭证（`data/accounts/`）和熔断状态（`data/guard.json`）还是本地文件，要一起放到服务器上，权限收紧；
+- 凭证（`data/accounts/`）和熔断状态（`data/guard.json`）还是本地文件，要一起放到应用服务器上，权限收紧；
 - 后台接口没有登录鉴权，不要直接监听公网地址，先加鉴权或者只通过 SSH 隧道访问。
 
 在代码里用：
@@ -199,6 +232,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
+deploy/          部署用的文件：应用服务器连数据库的 SSH 隧道（systemd）
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型
