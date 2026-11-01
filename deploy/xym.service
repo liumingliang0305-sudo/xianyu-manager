@@ -1,4 +1,5 @@
-# 应用服务器上的管理后台：xym serve（接口 + 打包好的前端），只监听本机 8000，从自己电脑走 SSH 隧道访问。
+# 应用服务器上的管理后台：xym serve（接口 + 打包好的前端），只监听本机 8000。
+# 公网经过 Caddy（deploy/Caddyfile）的 HTTPS 进来，也可以从自己电脑走 SSH 隧道访问。
 # 代码在 /opt/xianyu-manager（deploy/deploy.sh 传上来），连接串在 /etc/xym.env（DATABASE_URL=...，权限 600）。
 # 数据库走 pg-tunnel 那条隧道；启动时连不上就退出，5 秒后再试。
 [Unit]

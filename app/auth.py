@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import secrets
 import time
@@ -24,8 +25,10 @@ from app.users import User
 KEY_PATH = Path("data/auth.key")
 ACCESS_TTL = 15 * 60
 ALGORITHM = "HS256"
-# 同一个用户名 15 分钟里输错 5 次，就等这 15 分钟过去再试
+# 同一个用户名 15 分钟里输错 5 次，就等这 15 分钟过去再试；
+# 同一个 IP 输错 20 次也一样（换着用户名猜）
 MAX_FAILURES = 5
+MAX_FAILURES_PER_IP = 20
 FAILURE_WINDOW = 15 * 60.0
 
 
@@ -83,31 +86,40 @@ class AccessTokens:
 
 
 class LoginLimiter:
-    """按用户名记输错的次数，防暴力猜密码。只在内存里，重启清零。
-
-    管理后台通过 SSH 隧道访问，看到的来源地址都是 127.0.0.1，所以不按 IP 限。
-    """
+    """按一个键（用户名，或者来源 IP）记输错的次数，防暴力猜密码。只在内存里，重启清零。"""
 
     def __init__(self, *, max_failures: int = MAX_FAILURES, window: float = FAILURE_WINDOW):
         self._max = max_failures
         self._window = window
         self._failures: defaultdict[str, deque[float]] = defaultdict(deque)
 
-    def check(self, username: str) -> None:
+    def check(self, key: str) -> None:
         now = time.time()
-        failures = self._failures.get(username)
+        failures = self._failures.get(key)
         if not failures:
             return
         while failures and failures[0] <= now - self._window:
             failures.popleft()
         if not failures:
-            del self._failures[username]
+            del self._failures[key]
         elif len(failures) >= self._max:
             minutes = max(1, round((failures[0] + self._window - now) / 60))
             raise TooManyAttemptsError(f"密码输错次数太多，{minutes} 分钟后再试")
 
-    def failed(self, username: str) -> None:
-        self._failures[username].append(time.time())
+    def failed(self, key: str) -> None:
+        self._failures[key].append(time.time())
 
-    def succeeded(self, username: str) -> None:
-        self._failures.pop(username, None)
+    def succeeded(self, key: str) -> None:
+        self._failures.pop(key, None)
+
+
+def client_ip(host: str | None) -> str | None:
+    """按 IP 限次用的来源地址。本机来的（SSH 隧道、本机开发）不按 IP 限，大家看起来都是 127.0.0.1。
+
+    经过 Caddy 时 uvicorn 从 X-Forwarded-For 取真实地址（只信本机的代理，见 uvicorn 的
+    forwarded_allow_ips），Caddy 不信客户端自己带的 X-Forwarded-For，伪造不了。
+    """
+    try:
+        return None if not host or ipaddress.ip_address(host).is_loopback else host
+    except ValueError:
+        return host

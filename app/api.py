@@ -41,11 +41,13 @@ from pydantic import BaseModel
 from app import auth, db, keepalive
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
 from app.auth import (
+    MAX_FAILURES_PER_IP,
     AccessTokens,
     LoginFailedError,
     LoginLimiter,
     NotSignedInError,
     TooManyAttemptsError,
+    client_ip,
 )
 from app.items import ItemService, PriceGuardError
 from app.login import (
@@ -76,6 +78,32 @@ SSE_PING = 15.0
 # 刷新令牌的 cookie：只发给 /api/auth 下面的接口，页面脚本读不到
 REFRESH_COOKIE = "xym_refresh"
 REFRESH_PATH = "/api/auth"
+
+# 页面只加载自己的脚本和样式（不认注入进来的脚本），不让别的网站用 iframe 嵌进去。
+# 商品图、聊天图在阿里的 CDN 上，图片放开 https；商品图的地址是 http 的，
+# upgrade-insecure-requests 让浏览器换成 https。
+# 样式要 'unsafe-inline'：提示框（sonner）、主题切换（next-themes）会插 <style>。
+CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https:",
+        "font-src 'self' data:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "upgrade-insecure-requests",
+    ]
+)
+SECURITY_HEADERS = [
+    (b"content-security-policy", CONTENT_SECURITY_POLICY.encode()),
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+]
 
 # 异常 → (HTTP 状态码, code)。按顺序匹配，子类要排在父类前面
 ERRORS: list[tuple[type[Exception], int, str]] = [
@@ -169,6 +197,7 @@ def create_app(
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
     tokens = AccessTokens(auth.load_key(auth_key or auth.KEY_PATH))
     limiter = LoginLimiter()
+    ip_limiter = LoginLimiter(max_failures=MAX_FAILURES_PER_IP)
 
     async def save_login(credential: Credential, user_id: int) -> None:
         # 等这个账号手上的平台请求做完再写，免得请求结束时把旧 cookie 写回来，盖掉刚扫到的凭证
@@ -210,7 +239,11 @@ def create_app(
                 await login.aclose()
             conn.close()
 
-    app = FastAPI(title="闲鱼管理系统", lifespan=lifespan)
+    # 接口文档页（/docs、/openapi.json）不开：对公网开放以后，不给别人一份现成的接口清单
+    app = FastAPI(
+        title="闲鱼管理系统", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
+    )
+    app.add_middleware(SecurityHeaders)
 
     for exc_type, status, code in ERRORS:
         app.add_exception_handler(exc_type, _error_handler(status, code))
@@ -305,12 +338,18 @@ def create_app(
 
     @app.post("/api/auth/login")
     async def sign_in(request: Request, response: Response, body: SignInIn) -> dict[str, Any]:
-        """用户名密码登录。同一个用户名 15 分钟里输错 5 次，要等到这 15 分钟过去。"""
+        """用户名密码登录。15 分钟里同一个用户名输错 5 次、或者同一个 IP 输错 20 次，
+        要等到这 15 分钟过去。"""
         username = body.username.strip().lower()
+        ip = client_ip(request.client.host if request.client else None)
         limiter.check(username)
+        if ip:
+            ip_limiter.check(ip)
         user = await users(request).authenticate(username, body.password)
         if user is None:
             limiter.failed(username)
+            if ip:
+                ip_limiter.failed(ip)
             raise LoginFailedError("用户名或密码不对")
         limiter.succeeded(username)
         return session(request, response, user, users(request).new_refresh_token(user.id))
@@ -686,6 +725,25 @@ async def sse_events(
 
 def _sse(event: dict[str, Any]) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+class SecurityHeaders:
+    """每个响应都加上安全相关的响应头（见 SECURITY_HEADERS）。纯 ASGI，不碍着消息推送的流式响应。"""
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), *SECURITY_HEADERS]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def _bearer(request: Request) -> str:

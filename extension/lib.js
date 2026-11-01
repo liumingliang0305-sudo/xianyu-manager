@@ -44,7 +44,11 @@ export function isLoggedIn(cookies) {
   return Boolean(cookies.unb && cookies.cookie2)
 }
 
-/** 后台地址只允许本机的 http 地址，cookie 不能发到别处。不合格时返回 null */
+const LOCAL_HOSTS = ["127.0.0.1", "localhost"]
+
+/**
+ * 后台地址：本机的可以是 http，别的只能是 https，cookie 不能明文发出去。不合格时返回 null
+ */
 export function normalizeServer(text) {
   let url
   try {
@@ -52,8 +56,20 @@ export function normalizeServer(text) {
   } catch {
     return null
   }
-  if (url.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(url.hostname)) return null
-  return url.origin
+  const local = LOCAL_HOSTS.includes(url.hostname)
+  if (url.protocol === "https:" || (url.protocol === "http:" && local)) return url.origin
+  return null
+}
+
+/** 本机的后台：manifest 里已经有访问权限 */
+export function isLocalServer(server) {
+  return LOCAL_HOSTS.includes(new URL(server).hostname)
+}
+
+/** 远程后台要单独向用户申请的访问权限，只要这一个地址（匹配规则里不写端口，任何端口都算） */
+export function serverPermission(server) {
+  const url = new URL(server)
+  return { origins: [`${url.protocol}//${url.hostname}/*`] }
 }
 
 /** 插件令牌：管理后台用户菜单里生成的，xymp_ 开头。不像令牌时返回 null */

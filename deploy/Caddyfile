@@ -1,0 +1,38 @@
+# 管理后台对公网的 HTTPS 入口：应用服务器上的 Caddy，装法见 README「部署」。
+# 证书是 Let's Encrypt 给 IP 地址发的，6 天有效，Caddy 自己续。
+# 后台（xym serve）还是只听本机 8000，外面只能经过这里进来。
+# 公网 IP 写在 /etc/caddy/caddy.env（XYM_PUBLIC_IP=...），不放进仓库。
+{
+	# 用 IP 访问时浏览器不带 SNI，按这个地址选证书
+	default_sni {$XYM_PUBLIC_IP}
+}
+
+{$XYM_PUBLIC_IP} {
+	tls {
+		issuer acme {
+			# IP 地址的证书只有短期（6 天）这一种
+			profile shortlived
+		}
+	}
+
+	# 最大的请求是导入 cookie、改描述，几 KB
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		# 一年里浏览器只用 https 访问这个地址
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	# 消息推送（SSE）不压缩，压缩会攒着不发
+	@compressible not path */messages/stream
+	encode @compressible zstd gzip
+
+	# Caddy 不信客户端自己带的 X-Forwarded-For，转给后台的是真实来源地址（登录按 IP 限次用）
+	reverse_proxy 127.0.0.1:8000
+
+	# 访问日志进 journald：journalctl -u caddy
+	log
+}

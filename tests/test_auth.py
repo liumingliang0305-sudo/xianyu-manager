@@ -89,6 +89,33 @@ def test_too_many_wrong_passwords_locks_the_username(client, database_url):
     assert (resp.status_code, resp.json()["code"]) == (429, "too_many_attempts")
 
 
+def test_too_many_wrong_passwords_from_one_ip(client, database_url):
+    add_user(database_url, "alice")
+    for n in range(auth.MAX_FAILURES_PER_IP):  # 换着用户名猜
+        client.post("/api/auth/login", json={"username": f"guess{n}", "password": "x" * 8})
+    resp = client.post("/api/auth/login", json={"username": "alice", "password": PASSWORD})
+    assert (resp.status_code, resp.json()["code"]) == (429, "too_many_attempts")
+
+
+def test_local_clients_are_not_limited_by_ip():
+    # SSH 隧道、本机开发进来的都是 127.0.0.1，按 IP 限会互相连累
+    assert auth.client_ip("127.0.0.1") is None
+    assert auth.client_ip("::1") is None
+    assert auth.client_ip(None) is None
+    assert auth.client_ip("203.0.113.9") == "203.0.113.9"
+
+
+def test_security_headers_and_no_api_docs(client):
+    resp = client.get("/api/health")
+    csp = resp.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+
 def test_refresh_and_sign_out(client, database_url):
     add_user(database_url, accounts=[UNB])
     sign_in(client)

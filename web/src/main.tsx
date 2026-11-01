@@ -44,7 +44,7 @@ void checkSession()
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     {/* next-themes 内联的防闪烁脚本只对服务端渲染有用，纯前端页面里不会执行，标成数据块免得 React 报警；
-        首屏主题由 index.html 里的脚本先设好 */}
+        首屏主题由 index.html 引的 theme.js 先设好 */}
     <ThemeProvider
       attribute="class"
       defaultTheme="system"

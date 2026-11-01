@@ -89,9 +89,11 @@
     <p id="detail"></p>
     <p id="time" class="muted"></p>
     <button id="sync" type="button">立即同步</button>
-    <label for="server">管理后台地址（只能是本机）</label>
+    <label for="server">管理后台地址（本机可以用 http，别的地址只能 https）</label>
     <input id="server" type="url" spellcheck="false" />
-    <p id="server-error" class="error" hidden>只能填本机地址，比如 http://127.0.0.1:8000</p>
+    <p id="server-error" class="error" hidden>
+      本机填 http://127.0.0.1:8000 这样的；服务器要填 https:// 开头的地址
+    </p>
     <label for="token" class="spaced">插件令牌（管理后台左下角用户菜单里生成）</label>
     <input id="token" type="password" spellcheck="false" autocomplete="off" placeholder="xymp_…" />
     <p id="token-error" class="error" hidden>不像插件令牌，要 xymp_ 开头，从管理后台整串复制过来</p>

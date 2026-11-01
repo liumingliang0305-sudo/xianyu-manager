@@ -1,4 +1,4 @@
-// 登录同步插件的后台：闲鱼的登录 cookie 变了（登录、退出、网页端续期）就推给本机的管理后台，
+// 登录同步插件的后台：闲鱼的登录 cookie 变了（登录、退出、网页端续期）就推给管理后台，
 // 另外每 10 分钟看一次，补上后台没开时漏掉的。推之前比一下登录指纹，没变就不推。
 // 推的时候带上插件令牌（管理后台用户菜单里生成），推过来的账号归到令牌的主人名下。
 
@@ -9,8 +9,10 @@ import {
   flattenCookies,
   isFinalFailure,
   isGoofishDomain,
+  isLocalServer,
   isLoggedIn,
   loginKey,
+  serverPermission,
 } from "./lib.js"
 
 const ALARM = "sync"
@@ -47,6 +49,13 @@ async function sync({ force = false } = {}) {
     return
   }
   if (!force && key === lastKey) return
+  if (!isLocalServer(server) && !(await chrome.permissions.contains(serverPermission(server)))) {
+    await setStatus({
+      ok: false,
+      message: `还没允许插件访问 ${server}：点「立即同步」，在弹出的提示里点允许`,
+    })
+    return
+  }
 
   let resp
   try {
@@ -57,7 +66,8 @@ async function sync({ force = false } = {}) {
     })
   } catch {
     // 不记 lastKey，定时任务会再试
-    await setStatus({ ok: false, message: `连不上管理后台（${server}），确认 uv run xym serve 在运行` })
+    const hint = isLocalServer(server) ? "确认 uv run xym serve 在运行" : "确认服务器开着、地址没填错"
+    await setStatus({ ok: false, message: `连不上管理后台（${server}），${hint}` })
     return
   }
   const body = await resp.json().catch(() => null)
@@ -86,6 +96,9 @@ chrome.cookies.onChanged.addListener(({ cookie }) => {
   clearTimeout(timer)
   timer = setTimeout(() => void sync(), DEBOUNCE_MS)
 })
+
+// 允许访问远程后台以后马上推一次（弹窗可能在授权提示出来时已经关了）
+chrome.permissions.onAdded.addListener(() => void sync({ force: true }))
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM) void sync()

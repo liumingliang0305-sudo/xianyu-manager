@@ -29,12 +29,14 @@
 - [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
 - [x] 订单管理：按订单号添加、刷新进行中的订单、按状态查看、实时详情、改价、改动记录（[app/orders.py](app/orders.py)，后台"订单"页）
 - [x] 本地库换成 PostgreSQL（本机用 docker 跑），表结构用 Alembic 迁移管理；以前 SQLite 里的数据用 `xym import-sqlite` 一次导过来（见下面"数据库"）
+- [x] 管理后台对公网开放：服务器上用 Caddy 提供 HTTPS（Let's Encrypt 给公网 IP 发的证书），后台只听本机；
+  登录同步插件能推给远程的 https 后台（见下面"部署"）
 - [x] 管理后台的用户登录：用户名密码登录，访问令牌（JWT）加刷新令牌；一个用户可以有多个闲鱼账号，每个用户只看得到、
   只能操作自己名下的账号。用户由命令行建，没有注册入口（[app/auth.py](app/auth.py)、[app/users.py](app/users.py)，见下面"用户和登录"）
 - [ ] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），等即时消息做好后从交易消息里记
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
-以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹、登录同步插件推到远程服务器。
+以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
 
 ## 快速上手
 
@@ -98,7 +100,8 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 
 ### 管理后台
 
-打开页面先用管理后台的用户名密码登录（见下面"用户和登录"）。后台只监听本机（127.0.0.1），是明文 http，不直接对公网开。
+打开页面先用管理后台的用户名密码登录（见下面"用户和登录"）。后台只监听本机（127.0.0.1），本身是明文 http；
+服务器上对公网由 Caddy 提供 HTTPS（见下面"部署"）。
 启动前数据库要先起来（`docker compose up -d`），表结构不是最新时 `xym serve` 会直接报错退出。
 
 前端用 pnpm，版本固定在 `web/package.json` 的 `packageManager` 里。没装过的话先运行一次 `corepack enable pnpm`（Node 自带的 corepack 会按这个版本下载 pnpm）。
@@ -111,10 +114,11 @@ uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验
 2. 在管理后台左下角的用户菜单里点「浏览器插件令牌」生成一个，复制到插件弹窗的「插件令牌」里。
    推过来的账号归到这个令牌的主人名下；令牌只能用来推登录，别的接口都不认；
 3. 在 Chrome 里登录 goofish.com，头像菜单里打开"保存登录信息"；
-4. 插件会把登录推给本机的管理后台（默认 http://127.0.0.1:8000，插件弹窗里能改，只能填本机地址）。
+4. 插件会把登录推给管理后台（默认 http://127.0.0.1:8000，插件弹窗里能改）。本机的地址可以是 http，
+   别的只能是 https；填了远程地址时 Chrome 会问一次要不要允许插件访问这个地址，点允许（只给这一个地址的权限）。
    之后浏览器里登录变了（重新登录、网页端自动续期）都会自动同步，另外每 10 分钟对一次。点插件图标能看同步结果。
 
-插件只读 goofish.com 的 cookie，只发给本机的后台。后台和浏览器共用这次登录，浏览器里退出登录这里也会失效。
+插件只读 goofish.com 的 cookie，只发给填的那个后台。后台和浏览器共用这次登录，浏览器里退出登录这里也会失效。
 插件令牌忘了或者泄露了，在用户菜单里重新生成，旧的马上作废。
 后台收到登录先向平台确认能用再保存；和已保存的一样就不请求平台；浏览器那份已经过期就拒绝，不替它续期，留着后台自己那份。
 没装插件时，登录弹窗的「导入浏览器登录」可以手动粘贴开发者工具里 www.goofish.com 那条请求的 Cookie 请求头，效果一样。
@@ -163,7 +167,9 @@ uv run xym accounts assign <unb> bob  # 把闲鱼账号分给用户（从别人�
 - **刷新令牌**放在 HttpOnly cookie 里（只发给 `/api/auth`，SameSite=Strict，页面脚本读不到），访问令牌过期了拿它换新的。
   7 天没打开就过期，最长 30 天要重新输密码。退出登录时在服务端删掉；
 - 改密码、停用时，这个用户之前发的访问令牌立即作废（每个请求查一次用户）；
-- 同一个用户名 15 分钟里输错 5 次密码，要等这 15 分钟过去才能再试；
+- 15 分钟里同一个用户名输错 5 次、或者同一个 IP 输错 20 次密码，要等这 15 分钟过去才能再试
+  （本机来的不按 IP 算：SSH 隧道、本机开发看起来都是 127.0.0.1）；
+- 每个响应都带内容安全策略（CSP，只跑自己站点上的脚本）、禁止被别的网站嵌进 iframe 等响应头；接口文档页（/docs）不开；
 - 签名密钥在 `data/auth.key`，第一次启动时生成。删掉它再重启，发出去的访问令牌全部作废（刷新令牌还在，页面会自动换新的）；
 - 消息推送（SSE）用 fetch 读，访问令牌放在请求头里，不放进网址（网址会被记进访问日志）。
 
@@ -239,13 +245,21 @@ deploy/deploy.sh            # 默认主机 huawei
 排在 `pg-tunnel` 后面启动，连不上数据库就 5 秒后重试；除了 `data/` 别的目录都只读。连接串在 `/etc/xym.env`（root 才能读）。
 看日志：`journalctl -u xym -f`。
 
-访问后台：接口是明文 http，不对公网开，从自己电脑开一条隧道（用 18000，免得和本机开发用的 8000 撞上）：
+访问后台：浏览器打开 `https://<应用服务器的公网 IP>`。Caddy（[deploy/Caddyfile](deploy/Caddyfile)）在 443 上提供 HTTPS，
+转给本机的 8000；80 只用来跳转到 https 和申请证书。证书是 Let's Encrypt 给 IP 地址发的，只有 6 天有效，Caddy 自己续
+（`journalctl -u caddy` 看续期日志）。后台本身还是只听本机，不经过 Caddy 进不来。
+
+对公网开放的安全措施：只走 HTTPS（浏览器记住一年，不会退回 http）；登录按用户名和 IP 限次；访问令牌 15 分钟；
+CSP 等安全响应头；接口文档页不开；请求体最大 1MB。华为云安全组放行 80、443，除了 SSH 的 22 别的端口不用开。
+要注意的是：后台能改价、下架、回消息，**用户密码要够长、别和别处共用**；不用的用户 `xym users disable` 停掉。
+
+不想走公网时也可以照旧从自己电脑开隧道（用 18000，免得和本机开发用的 8000 撞上），打开 http://127.0.0.1:18000 ：
 
 ```bash
 ssh -N -L 18000:127.0.0.1:8000 huawei
 ```
 
-然后打开 http://127.0.0.1:18000 。服务器上的用户和闲鱼账号都和本机分开：
+服务器上的用户和闲鱼账号都和本机分开：
 
 - 用户在服务器上建。在自己电脑上用 `deploy/xym.sh` 跑服务器上的 `xym` 命令（SSH 过去、带上 `/etc/xym.env`、
   以 `xym` 用户运行，密码在本机终端里输）：
@@ -257,7 +271,7 @@ ssh -N -L 18000:127.0.0.1:8000 huawei
 
   第一个用户会接手服务器上以前扫码登录的闲鱼账号。
 - 闲鱼账号在页面上点「登录闲鱼」用 App 扫码，凭证存在服务器的 `data/accounts/`，不从本机拷。
-  登录同步插件要推给服务器的话，把插件里的地址改成 http://127.0.0.1:18000 ，令牌在服务器的页面上生成。
+  登录同步插件要推给服务器的话，把插件里的地址改成 `https://<公网 IP>`，令牌在服务器的页面上生成。
 
 应用服务器第一次装（root）：
 
@@ -272,6 +286,22 @@ install -m 600 /dev/null /etc/xym.env && vi /etc/xym.env
 cp deploy/xym.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable xym
 # 然后在自己电脑上跑 deploy/deploy.sh
 ```
+
+装 HTTPS 入口 Caddy（root；用 Caddy 官方的 apt 源，以后 apt upgrade 跟着升级。华为云安全组要放行 80、443）：
+
+```bash
+apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install -y caddy
+echo "XYM_PUBLIC_IP=<应用服务器的公网 IP>" > /etc/caddy/caddy.env
+install -D -m 644 deploy/caddy-xym.conf /etc/systemd/system/caddy.service.d/xym.conf
+install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
+systemctl daemon-reload && systemctl restart caddy
+journalctl -u caddy -f        # 看到 certificate obtained successfully 就好了
+```
+
+改了 Caddyfile 以后：`install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy`。
 
 想先看迁移要执行的 SQL：服务器上 `cd /opt/xianyu-manager && set -a && . /etc/xym.env && .venv/bin/alembic upgrade head --sql`。
 
@@ -319,7 +349,8 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   cli.py           业务命令 xym
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
-deploy/          部署：deploy.sh 发版，xym.sh 在服务器上跑 xym 命令，xym.service 跑后台，pg-tunnel.service 连数据库的 SSH 隧道
+deploy/          部署：deploy.sh 发版，xym.sh 在服务器上跑 xym 命令，xym.service 跑后台，
+                 Caddyfile 对公网的 HTTPS 入口，pg-tunnel.service 连数据库的 SSH 隧道
 .github/workflows/ci.yml  GitHub Actions：后端 ruff + pytest，前端 oxlint + 构建
 tests/           单元测试（用 httpx.MockTransport 模拟平台，不连网；用到数据库的连 docker 里的 xianyu_test 库）
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
