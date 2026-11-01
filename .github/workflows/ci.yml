@@ -37,7 +37,8 @@ jobs:
       TEST_DATABASE_URL: postgresql://xianyu:xianyu@localhost:5432/xianyu_test
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv 不发 v10 这种大版本标签，只能写完整版本
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.12"
       - run: uv sync --locked
