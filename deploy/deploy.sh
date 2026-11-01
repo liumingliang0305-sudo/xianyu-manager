@@ -43,4 +43,5 @@ for _ in \$(seq 1 30); do
 done
 curl -fsS -o /dev/null http://127.0.0.1:8000/api/health || { journalctl -u xym -n 30 --no-pager; exit 1; }
 "
-echo "已部署 $REV。访问：https://<应用服务器的公网 IP>（Caddy），或者 ssh -N -L 18000:127.0.0.1:8000 $HOST 走隧道"
+# 变量后面紧跟中文时要加花括号：macOS 自带的 bash 3.2 会把"。"的第一个字节算进变量名
+echo "已部署 ${REV}。访问：https://<应用服务器的公网 IP>（Caddy），或者 ssh -N -L 18000:127.0.0.1:8000 $HOST 走隧道"
