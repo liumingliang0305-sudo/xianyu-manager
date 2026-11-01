@@ -1,0 +1,66 @@
+# 每个 PR 和推到 main 的提交都跑：后端 ruff + pytest（连一个 PostgreSQL 服务容器），前端 oxlint + 构建。
+# 命令和本机一样，本机能过这里就能过（见 README「快速上手」）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一个分支推了新提交，旧的那次跑到一半就取消
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      # 和 docker-compose.yml 一样的版本和账号；测试自己建 xianyu_test 库、跑迁移
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: xianyu
+          POSTGRES_PASSWORD: xianyu
+          POSTGRES_DB: xianyu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xianyu -d xianyu"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://xianyu:xianyu@localhost:5432/xianyu_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm 的版本按 web/package.json 的 packageManager
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
