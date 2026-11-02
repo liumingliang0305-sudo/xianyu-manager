@@ -1,11 +1,15 @@
 import httpx
 import pytest
+from fake_im import trade_card
 from fakes import UNB, add_user, keep_login_cookies, sign_in
 from fastapi.testclient import TestClient
 
+from app import db
 from app.api import create_app
+from app.messages import MessageStore
 from xianyu_core.credential import Credential
 from xianyu_core.guard import Guard
+from xianyu_core.im import ChatMessage
 
 
 @pytest.fixture
@@ -325,3 +329,40 @@ def test_search_risk_control_trips_breaker(client, platform):
     platform.fail["mtop.taobao.idlemtopsearch.pc.search"] = "RGV587_ERROR::SM::哎哟喂,被挤爆啦"
     assert client.post(search_url(), json={"keyword": "洗衣"}).json()["code"] == "risk_control"
     assert client.get(items_url("/1001/detail")).json()["code"] == "circuit_open"
+
+
+def test_scan_orders_from_stored_messages(client, database_url, platform):
+    """以前存下的交易消息里的订单补进本地库：写明是买到的不拉，查不到的、平台报错的分开报。"""
+    sold = {"item_id": "1001", "status": "等待卖家发货", "price": 35800, "post": 0}
+    platform.orders["5001000000001"] = {**sold, "created": 1761700000000}
+    platform.orders["5001000000002"] = {**sold, "created": 1761800000000, "bought": True}
+    cards = [
+        ("5001000000001", "seller"),
+        ("5001000000002", "seller"),  # 卡片看不出来，拉了详情才知道是买到的
+        ("5001000000003", "buyer"),
+        ("5001000000004", "seller"),  # 平台查不到
+    ]
+    conn = db.connect(database_url)
+    MessageStore(conn).save_messages(
+        UNB,
+        [
+            ChatMessage.from_history(
+                trade_card(order_id=o, role=role, message_id=f"m{i}", sent_ms=1793378127000 - i)
+            )
+            for i, (o, role) in enumerate(cards)
+        ],
+    )
+    conn.close()
+
+    body = client.post(orders_url("/scan")).json()
+    assert (body["found"], body["bought"]) == (4, 1)
+    assert body["added"] == ["5001000000001"]
+    assert body["not_mine"] == ["5001000000002"]
+    assert body["failed"] == ["5001000000004"]
+    assert body["updated"] == body["skipped"] == []
+    asked = [d["tid"] for api, d in platform.calls if api == "mtop.idle.web.trade.order.detail"]
+    assert "5001000000003" not in asked
+    assert [o["order_id"] for o in client.get(orders_url()).json()["orders"]] == ["5001000000001"]
+
+    # 再补一次：已经记下的刷新一次
+    assert client.post(orders_url("/scan")).json()["updated"] == ["5001000000001"]

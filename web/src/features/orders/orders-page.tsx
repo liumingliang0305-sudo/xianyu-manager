@@ -1,4 +1,4 @@
-import { Loader2Icon, PlusIcon, RefreshCwIcon } from "lucide-react"
+import { Loader2Icon, MessageSquareIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -18,7 +18,7 @@ import { OrderOpsList } from "./order-bits"
 import { OrderDetailSheet } from "./order-detail-sheet"
 import { OrderPriceDialog } from "./order-price-dialog"
 import { OrdersTable, type OrderActionKind } from "./orders-table"
-import { useOrderOps, useOrderStream, useOrders, useSyncOrders } from "./queries"
+import { useOrderOps, useOrderStream, useOrders, useScanOrders, useSyncOrders } from "./queries"
 import { RemoveOrderDialog } from "./remove-order-dialog"
 
 type Tab = OrderStatus | "all"
@@ -56,6 +56,40 @@ function RefreshButton({ account }: { account: string }) {
     <Button onClick={run} disabled={sync.isPending} variant="outline">
       {sync.isPending ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
       {sync.isPending ? "刷新中…" : "刷新状态"}
+    </Button>
+  )
+}
+
+/** 以前存下的消息里出现过的卖出订单补进来。新来的交易消息后台会自动记，这个补以前的 */
+function ScanButton({ account }: { account: string }) {
+  const scan = useScanOrders(account)
+  const run = () =>
+    scan.mutate(undefined, {
+      onSuccess: (r) => {
+        if (r.found === 0) {
+          toast.success("本地存的消息里没有找到订单")
+          return
+        }
+        const groups: [string, string[]][] = [
+          ["新记下", r.added],
+          ["刷新了", r.updated],
+          ["本地已结束", r.skipped],
+          ["是买到的或查不到", r.not_mine],
+          ["拉取失败", r.failed],
+        ]
+        const parts = groups.filter(([, ids]) => ids.length).map(([label, ids]) => `${label} ${ids.length}`)
+        toast.success(
+          `消息里有 ${r.found} 笔订单` +
+            (r.bought ? `（${r.bought} 笔是买到的，没拉）` : "") +
+            (parts.length ? `：${parts.join("，")}` : ""),
+        )
+      },
+      onError: (error) => toast.error(errorMessage(error)),
+    })
+  return (
+    <Button onClick={run} disabled={scan.isPending} variant="outline">
+      {scan.isPending ? <Loader2Icon className="animate-spin" /> : <MessageSquareIcon />}
+      {scan.isPending ? "查找中…" : "从消息找订单"}
     </Button>
   )
 }
@@ -116,8 +150,17 @@ export function OrdersPage() {
     body = <LoadError what="读取本地订单" error={orders.error} onRetry={() => void orders.refetch()} />
   else if (all.length === 0)
     body = (
-      <EmptyState title="还没有订单" action={add}>
-        收到交易消息（买家拍下、付款）时会自动记下来。以前的订单在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。
+      <EmptyState
+        title="还没有订单"
+        action={
+          <div className="flex items-center gap-2">
+            <ScanButton account={account} />
+            {add}
+          </div>
+        }
+      >
+        {"收到交易消息（买家拍下、付款）时会自动记下来。以前的订单点「从消息找订单」从存下的消息里补，" +
+          "消息里也没有的在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。"}
       </EmptyState>
     )
   else if (visible.length === 0)
@@ -154,6 +197,7 @@ export function OrdersPage() {
         }
         actions={
           <>
+            {all.length > 0 && <ScanButton account={account} />}
             {all.length > 0 && <RefreshButton account={account} />}
             {all.length > 0 && add}
           </>

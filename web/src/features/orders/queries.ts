@@ -76,6 +76,14 @@ export function useSyncOrders(account: string) {
   })
 }
 
+export function useScanOrders(account: string) {
+  const refresh = useRefresh(account)
+  return useMutation({
+    mutationFn: () => api.scanOrders(account),
+    onSettled: () => refresh(),
+  })
+}
+
 export function useAddOrder(account: string) {
   const refresh = useRefresh(account)
   return useMutation({

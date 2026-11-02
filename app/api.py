@@ -81,6 +81,9 @@ SSE_PING = 15.0
 REFRESH_COOKIE = "xym_refresh"
 REFRESH_PATH = "/api/auth"
 
+# 从消息里补订单时每笔的结果：新记下、刷新了、本地已结束没拉、是买到的或查不到、平台报错
+SCAN_RESULTS = ("added", "updated", "skipped", "not_mine", "failed")
+
 # 页面只加载自己的脚本和样式（不认注入进来的脚本），不让别的网站用 iframe 嵌进去。
 # 商品图、聊天图在阿里的 CDN 上，图片放开 https；商品图的地址是 http 的，
 # upgrade-insecure-requests 让浏览器换成 https。
@@ -100,6 +103,7 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "upgrade-insecure-requests",
     ]
 )
+
 SECURITY_HEADERS = [
     (b"content-security-policy", CONTENT_SECURITY_POLICY.encode()),
     (b"x-content-type-options", b"nosniff"),
@@ -626,6 +630,24 @@ def create_app(
         async with locks[account_id]:
             result = await orders(request).sync(account_id)
         return asdict(result)
+
+    @authed.post("/api/accounts/{account_id}/orders/scan")
+    async def scan_orders(request: Request, account_id: str) -> dict[str, Any]:
+        """从本地存的消息里找卖出的订单，逐笔拉详情记进本地库（新的交易消息 xym serve 会自动记，
+        这个补以前的）。卡片写明是买到的跳过；本地已经结束的不再拉。
+
+        `found` 消息里有几笔订单，`bought` 其中写明是买到的；其余每笔的结果见 OrderService.track。
+        """
+        account_id = account(request, account_id)
+        refs = hub(request).store.order_refs(account_id)
+        todo = [order_id for order_id, role in refs if role != "buyer"]
+        async with locks[account_id]:
+            results = await orders(request).track_many(account_id, todo)
+        return {
+            "found": len(refs),
+            "bought": len(refs) - len(todo),
+            **{key: results.get(key, []) for key in SCAN_RESULTS},
+        }
 
     @authed.get("/api/accounts/{account_id}/orders/{order_id}/detail")
     async def order_detail(request: Request, account_id: str, order_id: str) -> dict[str, Any]:

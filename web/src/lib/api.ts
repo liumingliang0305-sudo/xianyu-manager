@@ -193,6 +193,22 @@ export interface OrderSyncResult {
   failed: string[]
 }
 
+/** 从本地存的消息里补订单的结果：found 消息里有几笔，bought 其中写明是买到的（不拉）；其余每笔落在后面一组 */
+export interface OrderScanResult {
+  found: number
+  bought: number
+  /** 新记下的 */
+  added: string[]
+  /** 本地已经有、刷新了一次的 */
+  updated: string[]
+  /** 本地已经结束（交易成功、已关闭），没再拉 */
+  skipped: string[]
+  /** 拉了详情才知道是买到的，或者平台查不到 */
+  not_mine: string[]
+  /** 平台报错 */
+  failed: string[]
+}
+
 /**
  * 即时消息的连接状态。connecting 正在连；online 在线，新消息实时收；waiting 断了，等着重连；
  * stopped 停了，needs 说要人做什么；off 后台没开即时消息（只有 xym serve 会连）
@@ -525,6 +541,10 @@ export const api = {
 
   syncOrders: (account: string) =>
     request<OrderSyncResult>(`${ordersPath(account)}/sync`, { method: "POST" }),
+
+  /** 从本地存的消息里找卖出的订单，逐笔拉详情记下来（会请求闲鱼，订单多时要一会儿） */
+  scanOrders: (account: string) =>
+    request<OrderScanResult>(`${ordersPath(account)}/scan`, { method: "POST" }),
 
   orderDetail: (account: string, orderId: string) =>
     request<OrderDetail>(`${ordersPath(account)}/${orderId}/detail`),
