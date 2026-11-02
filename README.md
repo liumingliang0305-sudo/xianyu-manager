@@ -8,8 +8,8 @@
 - [x] 协议笔记 → [docs/protocol-notes.md](docs/protocol-notes.md)
 - [x] 底座方案：Python 自建 `xianyu_core`，结构参考 goofish-cli
 - [x] mtop 签名和请求客户端（[xianyu_core/mtop.py](xianyu_core/mtop.py)）
-- [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)），终端和管理后台都能扫（[app/login.py](app/login.py)）
-- [x] 登录态续期：会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），`xym accounts check` 和后台账号菜单看登录态。
+- [x] 纯 HTTP 扫码登录（[xianyu_core/auth/qr_login.py](xianyu_core/auth/qr_login.py)），在管理后台里扫（[app/login.py](app/login.py)）
+- [x] 登录态续期：会话过期时自动免密续期（[xianyu_core/renew.py](xianyu_core/renew.py)），后台账号菜单看登录态、重新检查。
   纯 HTTP 扫码登录平台不给开"保持登录"（同一个账号在浏览器里能开），所以用浏览器插件（[extension/](extension/)）把浏览器里的登录同步过来，见[协议笔记](docs/protocol-notes.md#登录态续期)。线上还没走通一次真正的续期
 - [x] 定时确认登录态：`xym serve` 每 30 分钟确认一次，会话一过期就免密续期；保持登录 3 天内到期时页面顶部提醒（[app/keepalive.py](app/keepalive.py)）
 - [x] 即时消息底座：WebSocket 长连接，新消息由服务端实时推送，不用轮询；断线自动重连，会话列表和历史消息也能拉（[xianyu_core/im.py](xianyu_core/im.py)，协议见[协议笔记](docs/protocol-notes.md#即时消息)）。能发文本消息；标已读还没做
@@ -28,7 +28,7 @@
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
 - [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
 - [x] 订单管理：按订单号添加、刷新进行中的订单、按状态查看、实时详情、改价、改动记录（[app/orders.py](app/orders.py)，后台"订单"页）
-- [x] 本地库换成 PostgreSQL（本机用 docker 跑），表结构用 Alembic 迁移管理；以前 SQLite 里的数据用 `xym import-sqlite` 一次导过来（见下面"数据库"）
+- [x] 本地库换成 PostgreSQL（本机用 docker 跑），表结构用 Alembic 迁移管理；以前 SQLite 里的数据已经一次导过来了
 - [x] 管理后台对公网开放：服务器上用 Caddy 提供 HTTPS（Let's Encrypt 给公网 IP 发的证书），后台只听本机；
   登录同步插件能推给远程的 https 后台（见下面"部署"）
 - [x] 管理后台的用户登录：用户名密码登录，访问令牌（JWT）加刷新令牌；一个用户可以有多个闲鱼账号，每个用户只看得到、
@@ -36,7 +36,7 @@
 - [x] 订单自动入库：个人卖家在网页端拿不到卖出订单列表（见[协议笔记](docs/protocol-notes.md#订单)），改从交易消息里记。
   `xym serve` 收到交易卡片（"[我已拍下，待付款]"、"[我已付款，等待你发货]"之类）时，从卡片里取订单号，
   在后台拉一次详情记进本地库，之后每来一张卡片（发货、收货、评价）刷新一次状态，后台"订单"页跟着刷新。
-  卡片上写着自己是买家的不拉；看不出来的拉一次详情再看，买到的不记。以前存下的消息里的订单用 `xym orders scan` 补
+  卡片上写着自己是买家的不拉；看不出来的拉一次详情再看，买到的不记
   （[app/orders.py](app/orders.py) 的 `OrderFeed`，卡片格式见[协议笔记](docs/protocol-notes.md#交易消息里的订单号)）。
   线上还没走通一次：要等有人下单
 - [x] 商品搜索：后台"搜索"页搜闲鱼上所有卖家的在售商品，排序、发布时间、价格区间、个人闲置 / 包邮 / 全新 / 验货宝
@@ -55,59 +55,20 @@ uv sync                                      # 安装依赖
 docker compose up -d                         # 启动本机的 PostgreSQL
 uv run alembic upgrade head                  # 建表；以后拉了新代码也跑一次，把表结构升到最新
 uv run xym users add <用户名>                  # 建管理后台的用户，提示输入密码（第一个用户接手已有的闲鱼账号）
-uv run xianyu login                          # 终端里显示二维码，用闲鱼 App 扫（也可以在管理后台里扫）
-uv run xianyu whoami data/accounts/<unb>.json  # 检查登录态是否还有效，会话过期时先试免密续期
 uv run pytest                                # 跑测试（用到数据库的连 docker 里的 xianyu_test 库，没有会自动建）
 ```
 
 每个 PR 和推到 main 的提交，GitHub Actions 会跑一遍同样的检查（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：
 后端 `ruff check`、`ruff format --check`、`pytest`（连一个 PostgreSQL 16 服务容器），前端 `pnpm lint`、`pnpm build`。
 
-商品管理用 `xym`（业务层命令）。只有一个账号时不用指定，多个账号加 `--account <unb>`：
+商品、订单、消息、搜索都在管理后台的页面上操作（见下面"管理后台"），命令行只剩 `xym serve` 和 `xym users`。
 
-```bash
-uv run xym accounts check          # 各账号登录态；会话过期时先试免密续期，不行就提示重新扫码
-uv run xym items sync --stats      # 把主页上的商品同步到本地库，--stats 顺带拉浏览、收藏数
-uv run xym items list              # 看本地库里的商品，--status online/sold 过滤，--all 含已下架
-uv run xym items show <商品ID>      # 实时详情
-uv run xym items price <商品ID> 299 # 改价，会先确认；降价超过一半或涨价超过一倍要加 --force
-uv run xym items desc <商品ID> 描述.txt
-uv run xym items down <商品ID>      # 下架
-uv run xym items delete <商品ID>    # 删除，平台上不可恢复
-uv run xym items log               # 通过本系统做过的改动，成功失败都有记录
-```
-
-订单管理（卖出的订单）。个人卖家在网页端拿不到卖出订单列表，订单从交易消息里记：`xym serve` 连着即时消息时，
-买家拍下、付款的卡片一到就自动记下来，状态也跟着后面的卡片刷新。以前的订单先用 `xym orders scan` 从本地存的消息里补一次；
-消息里也没有的，在闲鱼 App「我卖出的」里点进订单、复制订单编号添加：
-
-```bash
-uv run xym orders scan                       # 从本地存的消息里找卖出的订单，逐个拉详情记下来（买到的跳过）
-uv run xym orders add <订单号或订单链接>       # 添加，会拉一次详情确认是你卖出的订单
-uv run xym orders sync                       # 刷新本地还没结束的订单；专业卖家会从卖家工作台整页同步
-uv run xym orders list --status to_ship      # 看本地库里的订单；状态有 unpaid / to_ship / shipped / done / closed / refund / other
-uv run xym orders show <订单ID>               # 实时详情：进度、金额明细（含软件服务费、预估到手）、订单信息
-uv run xym orders price <订单ID>              # 待付款订单：先列出能改的价格项（商品价格、运费）
-uv run xym orders price <订单ID> modifyFee=99 # 改价，没写的项保持原值；总价降一半以上或涨一倍以上要加 --force
-uv run xym orders log                        # 本系统对订单做过的改动
-uv run xym orders remove <订单ID>             # 从本地列表移除，不动平台上的订单
-```
-
-发货还没做：网页版闲鱼也不支持发货，要在闲鱼 App 里操作。
-
-消息由 `xym serve` 在后台实时收（见下面"管理后台"），命令行只看本地库里已经收到的：
-
-```bash
-uv run xym messages list              # 商品会话，最近有动静的在前；--all 含系统通知
-uv run xym messages show <会话ID> -n 50 # 一个会话最近的消息
-```
-
-所有请求都有限流（每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟）。碰到风控（滑块、"被挤爆啦"）时账号自动暂停 30 分钟，
-期间不发任何请求。先到闲鱼 App 或网页完成验证，再提前解除：
-
-```bash
-uv run xym accounts unblock        # 管理后台页面顶部也有"已完成验证，解除"
-```
+- 订单：个人卖家在网页端拿不到卖出订单列表，订单从交易消息里记：`xym serve` 连着即时消息时，
+  买家拍下、付款的卡片一到就自动记下来，状态也跟着后面的卡片刷新。消息里没有的，在闲鱼 App「我卖出的」里
+  点进订单、复制订单编号，到"订单"页添加；
+- 发货还没做：网页版闲鱼也不支持发货，要在闲鱼 App 里操作；
+- 所有请求都有限流（每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟）。碰到风控（滑块、"被挤爆啦"）时
+  账号自动暂停 30 分钟，期间不发任何请求。先到闲鱼 App 或网页完成验证，再在页面顶部点"已完成验证，解除"提前解除。
 
 ### 管理后台
 
@@ -160,17 +121,17 @@ pnpm -C web dev
 商品、订单、消息、改动记录都跟着账号走；别人的账号在接口上和不存在一样（404）。
 扫码登录、导入 Cookie、插件推过来的账号归到当前用户；已经归别人的拒绝，凭证也不保存。
 
-用户由命令行建，没有注册入口。命令行是管理员工具，不分用户：
+用户由命令行建，没有注册入口。命令行是管理员工具，不分用户，服务器上用 `deploy/xym.sh users ...` 跑：
 
 ```bash
 uv run xym users add alice          # 建用户，提示输两遍密码（至少 8 位）
 uv run xym users list               # 每个用户名下的闲鱼账号
 uv run xym users passwd alice       # 重设密码，这个用户已经登录的地方都要重新登录
 uv run xym users disable alice      # 停用：登录不了，已经登录的地方马上失效，插件令牌也不认；enable 恢复
-uv run xym accounts assign <unb> bob  # 把闲鱼账号分给用户（从别人名下转过来时先确认）
 ```
 
-有用户以前就登录过的闲鱼账号没有归属，谁都看不到；**建第一个用户时自动归给这个用户**，之后的用 `xym accounts assign` 分。
+有用户以前就登录过的闲鱼账号没有归属，谁都看不到；**建第一个用户时自动归给这个用户**。之后谁在后台登录（扫码、导入浏览器登录、插件同步）就归谁；
+已经归了一个用户的账号没有转给别人的入口。
 
 登录鉴权（[app/auth.py](app/auth.py)）：
 
@@ -186,7 +147,7 @@ uv run xym accounts assign <unb> bob  # 把闲鱼账号分给用户（从别人�
 
 ### 数据库
 
-本地库是 PostgreSQL 16。连接串取环境变量 `DATABASE_URL`（命令行也可以 `--db` 指定），没设时连本机 docker 里的
+本地库是 PostgreSQL 16。连接串取环境变量 `DATABASE_URL`（`xym` 也可以 `--db` 指定），没设时连本机 docker 里的
 `postgresql://xianyu:xianyu@localhost:5432/xianyu`（[docker-compose.yml](docker-compose.yml)，端口只绑 127.0.0.1）。
 数据在 docker 卷里，`docker compose down` 不会丢，`docker compose down -v` 才会删。
 
@@ -197,12 +158,6 @@ uv run xym accounts assign <unb> bob  # 把闲鱼账号分给用户（从别人�
 uv run alembic revision --autogenerate -m "说明"   # 2. 生成迁移，打开生成的文件检查一遍（改列名、数据要搬的得手写）
 uv run alembic upgrade head                        # 3. 升级本机的库
 uv run pytest tests/test_db.py                      # 4. 确认迁移和 app/schema.py 对得上、能降回去
-```
-
-以前的 SQLite 库（`data/xianyu.db`）里的数据，建好表以后导一次就行，只能导进空库，出错整个回滚：
-
-```bash
-uv run xym import-sqlite data/xianyu.db
 ```
 
 ### 部署
@@ -344,14 +299,12 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   order.py         订单接口：卖出的订单列表（卖家工作台）、订单详情、改价（price render → adjust）
   search.py        搜索接口：网页端搜索页同一个接口，排序和筛选，解析成商品卡片
   im.py            即时消息：WebSocket 连接（注册、心跳、ACK、对齐同步位点）、推送解码、会话列表、历史消息、断线重连
-  cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
   accounts.py      账号（data/accounts/<unb>.json），用完把续期的 cookie 写回，顺手记下登录态
   users.py         管理后台的用户：密码（argon2id）、刷新令牌、插件令牌、闲鱼账号归属
   auth.py          登录鉴权：访问令牌（JWT）、签名密钥、输错密码限次
   db.py            本地库（PostgreSQL）：连接、启动时确认表结构是最新的
   schema.py        表结构：用户、刷新令牌、账号归属，商品、订单、它们的改动记录，消息的会话和消息；Alembic 从这里生成迁移
-  sqlite_import.py 一次性把以前 SQLite 库里的数据导进 PostgreSQL（xym import-sqlite）
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   search.py        搜索闲鱼上的商品（别人的），一次一页，不存库
@@ -359,7 +312,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
   messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连；回复
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
-  cli.py           业务命令 xym
+  cli.py           命令行 xym：启动管理后台（serve）、管理后台的用户（users）
   （以后）自动回复、自动化……
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
 deploy/          部署：deploy.sh 发版，xym.sh 在服务器上跑 xym 命令，xym.service 跑后台，

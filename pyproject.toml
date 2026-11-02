@@ -19,7 +19,6 @@ dependencies = [
 ]
 
 [project.scripts]
-xianyu = "xianyu_core.cli:main"
 xym = "app.cli:main"
 
 [dependency-groups]

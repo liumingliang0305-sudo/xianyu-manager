@@ -60,7 +60,7 @@ refresh_tokens = Table(
 )
 
 # 闲鱼账号归哪个用户：一个账号只归一个用户。没有归属的账号（有用户以前就登录过的）谁都看不到，
-# 用 xym accounts assign 分给用户
+# 建第一个用户时归给他；之后谁在管理后台登录（扫码、导入浏览器登录）就归谁
 account_owners = Table(
     "account_owners",
     metadata,

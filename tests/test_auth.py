@@ -274,10 +274,6 @@ def test_cli_first_user_takes_existing_accounts(accounts, database_url, monkeypa
     assert users.account_ids(alice.id) == {UNB, OTHER}
     assert users.account_ids(bob.id) == set()
 
-    assert cli.main([*base, "accounts", "assign", OTHER, "bob", "-y"]) == 0
-    assert users.account_ids(bob.id) == {OTHER}
-    assert cli.main([*base, "accounts", "assign", "999", "bob", "-y"]) == 1
-
     assert cli.main([*base, "users", "disable", "bob"]) == 0
     assert users.find("bob").disabled
     conn.close()

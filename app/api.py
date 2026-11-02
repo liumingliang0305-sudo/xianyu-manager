@@ -13,7 +13,7 @@
 - 金额：响应里一律是分（`*_cent`，整数）；请求里的价格是元的字符串（"49"、"12.5"），服务端校验换算；
 - 出错时返回 `{"code": ..., "message": ...}`，`code` 见 ERRORS；
 - 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖；
-- 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态和命令行共用；
+- 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态存在文件里，重启后还在；
 - 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
   GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接。
 """
@@ -198,7 +198,7 @@ def create_app(
     auth_key: str | Path | None = None,
 ) -> FastAPI:
     """`database_url`：数据库连接串，不给时用 db.default_url()（环境变量 DATABASE_URL）。
-    `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态（和命令行共用）。
+    `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态。
     `login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
     `auth_key`：访问令牌的签名密钥文件，不给时用 data/auth.key，没有就生成。
 

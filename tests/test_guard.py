@@ -4,8 +4,7 @@ import httpx
 import pytest
 from fakes import UNB
 
-from app import cli
-from app.accounts import Accounts, LoginState, make_guard
+from app.accounts import Accounts, LoginState
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
     AuthRequiredError,
@@ -175,14 +174,6 @@ def test_other_errors_do_not_trip(clock):
 
     run(go())
     assert guard.block(UNB) is None
-
-
-def test_cli_unblock(tmp_path, accounts):
-    path = tmp_path / "guard.json"
-    make_guard(path).trip(UNB, "RGV587")
-    argv = ["--accounts", str(accounts.root), "--guard", str(path), "accounts", "unblock", "-y"]
-    assert cli.main(argv) == 0
-    assert make_guard(path).block(UNB) is None
 
 
 def test_check_during_block_is_risk_without_request(accounts, platform):

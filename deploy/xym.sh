@@ -3,7 +3,7 @@
 #
 #   deploy/xym.sh users add alice            建管理后台的用户，在这个终端里输密码
 #   deploy/xym.sh users list
-#   XYM_HOST=别的主机 deploy/xym.sh accounts check
+#   XYM_HOST=别的主机 deploy/xym.sh users list
 #
 # 到服务器的项目目录、带上 /etc/xym.env 里的数据库连接串，以 xym 用户运行：命令写出来的文件
 # （凭证、熔断状态）后台还能改。用 root 跑会在 data/ 里留下 xym 改不了的文件。

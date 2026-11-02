@@ -195,7 +195,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 
 两个请求都从 `www.goofish.com` 发（`origin`、`referer` 是网页端页面），带登录 cookie。
 
-`xianyu login` 扫码后的做法：先查一次，`canOpenLongLogin` 为 true 且还没开时才提交 `status=0`，提交后再查一次确认。
+扫码登录后的做法：先查一次，`canOpenLongLogin` 为 true 且还没开时才提交 `status=0`，提交后再查一次确认。
 网页端不显示开关的时候（`canOpenLongLogin` 为 false）不提交，免得发出网页端不会发的请求。
 
 2026-10-29 实测：当天扫码登录的账号查出来是 `canOpenLongLogin: false`、`hasLongTokenLogin: false`，凭证里也没有长登录标记。

@@ -38,10 +38,7 @@ class AccountTakenError(Exception):
     """这个闲鱼账号已经归别的用户了。"""
 
     def __init__(self, account_id: str):
-        super().__init__(
-            f"闲鱼账号 {account_id} 已经绑定在别的用户名下了，"
-            "要换用户找管理员（xym accounts assign）"
-        )
+        super().__init__(f"闲鱼账号 {account_id} 已经绑定在别的用户名下了")
 
 
 @dataclass(frozen=True)
@@ -246,7 +243,7 @@ class Users:
             raise AccountTakenError(account_id)
 
     def assign(self, account_id: str, user_id: int) -> None:
-        """命令行用：把账号分给用户，原来归别人的直接转过来。"""
+        """把账号分给用户，原来归别人的直接转过来（建第一个用户时接手已有的账号用）。"""
         self._db.execute(
             "INSERT INTO account_owners (account_id, user_id, created_at) VALUES (%s, %s, %s)"
             " ON CONFLICT (account_id) DO UPDATE"

@@ -1,4 +1,4 @@
-"""账号：凭证文件放在 data/accounts/<unb>.json（`xianyu login` 生成），账号 ID 就是 unb。
+"""账号：凭证文件放在 data/accounts/<unb>.json（管理后台里登录闲鱼时生成），账号 ID 就是 unb。
 
 登录态（有效 / 失效 / 风控）在每次和平台打交道时顺手记下，只放在内存里。
 会话过期时 MtopClient 会先试免密续期，续期拿到的 cookie 随凭证一起写回文件。
@@ -31,7 +31,7 @@ CHECK_INTERVAL = 600
 
 
 def make_guard(path: str | Path | None = GUARD_PATH) -> Guard:
-    """限流和熔断。熔断状态存在 `path` 文件里，命令行和 xym serve 共用；None 时只放内存。"""
+    """限流和熔断。熔断状态存在 `path` 文件里，重启后还在；None 时只放内存。"""
     if path is None:
         return Guard()
     return Guard(FileBlockStore(path))
@@ -80,12 +80,12 @@ class Accounts:
         ids = self.ids()
         if account_id:
             if account_id not in ids:
-                raise AccountNotFoundError(f"找不到账号 {account_id}，先用 xianyu login 登录")
+                raise AccountNotFoundError(f"找不到账号 {account_id}，先在管理后台登录闲鱼")
             return account_id
         if len(ids) == 1:
             return ids[0]
         if not ids:
-            raise AccountNotFoundError(f"{self.root} 下没有账号，先用 xianyu login 登录")
+            raise AccountNotFoundError(f"{self.root} 下没有账号，先在管理后台登录闲鱼")
         raise AccountNotFoundError(f"有 {len(ids)} 个账号，请指定一个：{', '.join(ids)}")
 
     def path(self, account_id: str) -> Path:
