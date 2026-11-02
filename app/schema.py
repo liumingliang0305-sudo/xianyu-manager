@@ -104,12 +104,13 @@ item_ops = Table(
     Index("item_ops_item", "account_id", "item_id"),
 )
 
-# 卖出的订单
+# 订单：卖出的和买到的
 orders = Table(
     "orders",
     metadata,
     Column("account_id", Text, primary_key=True),
     Column("order_id", Text, primary_key=True),
+    Column("side", Text, nullable=False, server_default="sold"),  # sold 卖出的，bought 买到的
     Column("item_id", Text, nullable=False, server_default=""),
     Column("title", Text, nullable=False, server_default=""),
     Column("pic_url", Text, nullable=False, server_default=""),
@@ -117,8 +118,9 @@ orders = Table(
     Column("status_text", Text, nullable=False, server_default=""),  # 平台原文
     Column("price_cent", BigInteger),  # 订单金额
     Column("quantity", Integer, nullable=False, server_default=text("1")),
-    Column("buyer_id", Text, nullable=False, server_default=""),
-    Column("buyer_nick", Text, nullable=False, server_default=""),
+    # 对方：卖出的订单是买家，买到的订单是卖家
+    Column("peer_id", Text, nullable=False, server_default=""),
+    Column("peer_nick", Text, nullable=False, server_default=""),
     Column("created_at", Double),  # 下单时间
     Column("raw", Text, nullable=False, server_default="{}"),  # 平台最近一次返回的原始数据（JSON）
     Column("first_seen_at", Double, nullable=False),

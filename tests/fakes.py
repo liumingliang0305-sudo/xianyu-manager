@@ -191,9 +191,13 @@ class FakePlatform:
     def _order_total(self, order):
         return order["price"] + order.get("post", 0)
 
+    def _newest(self, bought: bool) -> list[str]:
+        ids = [oid for oid, o in self.orders.items() if o.get("bought", False) == bought]
+        return sorted(ids, key=lambda oid: -self.orders[oid]["created"])
+
     def mtop_taobao_idle_trade_merchant_sold_get(self, data):
         page, size = data["pageNumber"], data["rowsPerPage"]
-        ids = sorted(self.orders, key=lambda oid: -self.orders[oid]["created"])
+        ids = self._newest(bought=False)
         rows = [
             {
                 "commonData": {
@@ -209,6 +213,46 @@ class FakePlatform:
             for oid in ids[(page - 1) * size : page * size]
         ]
         return {"module": {"items": rows, "nextPage": page * size < len(ids)}}
+
+    def mtop_idle_web_trade_bought_list(self, data):
+        """我买到的，一页 10 条；第二页起要带上一页的 lastEndRow（offsetRow）。"""
+        page = data["pageNumber"]
+        assert page == 1 or data["offsetRow"] == str((page - 1) * 10)
+        ids = self._newest(bought=True)
+        rows = [
+            {
+                "commonData": {
+                    "orderIdStr": oid,
+                    "itemId": int(self.orders[oid]["item_id"]),
+                    "peerUserId": 8,
+                    "seller": False,
+                },
+                "head": {
+                    "data": {
+                        "createTime": str(self.orders[oid]["created"]),
+                        "statusViewMsg": self.orders[oid]["status"],
+                        "userInfo": {"userId": "8", "userNick": "卖家乙"},
+                    }
+                },
+                "content": {
+                    "data": {
+                        "detailInfo": {
+                            "auctionTitle": self.items.get(self.orders[oid]["item_id"], {}).get(
+                                "title", ""
+                            ),
+                            "auctionPic": "http://img.example/b.jpg",
+                        },
+                        "priceInfo": {
+                            "price": f"{self._order_total(self.orders[oid]) / 100:.2f}",
+                            "buyAmount": 1,
+                        },
+                    }
+                },
+            }
+            for oid in ids[(page - 1) * 10 : page * 10]
+        ]
+        more = page * 10 < len(ids)
+        return {"items": rows, "nextPage": str(more).lower(), "lastEndRow": str(page * 10)}
 
     def mtop_idle_web_trade_order_detail(self, data):
         """结构照 2026-10-29 实测的订单详情裁剪：已发货后没有收货地址区块，地址在订单信息里。"""
@@ -247,7 +291,9 @@ class FakePlatform:
                     },
                     "orderInfoList": [
                         {"title": "订单编号", "value": data["tid"], "copyable": True},
-                        {"title": "买家昵称" if seller else "卖家昵称", "value": "买家甲"},
+                        {"title": "买家昵称", "value": "买家甲"}
+                        if seller
+                        else {"title": "卖家昵称", "value": "卖家乙"},
                         {"title": "下单时间", "value": "2026-10-29 12:00:00"},
                     ],
                 },

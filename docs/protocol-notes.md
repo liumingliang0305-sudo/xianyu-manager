@@ -104,7 +104,17 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 - "我买到的" `mtop.idle.web.trade.bought.list` ✅（`{pageNumber, orderStatus: "ALL"}`，`valueType=string`；
   `orderStatus` 还可以是 `NOT_PAY` / `NOT_SHIP` / `SHIPPED` / `NOT_RATE` / `REFUND`）：返回 `items[]`（`commonData`、
   `head`、`content`、`tail`）、`nextPage`、`lastEndRow`，`totalCount` 总是 0。`commonData` 有 `orderId`、`itemId`、
-  `seller`、`tradeStatusEnum`（见过 `trade_success`、`refund_success`）等。实测里 `seller` 全是 false，只有买到的订单；
+  `seller`、`tradeStatusEnum`（见过 `trade_success`、`refund_success`）等。实测里 `seller` 全是 false，只有买到的订单。
+  本系统用它同步买到的订单（`OrderApi.iter_bought`，2026-11-02 实测 62 笔）：
+  - 每页 10 条；第二页起网页端带 `offsetRow`（上一页返回的 `lastEndRow`），`nextPage` 是字符串 `"true"`；
+  - 订单号用 `commonData.orderIdStr`（`orderId` 超出 JS 的安全整数）；对方是 `commonData.peerUserId` 和
+    `head.data.userInfo.userNick`（卖家）；状态文字在 `head.data.statusViewMsg`，下单时间 `head.data.createTime`
+    （"2026-10-19 20:57:22"）；商品在 `content.data.detailInfo`（`auctionTitle`、`auctionPic`），
+    实付款和数量在 `content.data.priceInfo`（`price`、`buyAmount`）；
+  - 状态文字除了"交易成功"、"交易关闭，有退款"、"等待买家付款"，还见过"已刀成,待卖家发货"、"等待见面交易"；
+    文字认不出来时按 `tradeStatusEnum` 归类（见过 `buyer_to_pay`、`seller_to_send`、`buyer_to_confirm`、
+    `trade_success`、`refund_success`）；
+  - 买到的订单详情（`order.detail`）里 `seller` 是 false，`peerUserId` 是卖家，订单信息里是"卖家昵称"；
 - 照着它试了 `mtop.idle.web.trade.sold.list`、`.sell.list`、`.seller.list`，都是 `FAIL_SYS_API_NOT_FOUNDED`。
   App 里"我卖出的"是原生页面，走 App 端签名的接口，网页这套签名调不了。
 

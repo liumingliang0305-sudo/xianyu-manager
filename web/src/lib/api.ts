@@ -111,12 +111,16 @@ export interface SyncResult {
   gone: string[]
 }
 
+/** 卖出的（当前账号是卖家）还是买到的 */
+export type OrderSide = "sold" | "bought"
+
 /** 后端按平台的状态文字归类，认不出的是 other */
 export type OrderStatus = "unpaid" | "to_ship" | "shipped" | "done" | "closed" | "refund" | "other"
 
 export interface Order {
   account_id: string
   order_id: string
+  side: OrderSide
   item_id: string
   title: string
   pic_url: string
@@ -124,8 +128,9 @@ export interface Order {
   status_text: string
   price_cent: number | null
   quantity: number
-  buyer_id: string
-  buyer_nick: string
+  /** 对方：卖出的是买家，买到的是卖家 */
+  peer_id: string
+  peer_nick: string
   created_at: number | null
   first_seen_at: number
   synced_at: number
@@ -153,12 +158,13 @@ export interface OrderDetail {
   receiver_name: string
   receiver_phone: string
   receiver_address: string
-  /** 平台给卖家显示的按钮，比如"修改价格" */
+  /** 平台给当前账号显示的按钮，比如"修改价格" */
   actions: string[]
   /** 当前账号是不是卖家；平台没给时是 null */
   seller: boolean | null
-  buyer_id: string
-  buyer_nick: string
+  /** 对方：卖出的是买家，买到的是卖家 */
+  peer_id: string
+  peer_nick: string
   created_at: number | null
 }
 
@@ -185,7 +191,7 @@ export interface OrderOp {
 }
 
 export interface OrderSyncResult {
-  /** list：从卖家工作台整页拉的（专业卖家）；detail：逐个刷新了本地还没结束的订单 */
+  /** list：整页拉的（我买到的，或专业卖家的卖家工作台）；detail：逐个刷新了本地还没结束的卖出订单 */
   source: "list" | "detail"
   added: string[]
   updated: string[]
@@ -193,18 +199,17 @@ export interface OrderSyncResult {
   failed: string[]
 }
 
-/** 从本地存的消息里补订单的结果：found 消息里有几笔，bought 其中写明是买到的（不拉）；其余每笔落在后面一组 */
+/** 从本地存的消息里补订单（卖出的、买到的）的结果：found 消息里有几笔，每笔落在后面一组 */
 export interface OrderScanResult {
   found: number
-  bought: number
   /** 新记下的 */
   added: string[]
   /** 本地已经有、刷新了一次的 */
   updated: string[]
   /** 本地已经结束（交易成功、已关闭），没再拉 */
   skipped: string[]
-  /** 拉了详情才知道是买到的，或者平台查不到 */
-  not_mine: string[]
+  /** 平台查不到 */
+  missing: string[]
   /** 平台报错 */
   failed: string[]
 }
@@ -539,10 +544,14 @@ export const api = {
   removeOrder: (account: string, orderId: string) =>
     request<{ ok: true }>(`${ordersPath(account)}/${orderId}`, { method: "DELETE" }),
 
-  syncOrders: (account: string) =>
-    request<OrderSyncResult>(`${ordersPath(account)}/sync`, { method: "POST" }),
+  /** 刷新一边的订单：买到的整页同步"我买到的"；卖出的个人卖家逐个刷新还没结束的 */
+  syncOrders: (account: string, side: OrderSide) =>
+    request<OrderSyncResult>(`${ordersPath(account)}/sync`, {
+      method: "POST",
+      body: JSON.stringify({ side }),
+    }),
 
-  /** 从本地存的消息里找卖出的订单，逐笔拉详情记下来（会请求闲鱼，订单多时要一会儿） */
+  /** 从本地存的消息里找订单（卖出的、买到的），逐笔拉详情记下来（会请求闲鱼，订单多时要一会儿） */
   scanOrders: (account: string) =>
     request<OrderScanResult>(`${ordersPath(account)}/scan`, { method: "POST" }),
 

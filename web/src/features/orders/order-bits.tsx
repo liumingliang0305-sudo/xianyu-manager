@@ -1,25 +1,44 @@
 import { StatusPill, type Tone } from "@/components/status-pill"
 import { EmptyNote } from "@/components/states"
-import type { OrderOp, OrderStatus } from "@/lib/api"
-import { dateTime, ORDER_STATUS_LABEL, yuan } from "@/lib/format"
+import type { OrderOp, OrderSide, OrderStatus } from "@/lib/api"
+import { dateTime, orderStatusLabel, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-// 待发货是唯一轮到卖家动手的状态，用最显眼的一种；待付款在等买家
-const STATUS_TONE: Record<OrderStatus, Tone> = {
-  unpaid: "warning",
-  to_ship: "action",
-  shipped: "neutral",
-  done: "positive",
-  closed: "outline",
-  refund: "negative",
-  other: "neutral",
+// 轮到我动手的用最显眼的一种：卖出的是待发货，买到的是待付款；在等对方的是琥珀色
+const STATUS_TONE: Record<OrderSide, Record<OrderStatus, Tone>> = {
+  sold: {
+    unpaid: "warning",
+    to_ship: "action",
+    shipped: "neutral",
+    done: "positive",
+    closed: "outline",
+    refund: "negative",
+    other: "neutral",
+  },
+  bought: {
+    unpaid: "action",
+    to_ship: "warning",
+    shipped: "neutral",
+    done: "positive",
+    closed: "outline",
+    refund: "negative",
+    other: "neutral",
+  },
 }
 
 /** 状态徽标。`text` 是平台原文，和归一后的叫法不一样时鼠标悬停能看到。 */
-export function OrderStatusBadge({ status, text }: { status: OrderStatus; text?: string }) {
-  const label = ORDER_STATUS_LABEL[status] ?? status
+export function OrderStatusBadge({
+  status,
+  side,
+  text,
+}: {
+  status: OrderStatus
+  side: OrderSide
+  text?: string
+}) {
+  const label = orderStatusLabel(status, side)
   return (
-    <StatusPill tone={STATUS_TONE[status]} title={text && text !== label ? text : undefined}>
+    <StatusPill tone={STATUS_TONE[side][status]} title={text && text !== label ? text : undefined}>
       {label}
     </StatusPill>
   )

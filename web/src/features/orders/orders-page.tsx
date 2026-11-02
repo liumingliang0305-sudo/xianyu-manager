@@ -8,10 +8,11 @@ import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/s
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCurrentAccount } from "@/hooks/use-account"
 import { useUrlParam } from "@/hooks/use-url-param"
-import { errorMessage, type Order, type OrderStatus } from "@/lib/api"
-import { ORDER_STATUS_LABEL, timeAgo, yuan } from "@/lib/format"
+import { errorMessage, type Order, type OrderSide, type OrderStatus } from "@/lib/api"
+import { orderStatusLabel, timeAgo, yuan } from "@/lib/format"
 
 import { AddOrderDialog } from "./add-order-dialog"
 import { OrderOpsList } from "./order-bits"
@@ -24,17 +25,31 @@ import { RemoveOrderDialog } from "./remove-order-dialog"
 type Tab = OrderStatus | "all"
 
 const TABS: Tab[] = ["all", "unpaid", "to_ship", "shipped", "refund", "done", "closed"]
+const SIDES: OrderSide[] = ["sold", "bought"]
+const SIDE_LABEL: Record<OrderSide, string> = { sold: "卖出的", bought: "买到的" }
+const PEER_LABEL: Record<OrderSide, string> = { sold: "买家", bought: "卖家" }
 
-// 算成交额时不算待付款和已关闭的
-const SOLD: OrderStatus[] = ["to_ship", "shipped", "done", "refund"]
+// 算成交额（买到的算花了多少）时不算待付款和已关闭的
+const PAID: OrderStatus[] = ["to_ship", "shipped", "done", "refund"]
 
 const DAY = 86_400
 
-/** 个人卖家没有卖出订单列表，"刷新"是逐个拉本地还没结束的订单；专业卖家会整页同步。 */
-function RefreshButton({ account }: { account: string }) {
+/**
+ * 买到的整页同步"我买到的"；卖出的个人卖家没有列表，是逐个拉本地还没结束的订单，专业卖家整页同步。
+ * `primary`：这一边还没有订单时，同步就是第一步，用主按钮。
+ */
+function RefreshButton({
+  account,
+  side,
+  primary = false,
+}: {
+  account: string
+  side: OrderSide
+  primary?: boolean
+}) {
   const sync = useSyncOrders(account)
   const run = () =>
-    sync.mutate(undefined, {
+    sync.mutate(side, {
       onSuccess: (r) => {
         if (r.source === "list") {
           toast.success(
@@ -52,15 +67,16 @@ function RefreshButton({ account }: { account: string }) {
       },
       onError: (error) => toast.error(errorMessage(error)),
     })
+  const label = side === "bought" ? "从闲鱼同步" : "刷新状态"
   return (
-    <Button onClick={run} disabled={sync.isPending} variant="outline">
+    <Button onClick={run} disabled={sync.isPending} variant={primary ? "default" : "outline"}>
       {sync.isPending ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-      {sync.isPending ? "刷新中…" : "刷新状态"}
+      {sync.isPending ? "同步中…" : label}
     </Button>
   )
 }
 
-/** 以前存下的消息里出现过的卖出订单补进来。新来的交易消息后台会自动记，这个补以前的 */
+/** 以前存下的消息里出现过的订单（卖出的、买到的）补进来。新来的交易消息后台会自动记，这个补以前的 */
 function ScanButton({ account }: { account: string }) {
   const scan = useScanOrders(account)
   const run = () =>
@@ -74,15 +90,11 @@ function ScanButton({ account }: { account: string }) {
           ["新记下", r.added],
           ["刷新了", r.updated],
           ["本地已结束", r.skipped],
-          ["是买到的或查不到", r.not_mine],
+          ["平台查不到", r.missing],
           ["拉取失败", r.failed],
         ]
         const parts = groups.filter(([, ids]) => ids.length).map(([label, ids]) => `${label} ${ids.length}`)
-        toast.success(
-          `消息里有 ${r.found} 笔订单` +
-            (r.bought ? `（${r.bought} 笔是买到的，没拉）` : "") +
-            (parts.length ? `：${parts.join("，")}` : ""),
-        )
+        toast.success(`消息里有 ${r.found} 笔订单：${parts.join("，")}`)
       },
       onError: (error) => toast.error(errorMessage(error)),
     })
@@ -99,6 +111,7 @@ export function OrdersPage() {
   useOrderStream(account)
   const orders = useOrders(account)
   const ops = useOrderOps(account)
+  const [side, setSide] = useUrlParam<OrderSide>("side", "sold", SIDES)
   const [tab, setTab] = useUrlParam<Tab>("status", "all", TABS)
   const [search, setSearch] = useState("")
   const [action, setAction] = useState<{ kind: OrderActionKind; order: Order } | null>(null)
@@ -106,25 +119,28 @@ export function OrdersPage() {
   // 打开页面时定下"近 30 天"的起点，不随重新渲染变
   const [since] = useState(() => Date.now() / 1000 - 30 * DAY)
 
-  const all = useMemo(() => orders.data?.orders ?? [], [orders.data])
+  const everything = useMemo(() => orders.data?.orders ?? [], [orders.data])
+  const all = useMemo(() => everything.filter((o) => o.side === side), [everything, side])
   const byStatus = useMemo(() => {
     const groups = new Map<OrderStatus, Order[]>()
     for (const order of all) groups.set(order.status, [...(groups.get(order.status) ?? []), order])
     return groups
   }, [all])
   const titles = useMemo(
-    () => new Map(all.map((o) => [o.order_id, o.title || o.order_id])),
-    [all],
+    () => new Map(everything.map((o) => [o.order_id, o.title || o.order_id])),
+    [everything],
   )
-  const recentSales = useMemo(
+  const recentPaid = useMemo(
     () =>
       all
-        .filter((o) => SOLD.includes(o.status) && (o.created_at ?? o.first_seen_at) >= since)
+        .filter((o) => PAID.includes(o.status) && (o.created_at ?? o.first_seen_at) >= since)
         .reduce((sum, o) => sum + (o.price_cent ?? 0), 0),
     [all, since],
   )
+  const lastSynced = all.reduce<number | null>((max, o) => Math.max(max ?? 0, o.synced_at), null)
 
   const counted = (status: OrderStatus) => byStatus.get(status)?.length ?? 0
+  const sideCount = (s: OrderSide) => everything.filter((o) => o.side === s).length
   const query = search.trim().toLowerCase()
   const inTab = tab === "all" ? all : (byStatus.get(tab) ?? [])
   const visible = inTab.filter(
@@ -132,10 +148,14 @@ export function OrdersPage() {
       !query ||
       o.title.toLowerCase().includes(query) ||
       o.order_id.includes(query) ||
-      o.buyer_nick.toLowerCase().includes(query),
+      o.peer_nick.toLowerCase().includes(query),
   )
   const pending = orders.isPending
-  const toShip = counted("to_ship")
+  // 最要紧的那件事：卖出的是待发货，买到的是待付款
+  const urgent =
+    side === "sold"
+      ? counted("to_ship") > 0 && `${counted("to_ship")} 笔待发货，要到闲鱼 App 里发货`
+      : counted("unpaid") > 0 && `${counted("unpaid")} 笔待付款`
   const close = () => setAction(null)
   const add = (
     <Button onClick={() => setAdding(true)}>
@@ -148,10 +168,10 @@ export function OrdersPage() {
   if (pending) body = <RowsSkeleton height="h-14" />
   else if (orders.isError)
     body = <LoadError what="读取本地订单" error={orders.error} onRetry={() => void orders.refetch()} />
-  else if (all.length === 0)
+  else if (all.length === 0 && side === "sold")
     body = (
       <EmptyState
-        title="还没有订单"
+        title="还没有卖出的订单"
         action={
           <div className="flex items-center gap-2">
             <ScanButton account={account} />
@@ -163,15 +183,31 @@ export function OrdersPage() {
           "消息里也没有的在闲鱼 App「我卖出的」里复制订单编号，点「添加订单」粘贴进来。"}
       </EmptyState>
     )
+  else if (all.length === 0)
+    body = (
+      <EmptyState
+        title="还没有买到的订单"
+        action={<RefreshButton account={account} side={side} primary />}
+      >
+        点「从闲鱼同步」把闲鱼「我买到的」整页拉下来；之后交易消息里的买到的订单也会自动记。
+      </EmptyState>
+    )
   else if (visible.length === 0)
     body = (
       <EmptyState>
         {query
           ? `「${search.trim()}」没有匹配的订单`
-          : `没有${tab === "all" ? "" : ORDER_STATUS_LABEL[tab]}的订单`}
+          : `没有${tab === "all" ? "" : orderStatusLabel(tab, side)}的订单`}
       </EmptyState>
     )
-  else body = <OrdersTable orders={visible} onAction={(kind, order) => setAction({ kind, order })} />
+  else
+    body = (
+      <OrdersTable
+        orders={visible}
+        side={side}
+        onAction={(kind, order) => setAction({ kind, order })}
+      />
+    )
 
   return (
     <div className="flex flex-col gap-6">
@@ -179,39 +215,58 @@ export function OrdersPage() {
         title="订单"
         description={
           pending ? (
-            "卖出的订单"
+            `${SIDE_LABEL[side]}订单`
           ) : (
             <>
-              {toShip > 0 ? (
-                <span className="text-foreground">{toShip} 笔待发货，要到闲鱼 App 里发货</span>
+              {urgent ? (
+                <span className="text-foreground">{urgent}</span>
               ) : (
-                "卖出的订单"
+                `${SIDE_LABEL[side]}订单`
               )}
               <span title="不含待付款和已关闭的订单">
                 {" "}
-                · 近 30 天成交 <span className="tabular-nums">{yuan(recentSales)}</span>
+                · 近 30 天{side === "sold" ? "成交" : "花了"}{" "}
+                <span className="tabular-nums">{yuan(recentPaid)}</span>
               </span>
-              {" "}· 上次更新 {timeAgo(orders.data?.last_synced_at)}
+              {" "}· 上次更新 {timeAgo(lastSynced)}
             </>
           )
         }
         actions={
-          <>
-            {all.length > 0 && <ScanButton account={account} />}
-            {all.length > 0 && <RefreshButton account={account} />}
-            {all.length > 0 && add}
-          </>
+          all.length > 0 && (
+            <>
+              <ScanButton account={account} />
+              <RefreshButton account={account} side={side} />
+              {add}
+            </>
+          )
         }
       />
 
       <div className="flex flex-col gap-3">
+        <Tabs value={side} onValueChange={(v) => setSide(v as OrderSide)}>
+          <TabsList variant="line" aria-label="卖出的还是买到的" className="h-9 gap-6 p-0">
+            {SIDES.map((s) => (
+              <TabsTrigger
+                key={s}
+                value={s}
+                className="flex-none px-0 group-data-horizontal/tabs:after:bottom-0"
+              >
+                {SIDE_LABEL[s]}
+                {!pending && (
+                  <span className="text-muted-foreground tabular-nums">{sideCount(s)}</span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
         <CountFilter
           label="订单状态"
           value={tab}
           onChange={setTab}
           options={TABS.map((value) => ({
             value,
-            label: value === "all" ? "全部" : ORDER_STATUS_LABEL[value],
+            label: value === "all" ? "全部" : orderStatusLabel(value, side),
             count: pending ? null : value === "all" ? all.length : counted(value),
           }))}
         />
@@ -220,7 +275,7 @@ export function OrdersPage() {
             <SearchInput
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜商品、订单号或买家…"
+              placeholder={`搜商品、订单号或${PEER_LABEL[side]}…`}
               aria-label="搜索订单"
               className="w-full sm:w-64"
             />

@@ -86,7 +86,11 @@ export function OrderDetailSheet({
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
         <SheetHeader className="border-b">
           <div className="flex items-center gap-2">
-            <OrderStatusBadge status={status} text={d?.status_title || order.status_text} />
+            <OrderStatusBadge
+              status={status}
+              side={order.side}
+              text={d?.status_title || order.status_text}
+            />
             <span className="font-mono text-xs text-muted-foreground" translate="no">
               {order.order_id}
             </span>
@@ -177,14 +181,14 @@ export function OrderDetailSheet({
           )}
 
           <div className="flex flex-wrap gap-2">
-            {status === "unpaid" && (
+            {order.side === "sold" && status === "unpaid" && (
               <Button onClick={onChangePrice}>
                 <PencilIcon />
                 改价
               </Button>
             )}
             <Button variant="outline" asChild>
-              <a href={orderUrl(order.order_id)} target="_blank" rel="noreferrer">
+              <a href={orderUrl(order.order_id, order.side)} target="_blank" rel="noreferrer">
                 <ExternalLinkIcon />
                 在闲鱼打开
               </a>

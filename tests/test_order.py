@@ -15,9 +15,9 @@ from xianyu_core.order import (
     SHIPPED,
     TO_SHIP,
     UNPAID,
+    ListedOrder,
     OrderApi,
     OrderDetail,
-    SoldOrder,
     money_cent,
     order_status,
     parse_time,
@@ -53,6 +53,10 @@ def client_with(handler):
         ("交易成功", False, DONE),
         ("退款成功", False, CLOSED),
         ("交易关闭", False, CLOSED),
+        ("交易关闭，有退款", False, CLOSED),  # 我买到的里的说法
+        ("等待你付款", False, UNPAID),
+        ("等待你确认收货", False, SHIPPED),
+        ("已刀成,待卖家发货", False, TO_SHIP),
         ("退款中", False, REFUND),
         ("待发货", True, REFUND),
         ("鉴定中", False, OTHER),
@@ -75,7 +79,7 @@ def test_money_and_time_parsing():
 
 
 def test_sold_order_parse_tolerates_missing_fields():
-    order = SoldOrder.parse({"commonData": {"orderId": "5001", "orderStatus": "交易成功"}})
+    order = ListedOrder.parse_sold({"commonData": {"orderId": "5001", "orderStatus": "交易成功"}})
     assert order.order_id == "5001"
     assert order.status == DONE
     assert order.price_cent is None
@@ -202,7 +206,7 @@ def test_detail_parse_real_structure():
     assert (d.income_title, d.income_cent) == ("预估到手", 139160)
     assert d.fields[1] == {"title": "收货地址", "value": "某地"}
     assert d.receiver_name == ""  # 发货后没有收货地址区块
-    assert (d.seller, d.buyer_id, d.buyer_nick) == (True, "7", "买家甲")
+    assert (d.seller, d.peer_id, d.peer_nick) == (True, "7", "买家甲")
     assert d.actions == ["查看评价"]
     assert d.created_at == 1761800000
 
@@ -223,7 +227,7 @@ def test_detail_parse_unpaid_with_address_block():
     assert (d.status, d.status_desc) == (TO_SHIP, "请尽快")
     assert (d.receiver_name, d.receiver_phone, d.receiver_address) == ("张三", "", "某地")
     assert d.seller is None
-    assert d.buyer_id == ""
+    assert d.peer_id == ""
 
 
 def test_price_fields_and_adjust_price():
@@ -261,3 +265,83 @@ def test_price_fields_and_adjust_price():
             {"modifyFee": "29900", "newTransportFee": "0", "orderId": "5002"},
         ),
     ]
+
+
+def bought_row(order_id, status="交易成功", price="124.80"):
+    """结构照 2026-11-02 实测的"我买到的"裁剪，数值是编的。"""
+    return {
+        "commonData": {
+            "itemId": 1062812702796,
+            "orderId": int(order_id),
+            "orderIdStr": order_id,
+            "peerUserId": 2216961613652,
+            "seller": False,
+            "tradeStatusEnum": "trade_success",
+        },
+        "head": {
+            "data": {
+                "createTime": "2025-10-30 12:53:20",
+                "statusViewMsg": status,
+                "userInfo": {"userId": "2216961613652", "userNick": "苹果礼品卡"},
+            }
+        },
+        "content": {
+            "data": {
+                "detailInfo": {"auctionPic": "http://img.example/a.heic", "auctionTitle": "礼品卡"},
+                "priceInfo": {"auctionPriceDesc": "实付款", "buyAmount": 1, "price": price},
+            }
+        },
+    }
+
+
+def test_bought_page_parse_and_paging():
+    seen = []
+
+    def handler(request):
+        body = data_of(request)
+        seen.append((request.url.params["valueType"], body))
+        if body["pageNumber"] == 1:
+            rows = [bought_row("5127546926073005319"), {"commonData": {}}]
+            return ok({"items": rows, "nextPage": "true", "lastEndRow": "10"})
+        rows = [bought_row("5127816672001096520", "交易关闭，有退款", "0.65")]
+        return ok({"items": rows, "nextPage": "false", "lastEndRow": "11"})
+
+    async def go():
+        async with client_with(handler) as mtop:
+            return [o async for o in OrderApi(mtop).iter_bought(interval=0)]
+
+    first, second = run(go())
+    assert (first.order_id, first.side, first.item_id) == (
+        "5127546926073005319",
+        "bought",
+        "1062812702796",
+    )
+    assert (first.status, first.status_text) == (DONE, "交易成功")
+    assert (first.title, first.pic_url) == ("礼品卡", "http://img.example/a.heic")
+    assert (first.price_cent, first.quantity) == (12480, 1)
+    assert (first.peer_id, first.peer_nick) == ("2216961613652", "苹果礼品卡")
+    assert first.created_at == 1761800000
+    assert (second.status, second.price_cent) == (CLOSED, 65)
+    # 第二页带上第一页的 lastEndRow
+    assert seen == [
+        ("string", {"pageNumber": 1, "orderStatus": "ALL"}),
+        ("string", {"pageNumber": 2, "orderStatus": "ALL", "offsetRow": "10"}),
+    ]
+
+
+def test_detail_of_bought_order_names_seller():
+    data = {**REAL_DETAIL, "seller": False, "peerUserId": 2216961613652}
+    info = data["components"][2]["data"]
+    info = {**info, "orderInfoList": [{"title": "卖家昵称", "value": "苹果礼品卡"}]}
+    data["components"] = [*data["components"][:2], {"render": "orderInfoVO", "data": info}]
+    d = OrderDetail.parse("5001", data)
+    assert (d.seller, d.peer_id, d.peer_nick) == (False, "2216961613652", "苹果礼品卡")
+
+
+def test_bought_status_falls_back_to_trade_enum():
+    row = bought_row("5127833448448005319", "等待见面交易")
+    row["commonData"]["tradeStatusEnum"] = "buyer_to_confirm"
+    order = ListedOrder.parse_bought(row)
+    assert (order.status, order.status_text) == (SHIPPED, "等待见面交易")
+    row["commonData"]["tradeStatusEnum"] = "something_new"
+    assert ListedOrder.parse_bought(row).status == OTHER

@@ -33,7 +33,7 @@ def test_sync_stores_orders_newest_first(service, platform, conn):
     assert [o.order_id for o in orders] == ["5002", "5001"]
     assert orders[0].status == UNPAID
     assert orders[0].price_cent == 36800
-    assert orders[0].buyer_nick == "买家甲"
+    assert (orders[0].side, orders[0].peer_nick) == ("sold", "买家甲")
     assert [o.order_id for o in service.list(UNB, status=DONE)] == ["5001"]
     raw = json.loads(
         conn.execute("SELECT raw FROM orders WHERE order_id = '5001'").fetchone()["raw"]
@@ -73,7 +73,7 @@ def test_fetch_detail_updates_local_record(service, platform):
     platform.orders["5001"]["status"] = "鉴定中"  # 认不出的状态不覆盖本地
     detail = run(service.fetch_detail(UNB, "5001"))
     assert detail.title == "平板"
-    assert detail.buyer_nick == "买家甲"
+    assert detail.peer_nick == "买家甲"
     order = service.get(UNB, "5001")
     assert order.status == DONE
     assert order.pic_url == "http://img.example/x.jpg"
@@ -118,7 +118,12 @@ def test_add_order_by_number(service, platform):
     record, added = run(service.add(UNB, f"订单编号 {order_id}"))
     assert added is True
     assert (record.order_id, record.status, record.price_cent) == (order_id, TO_SHIP, 35800)
-    assert (record.title, record.buyer_id, record.buyer_nick) == ("洗衣机", "7", "买家甲")
+    assert (record.side, record.title, record.peer_id, record.peer_nick) == (
+        "sold",
+        "洗衣机",
+        "7",
+        "买家甲",
+    )
     assert record.created_at == 1761900000
 
     platform.orders[order_id]["status"] = "已发货"
@@ -128,13 +133,14 @@ def test_add_order_by_number(service, platform):
     assert [o.order_id for o in service.list(UNB)] == [order_id]
 
 
-def test_add_rejects_bought_and_missing_orders(service, platform):
+def test_add_bought_order_and_reject_missing(service, platform):
     order_id = add_long_order(platform, bought=True)
-    with pytest.raises(ValueError, match="是你买到的"):
-        run(service.add(UNB, order_id))
+    record, added = run(service.add(UNB, order_id))
+    assert added is True
+    assert (record.side, record.peer_nick) == ("bought", "卖家乙")
     with pytest.raises(MtopError):
         run(service.add(UNB, "5009999999999"))
-    assert service.list(UNB) == []
+    assert [o.order_id for o in service.list(UNB)] == [order_id]
 
 
 def details(platform) -> list[str]:
@@ -156,10 +162,12 @@ def test_track_adds_refreshes_and_skips_finished(service, platform):
     assert platform.calls == []
 
 
-def test_track_does_not_keep_bought_orders(service, platform):
+def test_track_keeps_bought_orders(service, platform):
     order_id = add_long_order(platform, bought=True)
-    assert run(service.track(UNB, order_id)) == "not_mine"
-    assert service.list(UNB) == []
+    assert run(service.track(UNB, order_id)) == "added"
+    [record] = service.list(UNB, side="bought")
+    assert (record.order_id, record.peer_id, record.peer_nick) == (order_id, "7", "卖家乙")
+    assert service.list(UNB, side="sold") == []
 
 
 def test_track_many_goes_on_after_one_order_fails(service, platform):
@@ -167,12 +175,7 @@ def test_track_many_goes_on_after_one_order_fails(service, platform):
     bought = add_long_order(platform, "5003000000002", bought=True)
     missing = "5009999999999"
     results = run(service.track_many(UNB, [good, missing, bought, good]))
-    assert results == {
-        "added": [good],
-        "failed": [missing],
-        "not_mine": [bought],
-        "updated": [good],
-    }
+    assert results == {"added": [good, bought], "failed": [missing], "updated": [good]}
 
 
 def test_track_many_stops_on_risk_control(service, platform):
@@ -192,10 +195,8 @@ def test_feed_records_orders_from_trade_messages(service, platform):
         feed = OrderFeed(service, defaultdict(asyncio.Lock), interval=0, on_change=changes.append)
         feed.notify(UNB, sold, "seller")
         feed.notify(UNB, sold, "seller")  # 排着队的同一笔只拉一次
-        feed.notify(UNB, "5003000000003", "buyer")  # 卡片上写着是买家的不拉
-        feed.notify(UNB, bought, "")  # 看不出来的拉一次
+        feed.notify(UNB, bought, "buyer")  # 买到的也记
         await feed.join()
-        feed.notify(UNB, bought, "")  # 知道是买到的了，不再拉
         feed.notify(UNB, "5009999999999", "seller")  # 平台报错的跳过，不影响别的
         feed.notify(UNB, sold, "seller")  # 下一张卡片来了再刷新
         await feed.join()
@@ -203,8 +204,9 @@ def test_feed_records_orders_from_trade_messages(service, platform):
 
     run(go())
     assert details(platform) == [sold, bought, "5009999999999", sold]
-    assert changes == [UNB, UNB]
-    assert [o.order_id for o in service.list(UNB)] == [sold]
+    assert changes == [UNB, UNB, UNB]
+    assert [o.order_id for o in service.list(UNB, side="sold")] == [sold]
+    assert [o.order_id for o in service.list(UNB, side="bought")] == [bought]
 
 
 def test_sync_without_list_permission_refreshes_open_orders(service, platform):
@@ -293,3 +295,29 @@ def test_failed_change_is_logged(service, platform):
     [op] = service.history(UNB)
     assert not op.ok
     assert "订单状态已变化" in op.error
+
+
+def test_sync_bought_walks_the_list(service, platform):
+    for n in range(12):
+        add_long_order(platform, str(5004000000000 + n), bought=True, created=1761000000000 + n)
+    result = run(service.sync(UNB, "bought"))
+    assert len(result.added) == 12
+    bought = service.list(UNB, side="bought")
+    assert bought[0].order_id == "5004000000011"  # 新的在前
+    assert (bought[0].status, bought[0].price_cent, bought[0].peer_nick) == (
+        TO_SHIP,
+        35800,
+        "卖家乙",
+    )
+    assert [o.order_id for o in service.list(UNB, side="sold")] == []
+    pages = [d["pageNumber"] for api, d in platform.calls if api.endswith("bought.list")]
+    assert pages == [1, 2]
+
+    platform.orders["5004000000011"]["status"] = "交易成功"
+    result = run(service.sync(UNB, "bought"))
+    assert (result.added, result.changed) == ([], ["5004000000011"])
+
+
+def test_sync_rejects_unknown_side(service):
+    with pytest.raises(ValueError, match="订单类型"):
+        run(service.sync(UNB, "both"))

@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ItemThumb } from "@/features/items/item-bits"
-import type { Order } from "@/lib/api"
+import type { Order, OrderSide } from "@/lib/api"
 import { dateTime, orderUrl, yuan } from "@/lib/format"
 
 import { OrderStatusBadge } from "./order-bits"
@@ -30,8 +30,13 @@ function orderTitle(order: Order): string {
   return order.title || `商品 ${order.item_id || "-"}`
 }
 
-function buyer(order: Order): string {
-  return order.buyer_nick || order.buyer_id || "-"
+function peer(order: Order): string {
+  return order.peer_nick || order.peer_id || "-"
+}
+
+/** 只有卖出的、待付款的订单能改价 */
+function canChangePrice(order: Order): boolean {
+  return order.side === "sold" && order.status === "unpaid"
 }
 
 function OrderMenu({ order, onAction }: { order: Order; onAction: OnAction }) {
@@ -48,12 +53,12 @@ function OrderMenu({ order, onAction }: { order: Order; onAction: OnAction }) {
           查看详情
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <a href={orderUrl(order.order_id)} target="_blank" rel="noreferrer">
+          <a href={orderUrl(order.order_id, order.side)} target="_blank" rel="noreferrer">
             <ExternalLinkIcon />
             在闲鱼打开
           </a>
         </DropdownMenuItem>
-        {order.status === "unpaid" && (
+        {canChangePrice(order) && (
           <DropdownMenuItem onSelect={() => onAction("price", order)}>
             <PencilIcon />
             改价
@@ -74,8 +79,19 @@ function Quantity({ order }: { order: Order }) {
   return <span className="ml-1 font-normal text-muted-foreground">×{order.quantity}</span>
 }
 
-/** 宽屏是表格，下单时间日期在上、时分秒在下；768px 以下换成两行的列表 */
-export function OrdersTable({ orders, onAction }: { orders: Order[]; onAction: OnAction }) {
+/**
+ * 宽屏是表格，下单时间日期在上、时分秒在下；768px 以下换成两行的列表。
+ * `side` 决定对方那一列叫"买家"还是"卖家"。
+ */
+export function OrdersTable({
+  orders,
+  side,
+  onAction,
+}: {
+  orders: Order[]
+  side: OrderSide
+  onAction: OnAction
+}) {
   return (
     <>
       <div className="hidden md:block">
@@ -85,7 +101,7 @@ export function OrdersTable({ orders, onAction }: { orders: Order[]; onAction: O
               <TableHead className="w-full min-w-64">商品</TableHead>
               <TableHead className="text-right">金额</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead>买家</TableHead>
+              <TableHead>{side === "bought" ? "卖家" : "买家"}</TableHead>
               <TableHead className="text-right">下单时间</TableHead>
               <TableHead>
                 <span className="sr-only">操作</span>
@@ -119,10 +135,10 @@ export function OrdersTable({ orders, onAction }: { orders: Order[]; onAction: O
                     {yuan(order.price_cent)}
                   </TableCell>
                   <TableCell>
-                    <OrderStatusBadge status={order.status} text={order.status_text} />
+                    <OrderStatusBadge status={order.status} side={order.side} text={order.status_text} />
                   </TableCell>
-                  <TableCell className="max-w-32 truncate text-muted-foreground" title={buyer(order)}>
-                    {buyer(order)}
+                  <TableCell className="max-w-32 truncate text-muted-foreground" title={peer(order)}>
+                    {peer(order)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground tabular-nums">
                     <div>{day}</div>
@@ -130,7 +146,7 @@ export function OrdersTable({ orders, onAction }: { orders: Order[]; onAction: O
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
-                      {order.status === "unpaid" && (
+                      {canChangePrice(order) && (
                         <Button variant="outline" size="sm" onClick={() => onAction("price", order)}>
                           <PencilIcon />
                           改价
@@ -164,8 +180,8 @@ export function OrdersTable({ orders, onAction }: { orders: Order[]; onAction: O
                   <span className="text-sm font-medium text-foreground tabular-nums">
                     {yuan(order.price_cent)}
                   </span>
-                  <OrderStatusBadge status={order.status} text={order.status_text} />
-                  <span className="max-w-28 truncate">{buyer(order)}</span>
+                  <OrderStatusBadge status={order.status} side={order.side} text={order.status_text} />
+                  <span className="max-w-28 truncate">{peer(order)}</span>
                   <span className="tabular-nums">{dateTime(order.created_at).split(" ")[0]}</span>
                 </div>
               </div>

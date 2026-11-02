@@ -1,5 +1,6 @@
-"""订单接口（卖家视角）：卖出的订单列表、订单详情、改价。
+"""订单接口：卖出的订单列表、我买到的订单列表、订单详情、改价。
 
+- "我买到的"照抄网页端 /bought 页（p_bought-index.js），个人账号也能拉，2026-10-29、11-02 实测过；
 - 卖出的订单列表在卖家工作台（seller.goofish.com）里，**只对闲鱼专业卖家开放**，个人卖家调用返回
   `PERMISSION_EXCEPTION`（2026-10-29 实测）。工作台的接口要带它自己的 Origin / Referer 和
   `idle_site_biz_code` 请求头，`type` 是 json 不是 originaljson。请求格式参考 Ydisks-Xianyu-Helper
@@ -22,6 +23,7 @@ from xianyu_core.item import yuan_to_cent
 from xianyu_core.mtop import MtopClient
 
 SOLD_LIST_API = "mtop.taobao.idle.trade.merchant.sold.get"
+BOUGHT_LIST_API = "mtop.idle.web.trade.bought.list"
 DETAIL_API = "mtop.idle.web.trade.order.detail"
 PRICE_RENDER_API = "mtop.taobao.idle.trade.order.modify.price.render"
 ADJUST_PRICE_API = "mtop.taobao.idle.trade.user.adjust.price"
@@ -36,6 +38,11 @@ SELLER_HEADERS = {
 }
 SPM_SELLER = "a21107h.42831410.0.0"
 SPM_ORDER = "a21ybx.order-detail.0.0"
+SPM_BOUGHT = "a21ybx.bought.0.0"
+
+# 订单是卖出的还是买到的（当前账号是卖家还是买家）
+SOLD = "sold"
+BOUGHT = "bought"
 
 # 归一后的订单状态。平台只给中文状态文字，按文字归类，认不出的算 OTHER
 UNPAID = "unpaid"
@@ -56,15 +63,28 @@ STATUS_TEXT = {
     OTHER: "其他",
 }
 
-# 按顺序匹配，"退款成功"要排在"退款"前面
+# 按顺序匹配，"退款成功"要排在"退款"前面。买到的订单站在买家这边说（"等待你付款"）
 _STATUS_RULES: list[tuple[tuple[str, ...], str]] = [
-    (("待付款", "等待买家付款"), UNPAID),
-    (("待发货", "已付款", "等待卖家发货", "等待你发货"), TO_SHIP),
-    (("已发货", "待收货", "等待买家确认", "等待买家收货"), SHIPPED),
+    (("待付款", "等待买家付款", "等待你付款", "等待付款"), UNPAID),
+    (("待发货", "已付款", "等待卖家发货", "等待你发货", "待卖家发货"), TO_SHIP),
+    (
+        ("已发货", "待收货", "等待买家确认", "等待买家收货", "等待你确认收货", "等待你收货"),
+        SHIPPED,
+    ),
     (("交易成功", "已完成"), DONE),
     (("退款成功", "交易关闭", "已关闭", "已取消"), CLOSED),
     (("退款",), REFUND),
 ]
+
+# "我买到的"每条带的英文状态。文字认不出来时（"等待见面交易"之类）用它，2026-11-02 实测见过这几种
+_TRADE_STATUS = {
+    "buyer_to_pay": UNPAID,
+    "seller_to_send": TO_SHIP,
+    "buyer_to_confirm": SHIPPED,
+    "trade_success": DONE,
+    "trade_closed": CLOSED,
+    "refund_success": CLOSED,
+}
 
 _MONEY = re.compile(r"-?\d+(?:\.\d{1,2})?")
 
@@ -80,10 +100,11 @@ def order_status(text: str, in_refund: bool = False) -> str:
 
 
 @dataclass
-class SoldOrder:
-    """卖出的订单列表里的一条。"""
+class ListedOrder:
+    """订单列表里的一条：卖家工作台里卖出的订单，或者"我买到的"。"""
 
     order_id: str
+    side: str  # SOLD / BOUGHT
     item_id: str
     status: str  # 归一后的状态
     status_text: str  # 平台原文
@@ -91,13 +112,13 @@ class SoldOrder:
     pic_url: str
     price_cent: int | None  # 订单金额，解析不出来时是 None
     quantity: int
-    buyer_id: str
-    buyer_nick: str
+    peer_id: str  # 对方：卖出的是买家，买到的是卖家
+    peer_nick: str
     created_at: float | None  # 下单时间，秒级时间戳
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
-    def parse(cls, row: dict[str, Any]) -> SoldOrder:
+    def parse_sold(cls, row: dict[str, Any]) -> ListedOrder:
         common = row.get("commonData") or {}
         buyer = row.get("buyerInfoVO") or {}
         price = row.get("priceVO") or {}
@@ -105,6 +126,7 @@ class SoldOrder:
         status_text = str(common.get("orderStatus") or "")
         return cls(
             order_id=str(common.get("orderId") or ""),
+            side=SOLD,
             item_id=str(common.get("itemId") or item.get("itemId") or ""),
             status=order_status(status_text, _bool(common.get("inRefund"))),
             status_text=status_text,
@@ -112,19 +134,51 @@ class SoldOrder:
             pic_url=_first([item, common], "picUrl", "itemPic", "mainPic", "itemMainPictCdnUrl"),
             price_cent=money_cent(_first([price], "totalPrice", "actualFee", "confirmFee")),
             quantity=_int(_first([price, item], "buyNum", "quantity", "buyAmount")) or 1,
-            buyer_id=str(buyer.get("buyerId") or ""),
-            buyer_nick=_first([buyer], "buyerNick", "nick", "userNick"),
+            peer_id=str(buyer.get("buyerId") or ""),
+            peer_nick=_first([buyer], "buyerNick", "nick", "userNick"),
             created_at=parse_time(
                 _first([common, row], "orderCreateTime", "createTime", "gmtCreate")
             ),
             raw=row,
         )
 
+    @classmethod
+    def parse_bought(cls, row: dict[str, Any]) -> ListedOrder:
+        """「我买到的」里的一条：commonData 是订单号这些，head 是卖家和状态，
+        content 是商品和实付款。"""
+        common = row.get("commonData") or {}
+        head = (row.get("head") or {}).get("data") or {}
+        content = (row.get("content") or {}).get("data") or {}
+        item = content.get("detailInfo") or {}
+        price = content.get("priceInfo") or {}
+        seller = head.get("userInfo") or {}
+        status_text = str(head.get("statusViewMsg") or "")
+        status = order_status(status_text)
+        if status == OTHER:
+            status = _TRADE_STATUS.get(str(common.get("tradeStatusEnum") or ""), OTHER)
+        return cls(
+            # orderId 超出 JS 的安全整数，网页端用 orderIdStr
+            order_id=str(common.get("orderIdStr") or common.get("orderId") or ""),
+            side=BOUGHT,
+            item_id=str(common.get("itemId") or ""),
+            status=status,
+            status_text=status_text,
+            title=str(item.get("auctionTitle") or ""),
+            pic_url=str(item.get("auctionPic") or ""),
+            price_cent=money_cent(price.get("price")),
+            quantity=_int(price.get("buyAmount")) or 1,
+            peer_id=str(common.get("peerUserId") or seller.get("userId") or ""),
+            peer_nick=str(seller.get("userNick") or ""),
+            created_at=parse_time(head.get("createTime")),
+            raw=row,
+        )
+
 
 @dataclass
 class OrderPage:
-    orders: list[SoldOrder]
+    orders: list[ListedOrder]
     has_next: bool
+    offset: Any = None  # "我买到的"翻下一页时要带回去的 lastEndRow
 
 
 @dataclass
@@ -153,10 +207,10 @@ class OrderDetail:
     receiver_name: str  # 收货地址区块只在没发货的订单里有；发货后地址在 fields 的"收货地址"里
     receiver_phone: str  # 平台开了号码保护时是打码的
     receiver_address: str
-    actions: list[str]  # 平台给卖家显示的按钮，比如 ["修改价格", "关闭订单"]
+    actions: list[str]  # 平台给当前账号显示的按钮，比如 ["修改价格", "关闭订单"]
     seller: bool | None  # 当前账号是不是这笔订单的卖家；平台没给时是 None
-    buyer_id: str
-    buyer_nick: str
+    peer_id: str  # 对方：当前账号是卖家时是买家，是买家时是卖家
+    peer_nick: str
     created_at: float | None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
@@ -231,8 +285,8 @@ class OrderDetail:
                 if isinstance(b, dict) and b.get("name")
             ],
             seller=seller,
-            buyer_id=str(data.get("peerUserId") or "") if seller else "",
-            buyer_nick=by_title.get("买家昵称", ""),
+            peer_id=str(data.get("peerUserId") or ""),
+            peer_nick=by_title.get("卖家昵称" if seller is False else "买家昵称", ""),
             created_at=parse_time(created),
             raw=data,
         )
@@ -278,12 +332,12 @@ class OrderApi:
         )
         module = data.get("module") or {}
         rows = [row for row in module.get("items") or [] if isinstance(row, dict)]
-        orders = [order for order in map(SoldOrder.parse, rows) if order.order_id]
+        orders = [order for order in map(ListedOrder.parse_sold, rows) if order.order_id]
         return OrderPage(orders=orders, has_next=_bool(module.get("nextPage")))
 
     async def iter_sold(
         self, *, interval: float = 1.0, max_pages: int = 50
-    ) -> AsyncIterator[SoldOrder]:
+    ) -> AsyncIterator[ListedOrder]:
         """翻完所有页。每翻一页停 `interval` 秒。"""
         for page in range(1, max_pages + 1):
             result = await self.sold_page(page)
@@ -291,6 +345,34 @@ class OrderApi:
                 yield order
             if not result.has_next or not result.orders:
                 return
+            await asyncio.sleep(interval)
+
+    async def bought_page(self, page: int = 1, offset: Any = None) -> OrderPage:
+        """我买到的订单，新的在前，一页 10 条。第二页起 `offset` 带上一页的 `OrderPage.offset`。"""
+        body: dict[str, Any] = {"pageNumber": page, "orderStatus": "ALL"}
+        if offset is not None:
+            body["offsetRow"] = offset
+        data = await self._mtop.call(
+            BOUGHT_LIST_API, body, spm_cnt=SPM_BOUGHT, extra_params={"valueType": "string"}
+        )
+        rows = [row for row in data.get("items") or [] if isinstance(row, dict)]
+        orders = [order for order in map(ListedOrder.parse_bought, rows) if order.order_id]
+        return OrderPage(
+            orders=orders, has_next=_bool(data.get("nextPage")), offset=data.get("lastEndRow")
+        )
+
+    async def iter_bought(
+        self, *, interval: float = 1.0, max_pages: int = 50
+    ) -> AsyncIterator[ListedOrder]:
+        """翻完所有页。每翻一页停 `interval` 秒。"""
+        offset = None
+        for page in range(1, max_pages + 1):
+            result = await self.bought_page(page, offset)
+            for order in result.orders:
+                yield order
+            if not result.has_next or not result.orders:
+                return
+            offset = result.offset
             await asyncio.sleep(interval)
 
     async def detail(self, order_id: str) -> OrderDetail:

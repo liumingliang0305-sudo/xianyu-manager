@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 
-import { api, subscribeMessages } from "@/lib/api"
+import { api, subscribeMessages, type OrderSide } from "@/lib/api"
 
 export const orderKeys = {
   list: (account: string) => ["orders", account] as const,
@@ -71,7 +71,7 @@ function useRefresh(account: string) {
 export function useSyncOrders(account: string) {
   const refresh = useRefresh(account)
   return useMutation({
-    mutationFn: () => api.syncOrders(account),
+    mutationFn: (side: OrderSide) => api.syncOrders(account, side),
     onSettled: () => refresh(),
   })
 }

@@ -17,7 +17,7 @@ import { errorMessage, type Order } from "@/lib/api"
 
 import { useAddOrder } from "./queries"
 
-/** 按订单号添加一笔卖出的订单。个人卖家在网页端拿不到卖出订单列表，只能这样一笔笔加。 */
+/** 按订单号添加一笔订单，卖出的、买到的都行（后台按订单详情分）。个人卖家在网页端拿不到卖出订单列表，只能这样一笔笔加。 */
 export function AddOrderDialog({
   account,
   onClose,
@@ -50,7 +50,7 @@ export function AddOrderDialog({
           <DialogHeader>
             <DialogTitle>添加订单</DialogTitle>
             <DialogDescription>
-              在闲鱼 App「我的 → 我卖出的」里点进订单，复制订单编号粘贴到这里。也可以粘贴订单链接。
+              在闲鱼 App「我卖出的」或「我买到的」里点进订单，复制订单编号粘贴到这里。也可以粘贴订单链接。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-1.5">

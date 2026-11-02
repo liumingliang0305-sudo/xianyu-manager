@@ -429,7 +429,7 @@ function Thread({
         {fetchingNewest && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
         {fresh.order_id && (
           <Button variant="ghost" size="sm" asChild>
-            <a href={orderUrl(fresh.order_id)} target="_blank" rel="noreferrer">
+            <a href={orderUrl(fresh.order_id, "sold")} target="_blank" rel="noreferrer">
               订单
               <ExternalLinkIcon />
             </a>

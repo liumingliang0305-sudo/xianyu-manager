@@ -1,4 +1,4 @@
-import type { Item, OrderStatus } from "@/lib/api"
+import type { Item, OrderSide, OrderStatus } from "@/lib/api"
 
 // 最多两位小数，末尾的 0 不显示（和闲鱼一样），千位加逗号
 const YUAN = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 })
@@ -102,6 +102,12 @@ export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   other: "其他",
 }
 
+/** 状态的叫法：买到的订单站在买家这边说，已发货叫"待收货"（和闲鱼「我买到的」一样） */
+export function orderStatusLabel(status: OrderStatus, side: OrderSide): string {
+  if (side === "bought" && status === "shipped") return "待收货"
+  return ORDER_STATUS_LABEL[status] ?? status
+}
+
 // 阿里图床只认这几档尺寸，别的（比如 96）会返回 1×1 的空图。2026-10-29 实测，600 以上是 2026-10-31 实测
 const THUMB_SIZES = [80, 120, 160, 200, 240, 300, 400, 600, 720, 960, 1200]
 
@@ -119,7 +125,8 @@ export function itemUrl(itemId: string): string {
   return `https://www.goofish.com/item?id=${itemId}`
 }
 
-/** 网页版的订单详情页（卖家视角） */
-export function orderUrl(orderId: string): string {
-  return `https://www.goofish.com/order-detail?orderId=${orderId}&role=seller`
+/** 网页版的订单详情页，卖出的用卖家视角，买到的用买家视角 */
+export function orderUrl(orderId: string, side: OrderSide): string {
+  const role = side === "bought" ? "buyer" : "seller"
+  return `https://www.goofish.com/order-detail?orderId=${orderId}&role=${role}`
 }

@@ -332,14 +332,13 @@ def test_search_risk_control_trips_breaker(client, platform):
 
 
 def test_scan_orders_from_stored_messages(client, database_url, platform):
-    """以前存下的交易消息里的订单补进本地库：写明是买到的不拉，查不到的、平台报错的分开报。"""
-    sold = {"item_id": "1001", "status": "等待卖家发货", "price": 35800, "post": 0}
-    platform.orders["5001000000001"] = {**sold, "created": 1761700000000}
-    platform.orders["5001000000002"] = {**sold, "created": 1761800000000, "bought": True}
+    """以前存下的交易消息里的订单补进本地库：卖出的、买到的都记，查不到的报平台出错。"""
+    order = {"item_id": "1001", "status": "等待卖家发货", "price": 35800, "post": 0}
+    platform.orders["5001000000001"] = {**order, "created": 1761700000000}
+    platform.orders["5001000000002"] = {**order, "created": 1761800000000, "bought": True}
     cards = [
         ("5001000000001", "seller"),
-        ("5001000000002", "seller"),  # 卡片看不出来，拉了详情才知道是买到的
-        ("5001000000003", "buyer"),
+        ("5001000000002", "buyer"),
         ("5001000000004", "seller"),  # 平台查不到
     ]
     conn = db.connect(database_url)
@@ -355,14 +354,31 @@ def test_scan_orders_from_stored_messages(client, database_url, platform):
     conn.close()
 
     body = client.post(orders_url("/scan")).json()
-    assert (body["found"], body["bought"]) == (4, 1)
-    assert body["added"] == ["5001000000001"]
-    assert body["not_mine"] == ["5001000000002"]
+    assert body["found"] == 3
+    assert body["added"] == ["5001000000001", "5001000000002"]
     assert body["failed"] == ["5001000000004"]
-    assert body["updated"] == body["skipped"] == []
-    asked = [d["tid"] for api, d in platform.calls if api == "mtop.idle.web.trade.order.detail"]
-    assert "5001000000003" not in asked
-    assert [o["order_id"] for o in client.get(orders_url()).json()["orders"]] == ["5001000000001"]
+    assert body["updated"] == body["skipped"] == body["missing"] == []
+    listed = {o["order_id"]: o["side"] for o in client.get(orders_url()).json()["orders"]}
+    assert listed == {"5001000000001": "sold", "5001000000002": "bought"}
+    assert [o["order_id"] for o in client.get(orders_url("?side=bought")).json()["orders"]] == [
+        "5001000000002"
+    ]
 
     # 再补一次：已经记下的刷新一次
-    assert client.post(orders_url("/scan")).json()["updated"] == ["5001000000001"]
+    body = client.post(orders_url("/scan")).json()
+    assert body["updated"] == ["5001000000001", "5001000000002"]
+
+
+def test_sync_bought_orders(client, platform):
+    platform.orders["5001000000002"] = {
+        "item_id": "1001",
+        "status": "交易成功",
+        "price": 1000,
+        "created": 1761800000000,
+        "bought": True,
+    }
+    result = client.post(orders_url("/sync"), json={"side": "bought"}).json()
+    assert (result["source"], result["added"]) == ("list", ["5001000000002"])
+    [order] = client.get(orders_url("?side=bought")).json()["orders"]
+    assert (order["side"], order["peer_nick"], order["price_cent"]) == ("bought", "卖家乙", 1000)
+    assert client.post(orders_url("/sync"), json={"side": "both"}).status_code == 400
