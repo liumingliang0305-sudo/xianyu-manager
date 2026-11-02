@@ -59,6 +59,7 @@ from app.login import (
 )
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderService
+from app.search import SearchService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -71,6 +72,7 @@ from xianyu_core.errors import (
 )
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
+from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 # 消息推送流多久没事件就发一行注释，顺便发现页面已经关了、用户已经没有权限了
@@ -170,6 +172,16 @@ class SendIn(BaseModel):
     text: str
 
 
+class SearchIn(BaseModel):
+    keyword: str
+    page: int = 1
+    sort: str = ""  # 见 xianyu_core/search.py 的 SORTS，空是综合
+    publish_days: int | None = None
+    min_price: str | None = None  # 元，空表示不限
+    max_price: str | None = None
+    filters: list[str] = []  # 见 QUICK_FILTERS
+
+
 def create_app(
     *,
     database_url: str | None = None,
@@ -194,6 +206,7 @@ def create_app(
     `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
+    searcher = SearchService(accounts)
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
     tokens = AccessTokens(auth.load_key(auth_key or auth.KEY_PATH))
     limiter = LoginLimiter()
@@ -560,6 +573,30 @@ def create_app(
         ops = items(request).history(account(request, account_id), item_id, limit=min(limit, 500))
         return {"ops": [asdict(op) for op in ops]}
 
+    @authed.post("/api/accounts/{account_id}/search")
+    async def search(request: Request, account_id: str, body: SearchIn) -> dict[str, Any]:
+        """用这个账号搜闲鱼上的商品，一次一页（30 条），结果不进本地库。"""
+        account_id = account(request, account_id)
+        query = SearchQuery(
+            keyword=body.keyword,
+            sort=body.sort,
+            publish_days=body.publish_days,
+            price_min_cent=_yuan_or_none(body.min_price),
+            price_max_cent=_yuan_or_none(body.max_price),
+            filters=tuple(body.filters),
+        )
+        async with locks[account_id]:
+            result = await searcher.search(account_id, query, body.page)
+        items = [asdict(card) for card in result.items]
+        for item in items:
+            item.pop("raw")
+        return {
+            "items": items,
+            "page": body.page,
+            "has_next": result.has_next,
+            "total": result.total,
+        }
+
     @authed.get("/api/accounts/{account_id}/orders")
     async def list_orders(
         request: Request, account_id: str, status: str | None = None
@@ -768,6 +805,11 @@ def _bearer(request: Request) -> str:
 
 def _block(block: Block | None) -> dict[str, Any] | None:
     return asdict(block) if block else None
+
+
+def _yuan_or_none(value: str | None) -> int | None:
+    """筛选用的价格：没填是不限，填了按元换算成分。"""
+    return yuan_to_cent(value) if value and value.strip() else None
 
 
 def _error_handler(status: int, code: str):

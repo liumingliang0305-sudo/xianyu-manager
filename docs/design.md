@@ -128,6 +128,8 @@
 
 - **筛选放在网址里**：状态筛选用 `useUrlParam`（`?status=sold`、`?view=unread`），刷新、复制链接、前进后退都保持；
   默认值不写进网址。改网址里的一个参数时保留别的参数。搜索框的字不放进网址。
+  例外是"搜索"页：搜的是闲鱼，搜索词和条件就是这一页要看的东西，点搜索时整组写进网址（`?q=…&sort=new&f=personal`），
+  打字的时候不写。
 - **表单**：每个输入框都有 `<Label htmlFor>` 或 `aria-label`；输入框下面的提示和报错有 id，用 `aria-describedby` 连到输入框。
   一直在的提示行用 `aria-live="polite"`，出错才出现的那行用 `role="alert"`。改价、订单号这类输入框关掉 `autoComplete`，
   搜索框还关掉拼写检查。占位文字以"…"结尾。

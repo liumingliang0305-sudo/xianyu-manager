@@ -259,6 +259,52 @@ export interface ChatImage {
   height: number | null
 }
 
+/** 搜索排序，空串是综合 */
+export type SearchSort = "" | "active" | "credit" | "reduce" | "new" | "price_asc" | "price_desc"
+
+/** 搜索的勾选项：个人闲置、包邮、全新、验货宝 */
+export type SearchFilter = "personal" | "free_ship" | "brand_new" | "appraise"
+
+export interface SearchConditions {
+  keyword: string
+  sort: SearchSort
+  /** 只看几天内发布的：1、3、7、14，不限是 null */
+  publish_days: number | null
+  /** 价格区间，元的字符串，空串是不限 */
+  min_price: string
+  max_price: string
+  filters: SearchFilter[]
+}
+
+/** 搜索结果里的一件商品（别人的） */
+export interface SearchItem {
+  item_id: string
+  title: string
+  price_cent: number
+  /** 卖家填的原价，没填是 null */
+  orig_price_cent: number | null
+  pic_url: string
+  /** 发货地，一般是省或市 */
+  area: string
+  seller_nick: string
+  want_count: number | null
+  published_at: number | null
+  free_ship: boolean
+  /** 成色、品牌、属性、降价这些标签 */
+  tags: string[]
+  /** "卖家信用极好"、"回复超快"这些 */
+  seller_tags: string[]
+  url: string
+}
+
+export interface SearchResult {
+  items: SearchItem[]
+  page: number
+  has_next: boolean
+  /** 平台说一共找到多少条（不一定都翻得到） */
+  total: number | null
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -533,6 +579,13 @@ export const api = {
   reconnectIm: (account: string) =>
     request<ImStatus>(`/accounts/${encodeURIComponent(account)}/im/reconnect`, {
       method: "POST",
+    }),
+
+  /** 用这个账号搜闲鱼上的商品，一页 30 条，会请求闲鱼 */
+  search: (account: string, conditions: SearchConditions, page: number) =>
+    request<SearchResult>(`/accounts/${encodeURIComponent(account)}/search`, {
+      method: "POST",
+      body: JSON.stringify({ ...conditions, page }),
     }),
 
   orderOps: (account: string, orderId?: string) =>

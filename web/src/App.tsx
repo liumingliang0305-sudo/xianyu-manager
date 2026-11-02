@@ -8,6 +8,7 @@ import { LoginPage } from "@/features/auth/login-page"
 import { ItemsPage } from "@/features/items/items-page"
 import { MessagesPage } from "@/features/messages/messages-page"
 import { OrdersPage } from "@/features/orders/orders-page"
+import { SearchPage } from "@/features/search/search-page"
 import { AccountProvider } from "@/hooks/use-account"
 import { useAuth } from "@/hooks/use-auth"
 import { checkSession } from "@/lib/auth"
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="items" element={<ItemsPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="search" element={<SearchPage />} />
           <Route path="*" element={<Navigate to="/items" replace />} />
         </Route>
       </Routes>

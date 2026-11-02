@@ -10,6 +10,7 @@ import {
   PlugIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  SearchIcon,
   ShoppingCartIcon,
   SunIcon,
   UserIcon,
@@ -53,6 +54,7 @@ const NAV: NavEntry[] = [
   { to: "/items", label: "商品", icon: PackageIcon },
   { to: "/orders", label: "订单", icon: ShoppingCartIcon },
   { to: "/messages", label: "消息", icon: MessageSquareIcon },
+  { to: "/search", label: "搜索", icon: SearchIcon },
 ]
 
 const NAV_ITEM =
@@ -78,7 +80,7 @@ function SideNav() {
   )
 }
 
-/** 窄屏：只有三个去处，直接横着放在顶栏里，不藏进菜单 */
+/** 窄屏：去处不多，直接横着放在顶栏里，不藏进菜单 */
 function TopNav() {
   return (
     <nav aria-label="主导航" className="flex items-center gap-0.5">

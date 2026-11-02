@@ -278,3 +278,50 @@ def test_writes_are_rate_limited(client, platform):
     assert resp.status_code == 429
     assert resp.json()["code"] == "rate_limited"
     assert platform.items["1001"]["price"] == 32000
+
+
+def search_url():
+    return f"/api/accounts/{UNB}/search"
+
+
+def test_search_returns_cards_without_raw(client, platform):
+    body = client.post(
+        search_url(),
+        json={"keyword": "洗衣", "min_price": "100", "filters": ["personal"], "sort": "new"},
+    ).json()
+    assert [it["item_id"] for it in body["items"]] == ["1001"]
+    assert body["items"][0]["price_cent"] == 35800
+    assert "raw" not in body["items"][0]
+    assert (body["page"], body["has_next"], body["total"]) == (1, False, 1)
+
+    api, data = platform.calls[-1]
+    assert api == "mtop.taobao.idlemtopsearch.pc.search"
+    assert data["propValueStr"] == {
+        "searchFilter": "priceRange:100,undefined;quickFilter:filterPersonal;"
+    }
+    assert (data["sortField"], data["sortValue"]) == ("create", "desc")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"keyword": " "},
+        {"keyword": "洗衣", "sort": "cheap"},
+        {"keyword": "洗衣", "filters": ["nope"]},
+        {"keyword": "洗衣", "min_price": "abc"},
+        {"keyword": "洗衣", "min_price": "500", "max_price": "100"},
+        {"keyword": "洗衣", "page": 51},
+    ],
+)
+def test_search_bad_conditions_are_400(client, platform, body):
+    sent = len(platform.calls)
+    resp = client.post(search_url(), json=body)
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "invalid"
+    assert len(platform.calls) == sent
+
+
+def test_search_risk_control_trips_breaker(client, platform):
+    platform.fail["mtop.taobao.idlemtopsearch.pc.search"] = "RGV587_ERROR::SM::哎哟喂,被挤爆啦"
+    assert client.post(search_url(), json={"keyword": "洗衣"}).json()["code"] == "risk_control"
+    assert client.get(items_url("/1001/detail")).json()["code"] == "circuit_open"

@@ -39,6 +39,9 @@
   卡片上写着自己是买家的不拉；看不出来的拉一次详情再看，买到的不记。以前存下的消息里的订单用 `xym orders scan` 补
   （[app/orders.py](app/orders.py) 的 `OrderFeed`，卡片格式见[协议笔记](docs/protocol-notes.md#交易消息里的订单号)）。
   线上还没走通一次：要等有人下单
+- [x] 商品搜索：后台"搜索"页搜闲鱼上所有卖家的在售商品，排序、发布时间、价格区间、个人闲置 / 包邮 / 全新 / 验货宝
+  和网页端搜索页一样，一次 30 件往后加载；用当前账号搜，结果不存本地（[xianyu_core/search.py](xianyu_core/search.py)，
+  接口见[协议笔记](docs/protocol-notes.md#搜索)）。以后的捡漏监控、同行价都从这里搜
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
@@ -339,6 +342,7 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   auth/qr_login.py 扫码登录，登录后开启保持登录
   item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
   order.py         订单接口：卖出的订单列表（卖家工作台）、订单详情、改价（price render → adjust）
+  search.py        搜索接口：网页端搜索页同一个接口，排序和筛选，解析成商品卡片
   im.py            即时消息：WebSocket 连接（注册、心跳、ACK、对齐同步位点）、推送解码、会话列表、历史消息、断线重连
   cli.py           调试命令 xianyu login / whoami
 app/             业务层：只通过 xianyu_core 和闲鱼通信
@@ -350,6 +354,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   sqlite_import.py 一次性把以前 SQLite 库里的数据导进 PostgreSQL（xym import-sqlite）
   items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
   orders.py        订单管理：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
+  search.py        搜索闲鱼上的商品（别人的），一次一页，不存库
   login.py         登录闲鱼：扫码（后台任务跑 QRLogin，前端轮询进度，每个用户同一时间只有一张码）和导入浏览器的 Cookie
   keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
   messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连；回复
@@ -369,6 +374,7 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
   src/features/orders/ 订单管理页：添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
   src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史、回复，新消息通过 SSE 实时刷新
+  src/features/search/ 搜索页：搜闲鱼上的商品，排序、筛选，往后加载
 extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理后台（manifest v3，不用打包，直接加载目录）
   background.js    cookie 变化和每 10 分钟时推给 /api/login/import（带插件令牌），登录没变不推
   lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址），可以直接用 node 测

@@ -137,6 +137,46 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 订单状态只给中文文字，`xianyu_core.order.order_status` 按关键词归成 unpaid / to_ship / shipped / done / closed / refund，
 认不出的算 other。
 
+## 搜索
+
+> 来源：2026-11-02 读网页端 xy-site 0.0.179 的 `p_search-index.js`（goofish.com/search 页），
+> 用个人卖家账号实测了 7 次（综合、翻第 2 页、价格区间 + 个人闲置、最新发布），没碰到风控。
+
+`mtop.taobao.idlemtopsearch.pc.search` v1.0，`spm_cnt=a21ybx.search.0.0`。和别的接口一样直接签名调用就行，
+不用开浏览器（ai-goofish-monitor、goofish-cli 是开浏览器让页面自己搜、截响应）。网页端搜之前会等 baxia
+（`window.__baxiaReady`）准备好，纯 HTTP 调没有这一步，目前没影响。
+
+请求体（不排序、不筛选时）：
+
+```json
+{"pageNumber": 1, "keyword": "机械键盘", "fromFilter": false, "rowsPerPage": 30, "sortValue": "", "sortField": "",
+ "customDistance": "", "gps": "", "propValueStr": {}, "customGps": "", "searchReqFromPage": "pcSearch",
+ "extraFilterValue": "{}", "userPositionJson": "{}"}
+```
+
+- 排序：`sortField` / `sortValue` 取 `modify/desc`（最近活跃）、`credit/credit_desc`（信用）、`reduce/desc`（新降价）、
+  `create/desc`（最新发布）、`price/asc`、`price/desc`；综合是两个空串；
+- 筛选拼在 `propValueStr.searchFilter` 里，按这个顺序：`publishDays:7;`（1、3、7、14）、`priceRange:30,60;`（元；
+  没填的最低价是空串，没填的最高价是 JS 的 `undefined`，原样写成 `undefined`）、
+  `quickFilter:filterPersonal,filterFreePostage;`（个人闲置、包邮；还有 `filterNew` 全新、`filterAppraise` 验货宝、
+  `gameAccountInsurance` 验号担保、`filterHighLevelYxpSeller` 超赞鱼小铺、`inspectedPhone` 严选、`filterOneKeyResell` 转卖）；
+- 有排序或筛选时 `fromFilter` 是 true，`propValueStr` 是 `{searchFilter: "..."}`（只排序时是空串）；
+- 网页端排序和发布天数在同一个下拉里，只能选一个；本系统两个一起传，平台照样认；
+- 地区（`extraFilterValue.divisionList`）、距离（`gps`、`customDistance`）没做。
+
+返回：
+- `resultList[]` 每条的 `data.item.main` 下：`exContent` 里有 `itemId`、`title`（有的卖家把描述也塞进来，很长）、
+  `picUrl`（不少是 heic，要加 `_<n>x<n>.jpg` 转）、`price`（分几段：`sign` ¥、`integer`、`decimal`，可能有 `unit` 万）、
+  `oriPrice`（"¥199"，没填就没有）、`area`（省或市）、`userNickName`；`clickParam.args` 里 `price`（"49.90"，最好用）、
+  `publishTime`（毫秒）、`tag`（`/` 分隔，`freeship` 是包邮）。`args.wantNum` 总是 0，想要人数要看标签；
+- 标签在 `exContent.fishTags`：`r2` 成色、品牌、属性和"22天内降价"，`r3` "1434人想要"、"累计降价13%"，
+  `r4` "卖家信用极好"、"回复超快"，`r1`、`r5` 是图标（`type: img`，包邮图标之类）；
+- `resultInfo.hasNextPage` 有没有下一页；`resultInfo.searchResControlFields.numFound` 找到多少件。
+  不筛选时实测是 1500（= 50 页 × 30，网页端最多翻 50 页），加了筛选反而是 41245，所以 1500 应该是能翻到的上限，
+  不是真实件数；
+- 网页端代码里还有另一种结构：`resultInfo.trackParams` 是空对象时，每条直接是 `data.id`、`data.title`、`data.price`……
+  实测没碰到过，本系统先不认（`SearchCard.parse` 跳过认不出的行）。
+
 ## 登录态续期
 
 > 来源：2026-10-29 读网页端的续期插件 `o.alicdn.com/vip/goofish-auto-login/plugin.js`（SHA-256 `b946a6db…`，和 Ydisks
@@ -420,5 +460,5 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `mtop.taobao.idle.logistic.consign.dummy` | 虚拟发货 |
 | `mtop.taobao.idle.rate.create` | 评价 |
 | `mtop.taobao.idle.merchant.rate.list` | 评价列表 |
-| `mtop.taobao.idlemtopsearch.pc.search` | 搜索 |
+| `mtop.taobao.idlemtopsearch.pc.search` | 搜索。✅ 见上面"搜索" |
 | `mtop.idle.web.user.page.nav` | 个人主页导航 |

@@ -113,6 +113,27 @@ class FakePlatform:
         nick = self.nicks.get(data["sessionId"], "")
         return {"userInfo": {"fishNick": nick, "nick": "x***9", "type": data["type"], "logo": ""}}
 
+    def mtop_taobao_idlemtopsearch_pc_search(self, data):
+        """标题里有搜索词的商品，一页全给。"""
+        rows = [
+            {
+                "data": {
+                    "item": {
+                        "main": {
+                            "exContent": {"itemId": item_id, "title": it["title"]},
+                            "clickParam": {"args": {"price": str(it["price"] / 100)}},
+                        }
+                    }
+                }
+            }
+            for item_id, it in self.items.items()
+            if data["keyword"] in it["title"]
+        ]
+        return {
+            "resultList": rows,
+            "resultInfo": {"hasNextPage": False, "searchResControlFields": {"numFound": len(rows)}},
+        }
+
     def mtop_idle_web_xyh_item_list(self, data):
         cards = [
             {
