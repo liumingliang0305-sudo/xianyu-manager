@@ -1,7 +1,7 @@
 import httpx
 import pytest
 from fake_im import trade_card
-from fakes import UNB, add_user, keep_login_cookies, sign_in
+from fakes import UNB, add_user, keep_login_cookies, png, sign_in
 from fastapi.testclient import TestClient
 
 from app import db
@@ -18,6 +18,7 @@ def client(tmp_path, accounts, platform, database_url):
         database_url=database_url,
         guard=Guard(),
         accounts_dir=accounts.root,
+        images_dir=tmp_path / "images",
         transport=httpx.MockTransport(platform),
         interval=0,
         web_dist=None,
@@ -382,3 +383,84 @@ def test_sync_bought_orders(client, platform):
     [order] = client.get(orders_url("?side=bought")).json()["orders"]
     assert (order["side"], order["peer_nick"], order["price_cent"]) == ("bought", "卖家乙", 1000)
     assert client.post(orders_url("/sync"), json={"side": "both"}).status_code == 400
+
+
+def drafts_url(path=""):
+    return f"/api/accounts/{UNB}/drafts{path}"
+
+
+def test_draft_to_published_item(client, platform):
+    draft = client.post(drafts_url()).json()
+    url = drafts_url(f"/{draft['id']}")
+    # 请求体就是图片
+    resp = client.post(f"{url}/images", content=png(), headers={"content-type": "image/png"})
+    assert resp.status_code == 200, resp.text
+    [image] = resp.json()["images"]
+    assert (image["width"], image["height"], image["uploaded"]) == (80, 60, False)
+    resp = client.get(f"{url}/images/{image['sha']}")
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert resp.content[:2] == b"\xff\xd8"
+
+    [home, _] = client.get(f"/api/accounts/{UNB}/publish/addresses").json()["addresses"]
+    form = {
+        "description": "宜家落地灯，九成新",
+        "price": "49",
+        "post_mode": "fixed",
+        "post_price": "8",
+        "images": [image["sha"]],
+        "address": home["address"],
+    }
+    draft = client.put(url, json=form).json()
+    assert (draft["price_cent"], draft["post_price_cent"]) == (4900, 800)
+    assert draft["address"]["poiName"] == "光谷苑"
+
+    draft = client.post(f"{url}/recommend").json()
+    assert draft["category"] == "落地灯"
+    assert draft["unsupported"] == []
+    category = draft["properties"][0]
+    assert category["options"][1] == {"key": "126858404", "name": "台灯"}
+    choice = {"property_id": "-10000", "keys": ["126858404"]}
+    assert client.put(f"{url}/labels", json=choice).json()["category"] == "台灯"
+
+    draft = client.post(f"{url}/publish").json()
+    assert draft["item_id"] == "9001"
+    assert draft["images"][0]["uploaded"] is True
+    assert platform.published[0]["itemPostFeeDTO"]["postPriceInCent"] == "800"
+    assert client.get(items_url()).json()["items"][0]["item_id"] == "9001"
+    [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
+    assert (op["action"], op["item_id"], op["ok"]) == ("publish", "9001", True)
+
+    resp = client.put(url, json=form)
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+
+
+def test_draft_errors(client, platform):
+    assert client.get(drafts_url("/999")).json()["code"] == "draft_not_found"
+    draft = client.post(drafts_url()).json()
+    url = drafts_url(f"/{draft['id']}")
+    resp = client.post(f"{url}/images", content=b"hello")
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    resp = client.put(url, json={"price": "abc"})
+    assert resp.status_code == 400
+
+    client.post(f"{url}/images", content=png())
+    sha = client.get(url).json()["images"][0]["sha"]
+    address = {"city": "深圳", "divisionId": 1, "gps": "1,2", "poiId": "p"}
+    form = {"description": "台灯", "price": "10", "images": [sha], "address": address}
+    client.put(url, json=form)
+    client.post(f"{url}/recommend")
+    platform.bad_words.append("台灯")
+    resp = client.post(f"{url}/publish")
+    assert (resp.status_code, resp.json()["code"]) == (409, "publish_blocked")
+    assert "违禁词" in client.get(url).json()["error"]
+
+    assert client.delete(url).json() == {"ok": True}
+    assert client.get(drafts_url()).json() == {"drafts": []}
+
+
+def test_other_users_cannot_see_drafts(client, database_url):
+    draft = client.post(drafts_url()).json()
+    add_user(database_url, "other")
+    sign_in(client, "other")
+    resp = client.get(drafts_url(f"/{draft['id']}"))
+    assert (resp.status_code, resp.json()["code"]) == (404, "account_not_found")

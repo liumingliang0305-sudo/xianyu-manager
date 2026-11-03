@@ -1,11 +1,13 @@
 """测试共用的假平台，和管理后台的测试用户。"""
 
 import asyncio
+import io
 import json
 import time
 from urllib.parse import parse_qs
 
 import httpx
+from PIL import Image
 
 from app import db
 from app.users import Users
@@ -66,10 +68,17 @@ class FakePlatform:
         self.im_tokens = 0  # 即时消息的 accessToken 发了几个
         self.user_queries: list[dict] = []  # 查会话对方昵称的请求
         self.nicks: dict[str, str] = {}  # 会话 ID → 对方的闲鱼昵称，没有的回打码的账号名
+        # 发布
+        self.uploads: list[bytes] = []  # 传上来的图片（multipart 请求体）
+        self.published: list[dict] = []  # publish 收到的请求体
+        self.publish_limited = False
+        self.bad_words: list[str] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "passport.goofish.com":
             return self.passport(request)
+        if request.url.host == "stream-upload.goofish.com":
+            return self.upload(request)
         api = request.url.params["api"]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         data = json.loads(form["data"])
@@ -185,6 +194,44 @@ class FakePlatform:
     def com_taobao_idle_item_delete(self, data):
         del self.items[data["itemId"]]
         return {}
+
+    # ---- 发布 ----
+
+    def upload(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.params["appkey"] == "fleamarket"
+        self.uploads.append(request.content)
+        url = f"https://img.example/up{len(self.uploads)}.jpg"
+        return httpx.Response(200, json={"success": True, "object": {"url": url, "pix": "80x60"}})
+
+    def mtop_idle_pc_idleitem_prepublish_check(self, data):
+        if self.publish_limited:
+            info = {"title": "发布受限", "content": "请到闲鱼 App 查看"}
+            return {"limited": True, "publishLimitInfo": info}
+        return {"limited": False}
+
+    def mtop_taobao_idleitem_badwords_prepubcheck(self, data):
+        if not self.bad_words:
+            return {"result": False, "forbidPublish": False}
+        words = {"items": [{"words": self.bad_words}]}
+        return {"result": True, "forbidPublish": True, "msg": "含违禁词", "badWordAlertInfo": words}
+
+    def mtop_taobao_idle_local_poi_get(self, data):
+        return {"selectedPoi": POI_HOME, "commonAddresses": [POI_HOME, POI_SHOP]}
+
+    def mtop_taobao_idle_kgraph_property_recommend(self, data):
+        return recommend_result(data)
+
+    def mtop_idle_item_publish_service_cards_list(self, data):
+        json.loads(data["itemInfoJson"])["itemCatDTO"]  # 没有类目平台报 item cat info miss
+        return {"services": [{"code": "SVC", "defaultEnable": True}, {"code": "AI_SALE"}]}
+
+    def mtop_idle_pc_idleitem_publish(self, data):
+        self.published.append(data)
+        item_id = str(9000 + len(self.published))
+        title = data["itemTextDTO"]["desc"][:30]
+        price = int(data["itemPriceDTO"]["priceInCent"])
+        self.items[item_id] = {"title": title, "price": price, "status": 0}
+        return {"itemId": item_id}
 
     # ---- 订单 ----
 
@@ -329,6 +376,96 @@ class FakePlatform:
         order["price"] = int(data["modifyFee"])
         order["post"] = int(data["newTransportFee"])
         return {}
+
+
+# ---- 发布 ----
+
+
+def png(color="red", size=(80, 60), mode="RGB") -> bytes:
+    out = io.BytesIO()
+    Image.new(mode, size, color).save(out, "PNG")
+    return out.getvalue()
+
+
+POI_HOME = {
+    "poi": "光谷苑",
+    "poiId": "B0FFGFC0N7",
+    "area": "光明区",
+    "city": "深圳",
+    "prov": "广东",
+    "divisionId": 440311,
+    "latitude": "22.735524",
+    "longitude": "113.929284",
+    "address": "同业路340号",
+}
+POI_SHOP = {**POI_HOME, "poi": "万达广场", "poiId": "B0GDVC8H1H", "address": "龙岗大道"}
+
+# 假的类目推荐：两个分类、一个品牌属性。描述里有"充电宝"时多一张要填 3C 证书的卡片（网页端不支持）
+CATEGORIES = [("126858403", "落地灯", "50025403"), ("126858404", "台灯", "50025404")]
+BRANDS = [("6277054", "IKEA/宜家"), ("11", "飞利浦")]
+
+
+def _clicked_key(cards, property_id, key):
+    for card in cards or []:
+        if card.get("propertyId") == property_id:
+            for value in card.get("valuesList") or []:
+                if value.get("isClicked") == "1":
+                    return value[key]
+    return None
+
+
+def recommend_result(data):
+    """选过的分类、品牌照旧（带了 currentCardList 时），没选过的选第一个。"""
+    current = data.get("currentCardList")
+    cat_key = _clicked_key(current, "-10000", "channelCatId") or CATEGORIES[0][0]
+    brand_key = _clicked_key(current, "20000", "valueId") or BRANDS[0][0]
+    category = {
+        "cardType": "20401",
+        "cardData": {
+            "propertyId": "-10000",
+            "propertyName": "分类",
+            "valuesList": [
+                {
+                    "catId": cat_id,
+                    "catName": name,
+                    "channelCatId": key,
+                    "tbCatId": "50019939",
+                    "leafId": "1044",
+                    "propertyId": "-10000",
+                    "propertyName": "分类",
+                    "isClicked": "1" if key == cat_key else "0",
+                    "isUserClick": "0",
+                    "transportData": {"channelCateId": key, "propertyId": "-10000"},
+                }
+                for key, name, cat_id in CATEGORIES
+            ],
+        },
+    }
+    brand = {
+        "cardType": "20401",
+        "cardData": {
+            "propertyId": "20000",
+            "propertyName": "品牌",
+            "valuesList": [
+                {
+                    "valueId": key,
+                    "valueName": name,
+                    "propertyId": "20000",
+                    "propertyName": "品牌",
+                    "isClicked": "1" if key == brand_key else "0",
+                    "isUserClick": "0",
+                    "transportData": {"valueId": key, "valueName": name, "propertyId": "20000"},
+                }
+                for key, name in BRANDS
+            ],
+        },
+    }
+    cards = [category, brand]
+    if "充电宝" in data["description"]:
+        cert = {"propertyId": "230186843", "propertyName": "3C证书编号"}
+        cards.append({"cardType": "7001", "cardData": cert})
+    predicted = {"catId": 50025403, "catName": "落地灯", "channelCatId": 126858403}
+    return {"cardList": cards, "categoryPredictResult": predicted, "result": "OKAY"}
 
 
 # ---- 扫码登录 ----

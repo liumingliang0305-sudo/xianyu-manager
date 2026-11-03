@@ -104,6 +104,33 @@ item_ops = Table(
     Index("item_ops_item", "account_id", "item_id"),
 )
 
+# 发布商品的草稿，见 app/drafts.py。发布成功以后留着，记下发出去的商品 ID
+drafts = Table(
+    "drafts",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("account_id", Text, nullable=False),
+    Column("description", Text, nullable=False, server_default=""),  # 网页端只有描述，标题由平台截
+    Column("price_cent", BigInteger),  # 还没填是 NULL
+    Column("orig_price_cent", BigInteger),
+    # 邮费：free 包邮 / distance 按距离计费 / fixed 一口价 / none 无需邮寄
+    Column("post_mode", Text, nullable=False, server_default="free"),
+    Column("post_price_cent", BigInteger),  # 一口价的邮费
+    Column("take_self", Boolean, nullable=False, server_default=text("false")),  # 支持自提
+    # JSON：[{sha, width, height, url}]，文件在 data/images/<sha>.jpg；url 是传到闲鱼以后的地址
+    Column("images", Text, nullable=False, server_default="[]"),
+    # JSON：平台推荐的分类和属性卡片（cardList 原样，选中的值 isClicked 是 "1"）
+    Column("cards", Text, nullable=False, server_default="[]"),
+    Column("category", Text),  # JSON：itemCatDTO，还没推荐过是 NULL
+    Column("address", Text),  # JSON：itemAddrDTO，还没选是 NULL
+    Column("item_id", Text),  # 发布成功后的商品 ID
+    Column("error", Text),  # 上次发布失败的原因
+    Column("created_at", Double, nullable=False),
+    Column("updated_at", Double, nullable=False),
+    Column("published_at", Double),
+    Index("drafts_account", "account_id", "updated_at"),
+)
+
 # 订单：卖出的和买到的
 orders = Table(
     "orders",

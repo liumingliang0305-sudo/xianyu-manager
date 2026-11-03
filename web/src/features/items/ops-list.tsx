@@ -8,6 +8,7 @@ const ACTION_LABEL: Record<ItemOp["action"], string> = {
   desc: "改描述",
   downshelf: "下架",
   delete: "删除",
+  publish: "发布",
 }
 
 function change(op: ItemOp): string {
@@ -15,13 +16,14 @@ function change(op: ItemOp): string {
     const text = `${yuan(Number(op.detail.from))} → ${yuan(Number(op.detail.to))}`
     return op.detail.orig_to != null ? `${text}，原价 ${yuan(op.detail.orig_to)}` : text
   }
+  if (op.action === "publish") return yuan(op.detail.price)
   return ""
 }
 
 /** 改动记录。`titles` 用来把商品 ID 换成标题，找不到时显示 ID。 */
 export function OpsList({ ops, titles }: { ops: ItemOp[]; titles?: Map<string, string> }) {
   if (ops.length === 0) {
-    return <EmptyNote>还没有改动记录。在这里改价、改描述、下架或删除后，结果会记在这里</EmptyNote>
+    return <EmptyNote>还没有改动记录。在这里改价、改描述、下架、删除或发布后，结果会记在这里</EmptyNote>
   }
   return (
     <ul className="divide-y divide-rule">
@@ -40,7 +42,7 @@ export function OpsList({ ops, titles }: { ops: ItemOp[]; titles?: Map<string, s
               <span className="tabular-nums">{change(op)}</span>
               {titles && (
                 <span className="truncate text-muted-foreground">
-                  {titles.get(op.item_id) ?? op.item_id}
+                  {op.item_id ? (titles.get(op.item_id) ?? op.item_id) : `草稿 #${op.detail.draft_id}`}
                 </span>
               )}
             </div>

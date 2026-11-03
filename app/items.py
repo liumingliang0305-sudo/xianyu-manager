@@ -258,6 +258,36 @@ class ItemService:
                 "DELETE FROM items WHERE account_id = %s AND item_id = %s", (account_id, item_id)
             )
 
+    def add_published(self, account_id: str, card: ItemCard) -> None:
+        """刚发布的商品先记进本地库，下次同步时以平台上的为准。"""
+        with self._db.transaction():
+            self._upsert(account_id, card, None, time.time())
+
+    def log_op(
+        self,
+        account_id: str,
+        item_id: str,
+        action: str,
+        detail: dict[str, Any],
+        *,
+        error: str | None,
+    ) -> None:
+        """记一次改动，`error` 为 None 表示成功。"""
+        with self._db.transaction():
+            self._db.execute(
+                "INSERT INTO item_ops (account_id, item_id, action, detail, ok, error, created_at)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    account_id,
+                    item_id,
+                    action,
+                    json.dumps(detail, ensure_ascii=False),
+                    error is None,
+                    error,
+                    time.time(),
+                ),
+            )
+
     # ---- 内部 ----
 
     def _check_price(self, old: int, new: int) -> None:
@@ -274,34 +304,10 @@ class ItemService:
         try:
             result = await op
         except Exception as exc:
-            self._log_op(account_id, item_id, action, detail, error=str(exc) or type(exc).__name__)
+            self.log_op(account_id, item_id, action, detail, error=str(exc) or type(exc).__name__)
             raise
-        self._log_op(account_id, item_id, action, detail, error=None)
+        self.log_op(account_id, item_id, action, detail, error=None)
         return result
-
-    def _log_op(
-        self,
-        account_id: str,
-        item_id: str,
-        action: str,
-        detail: dict[str, Any],
-        *,
-        error: str | None,
-    ) -> None:
-        with self._db.transaction():
-            self._db.execute(
-                "INSERT INTO item_ops (account_id, item_id, action, detail, ok, error, created_at)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (
-                    account_id,
-                    item_id,
-                    action,
-                    json.dumps(detail, ensure_ascii=False),
-                    error is None,
-                    error,
-                    time.time(),
-                ),
-            )
 
     def _upsert(
         self, account_id: str, card: ItemCard, detail: ItemDetail | None, now: float

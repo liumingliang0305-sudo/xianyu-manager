@@ -97,9 +97,17 @@ export interface ItemDetail {
 export interface ItemOp {
   id: number
   account_id: string
+  /** 发布失败时还没有商品 ID，是空串 */
   item_id: string
-  action: "price" | "desc" | "downshelf" | "delete"
-  detail: { from?: number | string; to?: number | string; orig_to?: number }
+  action: "price" | "desc" | "downshelf" | "delete" | "publish"
+  detail: {
+    from?: number | string
+    to?: number | string
+    orig_to?: number
+    /** 发布：从哪个草稿发的、售价（分） */
+    draft_id?: number
+    price?: number | null
+  }
   ok: boolean
   error: string | null
   created_at: number
@@ -326,6 +334,85 @@ export interface SearchResult {
   total: number | null
 }
 
+/** 邮费：包邮、按距离计费、一口价、无需邮寄 */
+export type PostMode = "free" | "distance" | "fixed" | "none"
+
+/** 发货地，闲鱼的 itemAddrDTO 原样，存进草稿 */
+export interface Address {
+  area: string
+  city: string
+  divisionId: number | string
+  gps: string
+  poiId: string
+  poiName: string
+  prov: string
+}
+
+/** 可选的发货地：上次用的排第一，后面是常用地址 */
+export interface AddressOption {
+  key: string
+  name: string
+  /** 省市区和详细地址 */
+  detail: string
+  address: Address
+}
+
+/** 草稿里的一张图，文件存在后台服务器上；uploaded：发布时已经传到闲鱼了 */
+export interface DraftImage {
+  sha: string
+  width: number
+  height: number
+  uploaded: boolean
+}
+
+/** 闲鱼推荐的分类或属性（品牌、成色……），selected 是选中的 key */
+export interface DraftProperty {
+  id: string
+  name: string
+  multiple: boolean
+  options: { key: string; name: string }[]
+  selected: string[]
+}
+
+export interface Draft {
+  id: number
+  description: string
+  price_cent: number | null
+  orig_price_cent: number | null
+  post_mode: PostMode
+  /** 一口价的邮费 */
+  post_price_cent: number | null
+  take_self: boolean
+  images: DraftImage[]
+  /** 分类名，还没推荐过是 null */
+  category: string | null
+  /** 第一项是分类（id "-10000"），后面是属性 */
+  properties: DraftProperty[]
+  /** 网页端不支持发布的东西（要填 3C 证书编号之类），有就发不了 */
+  unsupported: string[]
+  address: Address | null
+  /** 发布成功后的商品 ID */
+  item_id: string | null
+  /** 上次发布失败的原因 */
+  error: string | null
+  created_at: number
+  updated_at: number
+  published_at: number | null
+}
+
+/** 保存草稿时整个提交的表单；价格是元的字符串，空是没填 */
+export interface DraftForm {
+  description: string
+  price: string | null
+  orig_price: string | null
+  post_mode: PostMode
+  post_price: string | null
+  take_self: boolean
+  /** 图片的顺序（sha） */
+  images: string[]
+  address: Address | null
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -382,9 +469,25 @@ async function request<T>(path: string, init?: RequestInit, { auth = true } = {}
 }
 
 const itemsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/items`
+const draftsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/drafts`
 const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)}/orders`
 const convPath = (account: string, cid: string) =>
   `/accounts/${encodeURIComponent(account)}/conversations/${encodeURIComponent(cid)}`
+
+/** 草稿里的一张图。要带访问令牌取，返回图片本身，页面上用 blob: 地址显示 */
+export async function draftImage(account: string, draftId: number, sha: string): Promise<Blob> {
+  let resp: Response
+  try {
+    resp = await authorizedFetch(`/api${draftsPath(account)}/${draftId}/images/${sha}`)
+  } catch {
+    throw new ApiError(0, "network", "连不上后台，确认 uv run xym serve 在运行")
+  }
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new ApiError(resp.status, body?.code ?? "http_error", body?.message ?? "取图片失败")
+  }
+  return resp.blob()
+}
 
 /** 断了以后过多久重连 */
 const STREAM_RETRY_MS = 3000
@@ -616,6 +719,52 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...conditions, page }),
     }),
+
+  drafts: (account: string) => request<{ drafts: Draft[] }>(draftsPath(account)).then((r) => r.drafts),
+
+  createDraft: (account: string) => request<Draft>(draftsPath(account), { method: "POST" }),
+
+  /** 保存表单，整个提交 */
+  updateDraft: (account: string, draftId: number, form: DraftForm) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}`, {
+      method: "PUT",
+      body: JSON.stringify(form),
+    }),
+
+  /** 删草稿（已经发出去的商品不受影响） */
+  deleteDraft: (account: string, draftId: number) =>
+    request<{ ok: true }>(`${draftsPath(account)}/${draftId}`, { method: "DELETE" }),
+
+  /** 加一张图：请求体就是图片文件，后台转成 JPEG 存在服务器上 */
+  addDraftImage: (account: string, draftId: number, file: File) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/images`, {
+      method: "POST",
+      body: file,
+      headers: { "content-type": file.type || "application/octet-stream" },
+    }),
+
+  removeDraftImage: (account: string, draftId: number, sha: string) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/images/${sha}`, { method: "DELETE" }),
+
+  /** 按描述推荐分类和属性（会请求闲鱼），之前选过的带着 */
+  recommend: (account: string, draftId: number) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/recommend`, { method: "POST" }),
+
+  /** 改一项分类或属性，闲鱼按新的选择刷新别的属性（会请求闲鱼） */
+  chooseLabel: (account: string, draftId: number, propertyId: string, keys: string[]) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ property_id: propertyId, keys }),
+    }),
+
+  /** 发到闲鱼：查发布限制和违禁词、传图、发布 */
+  publish: (account: string, draftId: number) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/publish`, { method: "POST" }),
+
+  addresses: (account: string) =>
+    request<{ addresses: AddressOption[] }>(
+      `/accounts/${encodeURIComponent(account)}/publish/addresses`,
+    ).then((r) => r.addresses),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

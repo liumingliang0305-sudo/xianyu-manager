@@ -25,13 +25,15 @@ from xianyu_core.errors import CircuitOpenError, RateLimitedError, XianyuError
 from xianyu_core.im import SEND_API
 from xianyu_core.item import DELETE_API, DOWNSHELF_API, EDIT_API
 from xianyu_core.order import ADJUST_PRICE_API
+from xianyu_core.publish import PUBLISH_API
 
 READ = "read"
 WRITE = "write"
 SEND = "send"
 
-# 会改平台数据的接口。新加的改动类接口要登记在这里，不然按读接口限流
-WRITE_APIS = frozenset({EDIT_API, DOWNSHELF_API, DELETE_API, ADJUST_PRICE_API})
+# 会改平台数据的接口。新加的改动类接口要登记在这里，不然按读接口限流。
+# 发布前传图（publish.UPLOAD_API）按读算：一次发布最多传 9 张，网页端也是一选完就连着传
+WRITE_APIS = frozenset({EDIT_API, DOWNSHELF_API, DELETE_API, ADJUST_PRICE_API, PUBLISH_API})
 # 发消息（即时消息连接上的请求，不是 mtop 接口），单独计数
 SEND_APIS = frozenset({SEND_API})
 

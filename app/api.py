@@ -15,7 +15,9 @@
 - 同一个账号的平台请求串行执行，避免并发改动和凭证文件互相覆盖；
 - 每个账号有限流和风控熔断（xianyu_core/guard.py），熔断状态存在文件里，重启后还在；
 - 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
-  GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接。
+  GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接；
+- 发布：先存草稿（app/drafts.py），图片传到 .../drafts/{id}/images（请求体就是图片文件），
+  存在本机 data/images；点发布时才传到闲鱼。
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import auth, db, keepalive
+from app import images as image_store
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
 from app.auth import (
     MAX_FAILURES_PER_IP,
@@ -49,6 +52,7 @@ from app.auth import (
     TooManyAttemptsError,
     client_ip,
 )
+from app.drafts import Draft, DraftNotFoundError, DraftService
 from app.items import ItemService, PriceGuardError
 from app.login import (
     LoginNotFoundError,
@@ -72,6 +76,7 @@ from xianyu_core.errors import (
 )
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
+from xianyu_core.publish import PublishBlockedError
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -86,14 +91,14 @@ SCAN_RESULTS = ("added", "updated", "skipped", "missing", "failed")
 
 # 页面只加载自己的脚本和样式（不认注入进来的脚本），不让别的网站用 iframe 嵌进去。
 # 商品图、聊天图在阿里的 CDN 上，图片放开 https；商品图的地址是 http 的，
-# upgrade-insecure-requests 让浏览器换成 https。
+# upgrade-insecure-requests 让浏览器换成 https。草稿的图片要带访问令牌取，取回来是 blob: 地址。
 # 样式要 'unsafe-inline'：提示框（sonner）、主题切换（next-themes）会插 <style>。
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: https:",
+        "img-src 'self' data: blob: https:",
         "font-src 'self' data:",
         "connect-src 'self'",
         "object-src 'none'",
@@ -119,6 +124,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountTakenError, 409, "account_taken"),
     (PriceGuardError, 409, "price_guard"),
     (AccountNotFoundError, 404, "account_not_found"),
+    (DraftNotFoundError, 404, "draft_not_found"),
     (LoginNotFoundError, 404, "login_not_found"),
     (ImOfflineError, 503, "im_offline"),
     (AuthRequiredError, 401, "auth_required"),
@@ -126,6 +132,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (CircuitOpenError, 503, "circuit_open"),
     (RateLimitedError, 429, "rate_limited"),
     (ImSendUncertainError, 504, "send_uncertain"),
+    (PublishBlockedError, 409, "publish_blocked"),
     (XianyuError, 502, "platform_error"),
     (ValueError, 400, "invalid"),
 ]
@@ -190,10 +197,27 @@ class SearchIn(BaseModel):
     filters: list[str] = []  # 见 QUICK_FILTERS
 
 
+class DraftIn(BaseModel):
+    description: str = ""
+    price: str | None = None  # 元，空是还没填
+    orig_price: str | None = None
+    post_mode: str = "free"  # 见 xianyu_core/publish.py 的 POST_MODES
+    post_price: str | None = None  # 一口价的邮费，元
+    take_self: bool = False
+    images: list[str] = []  # 图片的新顺序（sha）
+    address: dict[str, Any] | None = None  # .../publish/addresses 返回的 address
+
+
+class ChooseIn(BaseModel):
+    property_id: str
+    keys: list[str]
+
+
 def create_app(
     *,
     database_url: str | None = None,
     accounts_dir: str | Path = DEFAULT_DIR,
+    images_dir: str | Path = image_store.DEFAULT_DIR,
     transport: httpx.AsyncBaseTransport | None = None,
     interval: float = 1.5,
     web_dist: Path | None = WEB_DIST,
@@ -209,6 +233,7 @@ def create_app(
     `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态。
     `login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
     `auth_key`：访问令牌的签名密钥文件，不给时用 data/auth.key，没有就生成。
+    `images_dir`：草稿图片放哪，默认 data/images。
 
     `messages`：连不连即时消息。不连时消息接口只能看本地库里已有的。
     `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
@@ -237,6 +262,9 @@ def create_app(
         app.state.users = Users(conn)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
+        app.state.drafts = DraftService(
+            conn, accounts, app.state.items, image_store.ImageStore(images_dir)
+        )
         # 交易消息里的订单自动记进本地库，记下了推给页面（hub 在下面建，回调时才用到）
         feed = OrderFeed(
             app.state.orders,
@@ -290,6 +318,9 @@ def create_app(
 
     def orders(request: Request) -> OrderService:
         return request.app.state.orders
+
+    def drafts(request: Request) -> DraftService:
+        return request.app.state.drafts
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
@@ -605,6 +636,98 @@ def create_app(
             "total": result.total,
         }
 
+    @authed.get("/api/accounts/{account_id}/drafts")
+    async def list_drafts(request: Request, account_id: str) -> dict[str, Any]:
+        return {"drafts": [_draft(d) for d in drafts(request).list(account(request, account_id))]}
+
+    @authed.post("/api/accounts/{account_id}/drafts")
+    async def create_draft(request: Request, account_id: str) -> dict[str, Any]:
+        return _draft(drafts(request).create(account(request, account_id)))
+
+    @authed.get("/api/accounts/{account_id}/drafts/{draft_id}")
+    async def get_draft(request: Request, account_id: str, draft_id: int) -> dict[str, Any]:
+        return _draft(drafts(request).get(account(request, account_id), draft_id))
+
+    @authed.put("/api/accounts/{account_id}/drafts/{draft_id}")
+    async def update_draft(
+        request: Request, account_id: str, draft_id: int, body: DraftIn
+    ) -> dict[str, Any]:
+        draft = drafts(request).update(
+            account(request, account_id),
+            draft_id,
+            description=body.description,
+            price_cent=_yuan_or_none(body.price),
+            orig_price_cent=_yuan_or_none(body.orig_price),
+            post_mode=body.post_mode,
+            post_price_cent=_yuan_or_none(body.post_price),
+            take_self=body.take_self,
+            image_order=body.images,
+            address=body.address,
+        )
+        return _draft(draft)
+
+    @authed.delete("/api/accounts/{account_id}/drafts/{draft_id}")
+    async def delete_draft(request: Request, account_id: str, draft_id: int) -> dict[str, Any]:
+        drafts(request).delete(account(request, account_id), draft_id)
+        return {"ok": True}
+
+    @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/images")
+    async def add_draft_image(request: Request, account_id: str, draft_id: int) -> dict[str, Any]:
+        """请求体就是图片文件本身（不是表单）。"""
+        account_id = account(request, account_id)
+        size = int(request.headers.get("content-length") or 0)
+        if size > image_store.MAX_BYTES:
+            raise ValueError(f"图片太大，最大 {image_store.MAX_BYTES // 1024 // 1024} MB")
+        return _draft(drafts(request).add_image(account_id, draft_id, await request.body()))
+
+    @authed.get("/api/accounts/{account_id}/drafts/{draft_id}/images/{sha}")
+    async def draft_image(request: Request, account_id: str, draft_id: int, sha: str) -> Response:
+        content = drafts(request).image(account(request, account_id), draft_id, sha)
+        # 文件名就是内容的哈希，内容不会变
+        headers = {"cache-control": "private, max-age=31536000, immutable"}
+        return Response(content, media_type="image/jpeg", headers=headers)
+
+    @authed.delete("/api/accounts/{account_id}/drafts/{draft_id}/images/{sha}")
+    async def remove_draft_image(
+        request: Request, account_id: str, draft_id: int, sha: str
+    ) -> dict[str, Any]:
+        return _draft(drafts(request).remove_image(account(request, account_id), draft_id, sha))
+
+    @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/recommend")
+    async def recommend_category(
+        request: Request, account_id: str, draft_id: int
+    ) -> dict[str, Any]:
+        """按描述推荐分类和属性（请求平台）。"""
+        account_id = account(request, account_id)
+        async with locks[account_id]:
+            draft = await drafts(request).recommend(account_id, draft_id)
+        return _draft(draft)
+
+    @authed.put("/api/accounts/{account_id}/drafts/{draft_id}/labels")
+    async def choose_label(
+        request: Request, account_id: str, draft_id: int, body: ChooseIn
+    ) -> dict[str, Any]:
+        """改一项分类或属性，平台按新的选择刷新别的属性。"""
+        account_id = account(request, account_id)
+        async with locks[account_id]:
+            draft = await drafts(request).choose(account_id, draft_id, body.property_id, body.keys)
+        return _draft(draft)
+
+    @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/publish")
+    async def publish_draft(request: Request, account_id: str, draft_id: int) -> dict[str, Any]:
+        account_id = account(request, account_id)
+        async with locks[account_id]:
+            draft = await drafts(request).publish(account_id, draft_id)
+        return _draft(draft)
+
+    @authed.get("/api/accounts/{account_id}/publish/addresses")
+    async def publish_addresses(request: Request, account_id: str) -> dict[str, Any]:
+        """可选的发货地（上次用的、常用地址），选好的 address 原样放进草稿。"""
+        account_id = account(request, account_id)
+        async with locks[account_id]:
+            addresses = await drafts(request).addresses(account_id)
+        return {"addresses": addresses}
+
     @authed.get("/api/accounts/{account_id}/orders")
     async def list_orders(
         request: Request, account_id: str, side: str | None = None, status: str | None = None
@@ -834,8 +957,35 @@ def _block(block: Block | None) -> dict[str, Any] | None:
     return asdict(block) if block else None
 
 
+def _draft(draft: Draft) -> dict[str, Any]:
+    """草稿给页面的样子：推荐卡片换成可选的属性列表，图片只说传没传过闲鱼。"""
+    category = draft.category or {}
+    return {
+        "id": draft.id,
+        "description": draft.description,
+        "price_cent": draft.price_cent,
+        "orig_price_cent": draft.orig_price_cent,
+        "post_mode": draft.post_mode,
+        "post_price_cent": draft.post_price_cent,
+        "take_self": draft.take_self,
+        "images": [
+            {"sha": img.sha, "width": img.width, "height": img.height, "uploaded": bool(img.url)}
+            for img in draft.images
+        ],
+        "category": category.get("catName") or None,
+        "properties": draft.properties(),
+        "unsupported": draft.unsupported(),
+        "address": draft.address,
+        "item_id": draft.item_id,
+        "error": draft.error,
+        "created_at": draft.created_at,
+        "updated_at": draft.updated_at,
+        "published_at": draft.published_at,
+    }
+
+
 def _yuan_or_none(value: str | None) -> int | None:
-    """筛选用的价格：没填是不限，填了按元换算成分。"""
+    """价格：没填是 None（筛选里是不限），填了按元换算成分。"""
     return yuan_to_cent(value) if value and value.strip() else None
 
 

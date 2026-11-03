@@ -43,6 +43,11 @@
 - [x] 商品搜索：后台"搜索"页搜闲鱼上所有卖家的在售商品，排序、发布时间、价格区间、个人闲置 / 包邮 / 全新 / 验货宝
   和网页端搜索页一样，一次 30 件往后加载；用当前账号搜，结果不存本地（[xianyu_core/search.py](xianyu_core/search.py)，
   接口见[协议笔记](docs/protocol-notes.md#搜索)）。以后的捡漏监控、同行价都从这里搜
+- [x] 发布商品：后台"发布"页先存草稿（图片、描述、价格、邮费、发货地），检查好了再发到闲鱼。
+  图片存在服务器的 `data/images` 里，点发布时才传到闲鱼；分类和品牌、成色这些属性用闲鱼按描述推荐的，可以改；
+  发货地从闲鱼账号的常用地址里选。发布前和网页端一样查发布限制和违禁词，网页端不支持的分类（要填 3C 证书编号之类）
+  不让发（[xianyu_core/publish.py](xianyu_core/publish.py)、[app/drafts.py](app/drafts.py)，
+  接口见[协议笔记](docs/protocol-notes.md#发布商品)）。线上还没真正发过一件
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
@@ -62,7 +67,7 @@ uv run pytest                                # 跑测试（用到数据库的连
 每个 PR 和推到 main 的提交，GitHub Actions 会跑一遍同样的检查（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：
 后端 `ruff check`、`ruff format --check`、`pytest`（连一个 PostgreSQL 16 服务容器），前端 `pnpm lint`、`pnpm build`。
 
-商品、订单、消息、搜索都在管理后台的页面上操作（见下面"管理后台"），命令行只剩 `xym serve` 和 `xym users`。
+商品、发布、订单、消息、搜索都在管理后台的页面上操作（见下面"管理后台"），命令行只剩 `xym serve` 和 `xym users`。
 
 - 订单：分卖出的和买到的。个人卖家在网页端拿不到卖出订单列表，订单从交易消息里记：`xym serve` 连着即时消息时，
   拍下、付款的卡片一到就自动记下来，状态也跟着后面的卡片刷新。以前的订单在"订单"页点"从消息找订单"从存下的消息里补；
@@ -116,6 +121,7 @@ pnpm -C web dev
 凭证存在 `data/accounts/<unb>.json`，文件权限是 0600，`data/` 不会进 git。里面是账号 cookie，不要外传。
 旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删；
 `<unb>.im.lock` 是文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开。
+发布草稿的图片存在 `data/images/<sha256>.jpg`（统一转成 JPEG，同一张图只存一份），删草稿时只有它用的图跟着删。
 
 ### 用户和登录
 

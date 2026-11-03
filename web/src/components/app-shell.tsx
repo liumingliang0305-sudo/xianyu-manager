@@ -12,6 +12,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
   ShoppingCartIcon,
+  SquarePenIcon,
   SunIcon,
   UserIcon,
 } from "lucide-react"
@@ -52,6 +53,7 @@ interface NavEntry {
 
 const NAV: NavEntry[] = [
   { to: "/items", label: "商品", icon: PackageIcon },
+  { to: "/publish", label: "发布", icon: SquarePenIcon },
   { to: "/orders", label: "订单", icon: ShoppingCartIcon },
   { to: "/messages", label: "消息", icon: MessageSquareIcon },
   { to: "/search", label: "搜索", icon: SearchIcon },

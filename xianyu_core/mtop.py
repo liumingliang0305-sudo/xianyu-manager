@@ -53,6 +53,14 @@ MTOP_HEADERS = {
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
 }
+UPLOAD_HEADERS = {
+    "accept": "*/*",
+    "origin": WEB_HOST,
+    "referer": f"{WEB_HOST}/",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
+}
 
 
 _ASTRAL = re.compile(r"[\U00010000-\U0010FFFF]")
@@ -221,6 +229,34 @@ class MtopClient:
             if renewal:
                 raise AuthRequiredError(f"{error}；{renewal.message}", ret=codes, raw=raw)
         raise error
+
+    async def upload(
+        self,
+        url: str,
+        *,
+        params: dict[str, str],
+        files: dict[str, tuple[str, bytes, str]],
+        name: str,
+    ) -> dict[str, Any]:
+        """往闲鱼的文件上传服务传文件（不是 mtop 接口，不签名），带着这个账号的 cookie。
+
+        返回响应的 JSON。限流按 `name` 这个"接口名"算；被跳到风控页时和 mtop 一样熔断。
+        """
+        if self._guard:
+            await self._guard.acquire(name)
+        resp = await self._client.post(
+            url,
+            params=params,
+            files=files,
+            # 网页端的上传组件（antd Upload）会把这个响应头当请求头带上
+            headers={**UPLOAD_HEADERS, "access-control-allow-origin": "*"},
+        )
+        try:
+            return self._parse(name, resp)
+        except RiskControlError as exc:
+            if self._guard:
+                self._guard.trip(str(exc))
+            raise
 
     async def _renew(self) -> RenewResult | None:
         """会话过期时试一次免密续期。不该试（关掉了、已经试过）时返回 None。"""

@@ -50,7 +50,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | `mtop.idle.pc.idleitem.edit` ✅ | 1.0 | 见下 | 编辑后整体提交，成功返回 `{itemId}`。2026-10-29 实测改价 49→48→49 元 |
 | `mtop.taobao.idle.item.downshelf` 🔍 | **2.0** | `{itemId}` | 下架 |
 | `com.taobao.idle.item.delete` 🔍 | **1.1** | `{itemId}` | 删除，注意前缀是 `com.` |
-| `mtop.idle.pc.idleitem.publish` 🔍 | 1.0 | 和 edit 一样，不带 itemId | 发布新商品（还没做，要先解决图片上传） |
+| `mtop.idle.pc.idleitem.publish` 🔍 | 1.0 | 和 edit 一样，不带 itemId | 发布新商品，见下面"发布商品" |
 
 `itemStatus`：列表里只见过 `0`（在售）和 `1`（已卖出，图上盖"卖掉了"）。下架后的商品**不在**个人主页列表里，
 同步时只能标记成"不在主页了"。
@@ -76,6 +76,72 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 2026-10-29 用 `xym items price` 在一个在售商品上实测：49 → 48 → 49 元，两次都成功，详情页和 editDetail 都立即生效；
 两次编辑前后比对 editDetail，除 `priceInCent` 外所有字段（图片、描述、标签、地址、邮费、类目）都没变，
 说明直接带回 editDetail 里的标签是可行的。
+
+## 发布商品
+
+> 来源：2026-11-03 读网页端发布页（goofish.com/publish）xy-site 0.0.179 的 `p_publish-index.js`，并用已登录账号
+> 调了一遍只读的接口。✅ 是调过的；🔍 只读过前端代码，没有在线上调用（会真的传图、发出商品）。
+> 开源项目 xianyu-auto-reply-fix（AGPL，只看思路）也是纯 HTTP 发布，流程一样，传图用的是聊天的 appkey。
+
+网页端发布页的流程：打开页面先查发布限制 → 选图时立即传到闲鱼 → 描述或图片一变就推荐分类和属性 →
+输入描述时查违禁词 → 分类定了以后查能开的服务 → 点发布。
+
+| 接口 | 版本 | 请求体 | 说明 |
+|---|---|---|---|
+| `mtop.idle.pc.idleitem.prepublish.check` ✅ | 1.0 | `{}` | 发布限制。`limited` 为真且有 `publishLimitInfo`（`title`、`content`、`qrCodeUrl`）时网页端不让发，弹二维码去 App。实测 `{limited: false}` |
+| `mtop.idle.pc.idleitem.preget` ✅ | 1.0 | `{}` | 发布页配置：`supportSkuOrInventory`（能不能发多规格，个人账号是 false）、`commissionConfig`（基础软件服务费 0.6%，最高 60 元） |
+| `mtop.taobao.idle.kgraph.property.recommend` ✅ | **2.0** | 见下 | 按描述（和图片）推荐分类和属性 |
+| `mtop.taobao.idle.kgraph.property.search` 🔍 | 1.0 | `{inputText, propertyId, description, catId…, scene: "mainPublish"}` | 属性下拉框里搜别的值，本系统没用 |
+| `mtop.taobao.idle.local.poi.get` ✅ | 1.0 | `{longitude, latitude}` | 发货地，带请求头 `EagleEye-UserData: spm-cnt=a21ybx`。见下 |
+| `mtop.idle.item.publish.service.cards.list` ✅ | 1.0 | `{cpvList, itemInfoJson, param}`（都是 JSON 字符串） | 这个分类能开的服务。`itemInfoJson` 里没有 `itemCatDTO` 时报 `PARAM_ILLEGAL::item cat info miss`。实测这个账号返回 `{supportService: false}`，没有服务 |
+| `mtop.taobao.idleitem.badwords.prepubcheck` ✅ | **2.0** | `{title: 描述, scene: "pcPublish", sessionId: 毫秒时间戳接 unb}` | 违禁词。`result` 为真时 `badWordAlertInfo.items[].words` 是命中的词，`forbidPublish` 为真不让发 |
+| `mtop.idle.pc.idleitem.publish` 🔍 | 1.0 | 和编辑一样，不带 itemId | 成功返回 `{itemId}`。`FAIL_BIZ_STRONG_VALID_VERIFY_INFO` 是要先做实人认证（网页端弹二维码） |
+| `mtop.idle.idleitem.draft.edit` / `draft.publish` 🔍 | 1.0 | | 闲鱼自己的草稿箱，网页端只在"这个分类网页端不支持"时存进去、扫码去 App 接着发。本系统没用 |
+
+**传图** 🔍：`POST https://stream-upload.goofish.com/api/upload.api?floderId=0&appkey=fleamarket&_input_charset=utf-8`，
+multipart 表单，文件字段叫 `file`，带登录 cookie（antd Upload，`withCredentials`，还会把 `Access-Control-Allow-Origin: *`
+当请求头带上）。返回 `{success, object: {url, pix: "宽x高", …}}`。网页端发布页用 `appkey=fleamarket`，聊天发图是 `xy_chat`。
+网页端在浏览器里先查一遍：单张不超过 10 MB，图里有二维码的不让传。
+
+表单里的一张图转成 `imageInfoDOList` 的一项：
+`{extraInfo: {isH: "false", isT: "false", raw: "false"}, isQrCode: false, url, heightSize, widthSize, major: 第一张, type: 0, status: "done"}`。
+图片 1 到 9 张；描述必填、最多 1500 字、不能有 emoji（网页端用一个 emoji 正则拦）。
+
+**类目推荐**：请求体 `{title: 描述, lockCpv: false, multiSKU: false, publishScene: "mainPublish", scene: "newPublishChoice",
+description, imageInfos, uniqueCode}`；推荐过以后再推荐，还带上 `currentCardList`（上次的各张卡片的 `cardData`）、
+`selectedList`（选中的值，格式同下面的标签）、`catId`/`catName`/`channelCatId`（选中的分类，没有时 catId 是 `50023914`）。
+网页端描述停手 0.6 秒推荐一次；改了任何一个选项也推荐一次，平台按新的选择刷新别的属性（换了分类，属性就换一套）。
+返回 `cardList`、`categoryPredictResult`（`catId`、`catName`、`channelCatId`、`leafId`、`tbCatId`）、`isBook`：
+
+- 每张卡片 `{cardType, cardData: {propertyId, propertyName, isMultiple, valuesList}}`。`propertyId` 是 `-10000` 的是"分类"，
+  值里有 `catId`、`catName`、`channelCatId`、`tbCatId`、`leafId`；别的是属性（品牌 `20000`、成色 `20879`……），值里有
+  `valueId`、`valueName`。平台预先选好的值 `isClicked` 是 `"1"`，每个值带一个 `transportData`；
+- `cardType` 不是 `20401`（普通的单选、多选）的卡片，或者卡片是图书时，网页端提示"当前分类不支持网页端发布"，不让发。
+  实测"小米充电宝"推荐出一张 `cardType: 7001` 的"3C证书编号"（要填文字），这类商品网页端发不了；
+- `itemCatDTO` 取分类卡片里选中的那项，没有就用 `categoryPredictResult`；
+- `itemLabelExtList` 是每张卡片里选中的值：`{...transportData, text: 值的名字, isUserClick, properties: "属性ID##属性名:值ID##值名"}`，
+  分类的值 ID 用 `channelCatId`、名字用 `catName`。和编辑页 editDetail 里的标签格式一样；
+- 用户改了选项：选中的 `isClicked`/`isUserClick` 为 `"1"`，原来选中、这次取消的 `isUserCancel` 为 `"1"`，`transportData` 里同步改。
+
+2026-11-03 实测"宜家落地灯，九成新"：分类预测落地灯（还给了 10 个候选），品牌预选 IKEA/宜家，成色预选几乎全新。
+
+**发货地**：网页端用浏览器定位的坐标调 `poi.get`（拿不到定位就用北京东城的坐标），返回 `selectedPoi`（实测是上次发布用的地址，
+和坐标无关）、`commonAddresses`（常用地址）、`nearbyAddresses`（坐标附近）。默认用 `selectedPoi`，没有就用常用地址第一个。
+一个地址转成 `itemAddrDTO`：`{area, city, divisionId, gps: "纬度,经度", poiId, poiName: poi 或 "城市 区", prov}`。
+
+**邮费**（`itemPostFeeDTO`，四选一，另有"支持自提" `onlyTakeSelf`）：包邮 `{canFreeShipping: true, supportFreight: true}`；
+按距离计费 `{canFreeShipping: false, supportFreight: true, templateId: "-100"}`；一口价 `{canFreeShipping: false, supportFreight: true,
+templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFreeShipping: false, supportFreight: false, templateId: "0"}`。
+
+**服务**：`cards.list` 返回的 `services[]` 转成 `userRightsProtocols`：`{enable: code 不是 AI_SALE 且 defaultEnable, serviceCode: code}`。
+
+提交的请求体和编辑一样（见上面"编辑的请求体"）：`{freebies: false, itemTypeStr: "b", quantity: "1", simpleItem: "true"}`
+\+ 图片、描述（`title` 和 `desc` 同一串）、标签、价格（分，字符串，0 不传）、服务、邮费、地址、`defaultPrice: false`、`itemCatDTO`
+\+ `uniqueCode`、`sourceId`/`bizcode`/`publishScene` 都是 `"pcMainPublish"`。
+
+本系统的做法（[xianyu_core/publish.py](../xianyu_core/publish.py)、[app/drafts.py](../app/drafts.py)）：草稿和图片先存在本机
+（图片在 `data/images`），点发布时依次查发布限制、违禁词，把还没传过的图传到闲鱼（传过的地址记在草稿里，重试不再传），
+查服务，最后发布。推荐只按描述推荐，不带图（图还在本机）。发布在限流里算"改动"，传图算"读"。
 
 ## 订单
 
