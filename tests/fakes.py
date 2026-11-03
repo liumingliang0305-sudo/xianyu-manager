@@ -54,7 +54,8 @@ class FakePlatform:
     """
 
     def __init__(self, items, orders=None):
-        # item_id → {"title", "price": 分, "status"}
+        # item_id → {"title", "price": 分, "status", "post": editDetail 的邮费（可选）,
+        #            "sku": 多规格（可选）}
         self.items = items
         # order_id → {"item_id", "status": 状态文字, "price": 分, "post": 运费分, "created": 毫秒,
         #             "bought": 当前账号是买家（可选）}
@@ -71,6 +72,7 @@ class FakePlatform:
         # 发布
         self.uploads: list[bytes] = []  # 传上来的图片（multipart 请求体）
         self.published: list[dict] = []  # publish 收到的请求体
+        self.edited: list[dict] = []  # edit 收到的请求体
         self.publish_limited = False
         self.bad_words: list[str] = []
         self.amap_queries: list[dict] = []  # 高德关键字搜索收到的参数
@@ -178,14 +180,74 @@ class FakePlatform:
         }
 
     def mtop_idle_pc_idleitem_editDetail(self, data):
-        it = self.items[data["itemId"]]
-        return {
-            "itemId": data["itemId"],
-            "itemTextDTO": {"desc": it["title"]},
-            "itemPriceDTO": {"priceInCent": str(it["price"])},
+        """结构照实测的 editDetail 裁剪（见 test_item.py 的 EDIT_DETAIL），数值是编的。"""
+        item_id = data["itemId"]
+        it = self.items[item_id]
+        detail = {
+            "itemId": item_id,
+            "itemTypeStr": "b",
+            "quantity": "1",
+            "imageInfoDOList": [
+                {
+                    "major": "true",
+                    "templateIndex": "27923_1",
+                    "widthSize": "800",
+                    "heightSize": "600",
+                    "type": "0",
+                    "url": f"http://img.example/{item_id}.jpg",
+                    "extraInfo": {"raw": "false", "isT": "false", "isH": "false"},
+                },
+            ],
+            "itemTextDTO": {
+                "titleDescSeparate": "false",
+                "title": it["title"],
+                "desc": it["title"],
+            },
+            "itemLabelExtList": [
+                {
+                    "propertyId": "-10000",
+                    "text": "洗衣机",
+                    "properties": "-10000##分类:126856141##洗衣机",
+                },
+                {
+                    "propertyId": "20879",
+                    "text": "几乎全新",
+                    "properties": "20879##成色:21458##几乎全新",
+                },
+            ],
+            "itemPriceDTO": {"origPriceInCent": "0", "priceInCent": str(it["price"])},
+            "userRightsProtocols": [{"enable": "true", "serviceCode": "OLD"}],
+            "itemPostFeeDTO": it.get("post")
+            or {
+                "canFreeShipping": "true",
+                "onlyTakeSelf": "false",
+                "supportFreight": "true",
+                "templateId": "0",
+                "postPriceInCent": "0",
+            },
+            "itemAddrDTO": {
+                "area": "龙岗区",
+                "city": "深圳",
+                "prov": "广东",
+                "divisionId": "440307",
+                "gps": "22.6,114.1",
+                "poiId": "P1",
+                "poiName": "某广场",
+            },
+            "itemCatDTO": {
+                "catId": "50025413",
+                "leafId": "872",
+                "catName": "洗衣机",
+                "tbCatId": "350301",
+                "channelCatId": "126856141",
+            },
         }
+        if it.get("sku"):
+            detail["itemSkuList"] = it["sku"]
+        return detail
 
     def mtop_idle_pc_idleitem_edit(self, data):
+        self.edited.append(data)
         it = self.items[data["itemId"]]
         it["price"] = int(data["itemPriceDTO"]["priceInCent"])
         it["title"] = data["itemTextDTO"]["desc"]

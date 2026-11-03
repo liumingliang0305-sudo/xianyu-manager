@@ -104,7 +104,7 @@ item_ops = Table(
     Index("item_ops_item", "account_id", "item_id"),
 )
 
-# 发布商品的草稿，见 app/drafts.py。发布成功以后留着，记下发出去的商品 ID
+# 发布商品的草稿，见 app/drafts.py。发布成功以后留着，记下发出去的商品 ID。编辑已有商品也是一个草稿
 drafts = Table(
     "drafts",
     metadata,
@@ -123,8 +123,12 @@ drafts = Table(
     Column("cards", Text, nullable=False, server_default="[]"),
     Column("category", Text),  # JSON：itemCatDTO，还没推荐过是 NULL
     Column("address", Text),  # JSON：itemAddrDTO，还没选是 NULL
-    Column("item_id", Text),  # 发布成功后的商品 ID
+    Column("item_id", Text),  # 发布成功后的商品 ID；编辑草稿提交成功后是改的那个商品
     Column("error", Text),  # 上次发布失败的原因
+    # 编辑已有商品的草稿：改的是哪个商品，和建草稿时 editDetail 的返回（JSON，提交时照它改）。
+    # 发新商品的草稿是 NULL
+    Column("edit_item_id", Text),
+    Column("origin", Text),
     Column("created_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),
     Column("published_at", Double),

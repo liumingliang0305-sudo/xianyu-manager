@@ -64,7 +64,13 @@ function DraftRow({
           selected ? "bg-secondary" : "hover:bg-muted/60",
         )}
       >
-        <DraftImage account={account} draftId={draft.id} sha={draft.images[0]?.sha} size={40} />
+        <DraftImage
+          account={account}
+          draftId={draft.id}
+          sha={draft.images[0]?.sha}
+          url={draft.images[0]?.url}
+          size={40}
+        />
         <span className="min-w-0 flex-1">
           <span className={cn("block truncate text-sm", title ? "font-medium" : "text-muted-foreground")}>
             {title || "还没写描述"}

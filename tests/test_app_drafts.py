@@ -7,7 +7,7 @@ from PIL import Image
 
 from app.drafts import DraftNotFoundError, DraftService
 from app.images import ImageStore, normalize
-from app.items import ItemService
+from app.items import ItemService, PriceGuardError
 from xianyu_core.publish import PublishBlockedError
 
 
@@ -52,6 +52,21 @@ def fill(service, draft, **overrides):
         },
     }
     return service.update(UNB, draft.id, **(fields | overrides))
+
+
+def edit_form(draft, **overrides):
+    """编辑草稿现在的表单，`overrides` 是要改的。"""
+    fields = {
+        "description": draft.description,
+        "price_cent": draft.price_cent,
+        "orig_price_cent": draft.orig_price_cent,
+        "post_mode": draft.post_mode,
+        "post_price_cent": draft.post_price_cent,
+        "take_self": draft.take_self,
+        "image_order": [img.sha for img in draft.images],
+        "address": draft.address,
+    }
+    return fields | overrides
 
 
 def ready(service, images=1):
@@ -268,3 +283,151 @@ def test_platform_blocks_before_uploading(service, platform, setup, message):
         run(service.publish(UNB, draft.id))
     assert platform.uploads == []
     assert message.split("：")[0] in service.get(UNB, draft.id).error
+
+
+# ---- 编辑已有商品 ----
+
+
+def test_edit_item_loads_form_once(service, platform):
+    draft = run(service.edit_item(UNB, "1001"))
+    assert draft.edit_item_id == "1001" and draft.item_id is None
+    assert (draft.description, draft.price_cent, draft.orig_price_cent) == ("洗衣机", 35800, None)
+    assert (draft.post_mode, draft.post_price_cent, draft.take_self) == ("free", None, False)
+    assert [(img.url, img.width, img.height) for img in draft.images] == [
+        ("http://img.example/1001.jpg", 800, 600)
+    ]
+    assert draft.category["catName"] == "洗衣机"
+    assert draft.address["poiName"] == "某广场"
+    assert draft.current_labels() == [{"name": "成色", "value": "几乎全新"}]
+    assert draft.can_keep_post() is False
+    assert service.list(UNB) == []  # 不在发布页的列表里
+
+    calls = len(platform.calls)
+    assert run(service.edit_item(UNB, "1001")).id == draft.id  # 接着改，不再请求平台
+    assert len(platform.calls) == calls
+    assert [api for api, _ in platform.calls] == ["mtop.idle.pc.idleitem.editDetail"]
+
+
+def test_submit_edit_changes_only_what_was_edited(service, platform, items):
+    run(items.sync(UNB))
+    draft = run(service.edit_item(UNB, "1001"))
+    draft = service.add_image(UNB, draft.id, png("red"))
+    old, new = (img.sha for img in draft.images)
+    draft = service.update(
+        UNB, draft.id, **edit_form(draft, description="洗衣机 九成新", image_order=[new, old])
+    )
+    draft = run(service.publish(UNB, draft.id))
+
+    assert draft.item_id == "1001" and draft.error is None
+    [body] = platform.edited
+    assert body["itemTextDTO"]["desc"] == "洗衣机 九成新"
+    first, second = body["imageInfoDOList"]
+    assert (first["url"], first["major"]) == ("https://img.example/up1.jpg", True)
+    # 原来的图照 editDetail 带回去，只是不再是首图
+    assert (second["url"], second["major"], second["templateIndex"]) == (
+        "http://img.example/1001.jpg",
+        False,
+        "27923_1",
+    )
+    # 没改的照原样：邮费带着 templateId，服务没重新查
+    assert body["itemPostFeeDTO"]["templateId"] == "0"
+    assert body["userRightsProtocols"] == [{"enable": True, "serviceCode": "OLD"}]
+    assert body["itemPriceDTO"] == {"priceInCent": "35800"}
+    assert [api for api, _ in platform.calls][-2:] == [
+        "mtop.taobao.idleitem.badwords.prepubcheck",
+        "mtop.idle.pc.idleitem.edit",
+    ]
+    [op] = items.history(UNB, "1001")
+    assert (op.action, op.ok, op.detail) == (
+        "edit",
+        True,
+        {"draft_id": draft.id, "fields": ["描述", "图片"]},
+    )
+    item = items.get(UNB, "1001")
+    assert (item.title, item.pic_url) == ("洗衣机 九成新", "https://img.example/up1.jpg")
+    with pytest.raises(ValueError, match="已经提交到闲鱼"):
+        service.update(UNB, draft.id, **edit_form(draft))
+
+    # 再编辑就按闲鱼上现在的样子重新建，提交过的删掉
+    again = run(service.edit_item(UNB, "1001"))
+    assert again.id != draft.id and again.description == "洗衣机 九成新"
+    with pytest.raises(DraftNotFoundError):
+        service.get(UNB, draft.id)
+
+
+def test_submit_edit_checks_before_requesting(service, platform, items):
+    draft = run(service.edit_item(UNB, "1001"))
+    calls = len(platform.calls)
+    with pytest.raises(ValueError, match="没有要提交的改动"):
+        run(service.publish(UNB, draft.id))
+    service.update(UNB, draft.id, **edit_form(draft, price_cent=358))  # 少输了两个 0
+    with pytest.raises(PriceGuardError):
+        run(service.publish(UNB, draft.id))
+    assert len(platform.calls) == calls
+    assert items.history(UNB) == []
+
+    run(service.publish(UNB, draft.id, force=True))
+    assert platform.items["1001"]["price"] == 358
+    [op] = items.history(UNB)
+    assert op.detail == {"draft_id": draft.id, "fields": ["价格"], "from": 35800, "to": 358}
+
+
+def test_failed_edit_is_logged_and_can_retry(service, platform, items):
+    draft = run(service.edit_item(UNB, "1001"))
+    service.update(UNB, draft.id, **edit_form(draft, post_mode="fixed", post_price_cent=800))
+    platform.fail["mtop.idle.pc.idleitem.edit"] = "FAIL_BIZ_ITEM_STATUS_ERROR::宝贝状态不允许编辑"
+    with pytest.raises(Exception, match="不允许编辑"):
+        run(service.publish(UNB, draft.id))
+    assert "不允许编辑" in service.get(UNB, draft.id).error
+    [op] = items.history(UNB, "1001")
+    assert (op.action, op.ok, op.detail["fields"]) == ("edit", False, ["邮费"])
+
+    del platform.fail["mtop.idle.pc.idleitem.edit"]
+    run(service.publish(UNB, draft.id))
+    post = platform.edited[-1]["itemPostFeeDTO"]
+    assert post == {
+        "canFreeShipping": False,
+        "supportFreight": True,
+        "templateId": "0",
+        "onlyTakeSelf": False,
+        "postPriceInCent": "800",
+    }
+
+
+def test_edit_keeps_post_template_from_app(service, platform):
+    template = {"canFreeShipping": "false", "supportFreight": "true", "templateId": "778"}
+    platform.items["1001"]["post"] = {**template, "onlyTakeSelf": "false"}
+    draft = run(service.edit_item(UNB, "1001"))
+    assert (draft.post_mode, draft.can_keep_post()) == ("keep", True)
+    service.update(UNB, draft.id, **edit_form(draft, take_self=True))
+    run(service.publish(UNB, draft.id))
+    post = platform.edited[-1]["itemPostFeeDTO"]
+    assert (post["templateId"], post["onlyTakeSelf"]) == ("778", True)
+
+    other = service.create(UNB)  # 发新商品的草稿没有原来的邮费可以沿用
+    with pytest.raises(ValueError, match="邮费方式"):
+        fill(service, other, post_mode="keep")
+
+
+def test_edit_recommend_starts_from_current_labels(service, platform):
+    draft = run(service.edit_item(UNB, "1001"))
+    draft = run(service.recommend(UNB, draft.id))
+    _, data = platform.calls[-1]
+    assert data["currentCardList"] == []
+    assert [label["text"] for label in data["selectedList"]] == ["洗衣机", "几乎全新"]
+    assert (data["catId"], data["catName"]) == ("50025413", "洗衣机")
+    assert draft.current_labels() == [] and draft.properties()
+
+    # 换了分类：属性按推荐的带，服务重新查
+    draft = run(service.choose(UNB, draft.id, "-10000", ["126858404"]))
+    run(service.publish(UNB, draft.id))
+    body = platform.edited[-1]
+    assert body["itemCatDTO"]["catName"] == "台灯"
+    assert body["userRightsProtocols"][0]["serviceCode"] == "SVC"
+    assert "mtop.idle.item.publish.service.cards.list" in [api for api, _ in platform.calls]
+
+
+def test_multi_sku_items_cannot_be_edited(service, platform):
+    platform.items["1001"]["sku"] = [{"priceInCent": "100"}]
+    with pytest.raises(ValueError, match="多规格"):
+        run(service.edit_item(UNB, "1001"))

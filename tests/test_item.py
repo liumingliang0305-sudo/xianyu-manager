@@ -260,6 +260,34 @@ def test_edit_payload_changes_only_requested_fields():
     assert changed == base
 
 
+def test_edit_payload_takes_whole_form_from_edit_page():
+    image = {"url": "https://img.example/new.jpg", "major": True, "type": 0}
+    label = {"text": "台灯", "properties": "-10000##分类:126858404##台灯"}
+    post = {"canFreeShipping": False, "supportFreight": False, "templateId": "0"}
+    addr = {"city": "武汉", "divisionId": 420111, "gps": "30.5,114.4", "poiId": "B1", "x": "丢掉"}
+    changed = build_edit_payload(
+        EDIT_DETAIL,
+        images=[image],
+        labels=[label],
+        category={"catId": 50025404, "catName": "台灯", "channelCatId": "126858404", "leafId": 1},
+        post=post,
+        address=addr,
+        services=[{"enable": True, "serviceCode": "SVC"}],
+    )
+    assert changed["imageInfoDOList"] == [image]
+    assert changed["itemLabelExtList"] == [label]
+    assert changed["itemCatDTO"] == {
+        "catId": 50025404,
+        "catName": "台灯",
+        "channelCatId": "126858404",
+        "tbCatId": "",
+    }
+    assert changed["itemPostFeeDTO"] == post
+    assert changed["itemAddrDTO"]["city"] == "武汉" and "x" not in changed["itemAddrDTO"]
+    assert changed["userRightsProtocols"] == [{"enable": True, "serviceCode": "SVC"}]
+    assert changed["quantity"] == "1" and changed["itemId"] == "1001"
+
+
 def test_edit_payload_keeps_quantity_from_detail():
     assert build_edit_payload({**EDIT_DETAIL, "quantity": "5"})["quantity"] == "5"
 

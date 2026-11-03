@@ -24,7 +24,7 @@
   先开的退出以后自动接上
 - [x] 限流和风控熔断：每个账号改动 3 次/分钟、发消息 10 次/分钟、读 30 次/分钟，碰到风控停 30 分钟（[docs/guard.md](docs/guard.md)）
 - [x] 商品接口：列表、详情、编辑、下架、删除（[xianyu_core/item.py](xianyu_core/item.py)）
-- [x] 业务层第一块：商品管理，同步到本地库、改价、改描述、下架、删除、改动记录（[app/items.py](app/items.py)）
+- [x] 业务层第一块：商品管理，同步到本地库、改价、编辑、下架、删除、改动记录（[app/items.py](app/items.py)）
 - [x] 管理后台第一页：商品管理（FastAPI 接口 [app/api.py](app/api.py) + Vite / React / shadcn/ui 前端 [web/](web/)）
 - [x] 订单接口：订单详情（已实测）、待付款订单改价、专业卖家的卖出订单列表（[xianyu_core/order.py](xianyu_core/order.py)）
 - [x] 订单管理：卖出的和买到的分开看（后台"订单"页上面切换），按订单号添加、刷新进行中的订单、按状态查看、实时详情、
@@ -49,6 +49,10 @@
   发布前和网页端一样查发布限制和违禁词，网页端不支持的分类（要填 3C 证书编号之类）不让发
   （[xianyu_core/publish.py](xianyu_core/publish.py)、[app/drafts.py](app/drafts.py)、[app/places.py](app/places.py)，
   接口见[协议笔记](docs/protocol-notes.md#发布商品)）。线上还没真正发过一件
+- [x] 编辑商品：商品页点"编辑"进编辑页，表单和发布页一样（图片、描述、分类和属性、价格、邮费、发货地）。
+  打开时用卖家自己的 editDetail 拉一次表单初值，改动先暂存在后台，点"保存到闲鱼"才提交；
+  表单里没有的（数量、服务……）原样带回，App 里设的运费模板可以沿用（[app/drafts.py](app/drafts.py)）。
+  以前的"改描述"弹窗拉初值用的是买家看的商品详情接口（`pc.detail`），容易触发风控，已经去掉
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
@@ -329,7 +333,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   auth.py          登录鉴权：访问令牌（JWT）、签名密钥、输错密码限次
   db.py            本地库（PostgreSQL）：连接、启动时确认表结构是最新的
   schema.py        表结构：用户、刷新令牌、账号归属，商品、订单、它们的改动记录，消息的会话和消息；Alembic 从这里生成迁移
-  items.py         商品管理：同步、查询、改价（带保护线）、改描述、下架、删除、改动记录
+  items.py         商品管理：同步、查询、改价（带保护线）、下架、删除、改动记录
   orders.py        订单管理（卖出的、买到的）：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   search.py        搜索闲鱼上的商品（别人的），一次一页，不存库
   login.py         登录闲鱼：扫码（后台任务跑 QRLogin，前端轮询进度，每个用户同一时间只有一张码）和导入浏览器的 Cookie
@@ -348,7 +352,7 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/lib/auth.ts      登录状态：访问令牌放在内存里，打开页面时拿 cookie 里的刷新令牌换
   src/features/auth/   登录页、改密码、浏览器插件令牌
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
-  src/features/items/  商品管理页：列表、详情、改价、改描述、下架、删除、改动记录
+  src/features/items/  商品管理页：列表、详情、改价、编辑页、下架、删除、改动记录
   src/features/orders/ 订单管理页：卖出的 / 买到的切换、添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
   src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史、回复，新消息通过 SSE 实时刷新
   src/features/search/ 搜索页：搜闲鱼上的商品，排序、筛选，往后加载

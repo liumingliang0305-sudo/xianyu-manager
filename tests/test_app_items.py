@@ -76,13 +76,6 @@ def test_failed_change_is_logged_and_raised(service, platform):
     assert "宝贝状态不允许编辑" in op.error
 
 
-def test_change_desc_logs_before_and_after(service, platform):
-    run(service.change_desc(UNB, "1001", "洗衣机 九成新"))
-    assert platform.items["1001"]["title"] == "洗衣机 九成新"
-    [op] = service.history(UNB)
-    assert op.detail == {"from": "洗衣机", "to": "洗衣机 九成新"}
-
-
 def test_downshelf_and_delete(service, platform):
     run(service.sync(UNB))
     run(service.downshelf(UNB, "1001"))

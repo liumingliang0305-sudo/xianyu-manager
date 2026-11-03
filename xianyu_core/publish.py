@@ -60,6 +60,8 @@ POST_MODES: dict[str, dict[str, Any]] = {
     "none": {"canFreeShipping": False, "supportFreight": False, "templateId": "0"},  # 无需邮寄
 }
 POST_MODE_TEXT = {"free": "包邮", "distance": "按距离计费", "fixed": "一口价", "none": "无需邮寄"}
+# 编辑已有商品时原来的邮费对不上上面四种（比如 App 里设的运费模板）：原样带回去
+KEEP_POST = "keep"
 
 # 网页端描述框不让输入 emoji。这里按常见的 emoji 码段粗判
 _EMOJI = re.compile(
@@ -112,11 +114,18 @@ class PublishApi:
         return data.get("selectedPoi") or None, list(data.get("commonAddresses") or [])
 
     async def recommend(
-        self, desc: str, cards: list[dict[str, Any]] | None = None
+        self,
+        desc: str,
+        cards: list[dict[str, Any]] | None = None,
+        *,
+        labels: list[dict[str, Any]] | None = None,
+        category: dict[str, Any] | None = None,
     ) -> Recommendation:
         """按描述推荐分类和属性。
 
         `cards` 是上一次推荐的结果（可以改过选中项），带上时平台按里面的选择刷新。
+        编辑已有商品、还没推荐过时没有卡片，带上商品现在的标签 `labels`（itemLabelExtList）和类目
+        `category`（itemCatDTO），写法和带卡片时一样。
         """
         data: dict[str, Any] = {
             "title": desc,
@@ -126,13 +135,16 @@ class PublishApi:
             "scene": "newPublishChoice",
         }
         if cards:
-            chosen = _clicked(_category_card(cards))
+            labels = labels_from_cards(cards)
+            category = _clicked(_category_card(cards))
+        if cards or labels or category:
+            category = category or {}
             data.update(
-                currentCardList=[card.get("cardData") or {} for card in cards],
-                selectedList=labels_from_cards(cards),
-                catId=(chosen or {}).get("catId") or DEFAULT_CAT_ID,
-                catName=(chosen or {}).get("catName") or "",
-                channelCatId=(chosen or {}).get("channelCatId") or "",
+                currentCardList=[card.get("cardData") or {} for card in cards or []],
+                selectedList=labels or [],
+                catId=category.get("catId") or DEFAULT_CAT_ID,
+                catName=category.get("catName") or "",
+                channelCatId=category.get("channelCatId") or "",
             )
         data.update(description=desc, imageInfos=[], uniqueCode=unique_code())
         result = await self._mtop.call(RECOMMEND_API, data, version="2.0", spm_cnt=SPM_PUBLISH)
@@ -327,6 +339,74 @@ def check_desc(desc: str) -> None:
         raise ValueError("描述里不能有 emoji，网页端发布不让用")
 
 
+def check_listing(
+    *,
+    desc: str,
+    image_count: int,
+    price_cent: int,
+    orig_price_cent: int | None,
+    category: dict[str, Any],
+    cards: list[dict[str, Any]],
+) -> None:
+    """发布新商品和编辑已有商品都要过的检查，不请求平台。邮费在 post_fee 里查。"""
+    check_desc(desc)
+    if not 1 <= image_count <= MAX_IMAGES:
+        raise ValueError(f"图片要 1 到 {MAX_IMAGES} 张")
+    if price_cent <= 0:
+        raise ValueError("售价要大于 0")
+    if orig_price_cent is not None and orig_price_cent < 0:
+        raise ValueError("原价不能是负数")
+    if not category.get("catId"):
+        raise ValueError("还没有分类，先推荐分类")
+    unsupported = unsupported_cards(cards)
+    if unsupported:
+        raise ValueError(f"这个分类网页端不支持发布（要填{'、'.join(unsupported)}），去闲鱼 App 发")
+
+
+def post_fee(post_mode: str, post_price_cent: int | None, take_self: bool) -> dict[str, Any]:
+    """邮费的选法 → itemPostFeeDTO。"""
+    if post_mode not in POST_MODES:
+        raise ValueError(f"不认识的邮费方式：{post_mode}")
+    if post_mode == "fixed" and not 0 < (post_price_cent or 0) <= MAX_POST_CENT:
+        raise ValueError("一口价邮费要大于 0、不超过 1000 元")
+    post = {**POST_MODES[post_mode], "onlyTakeSelf": take_self}
+    if post_mode == "fixed":
+        post["postPriceInCent"] = str(post_price_cent)
+    return post
+
+
+def post_mode_from(post: dict[str, Any]) -> tuple[str, int | None]:
+    """editDetail 里的 itemPostFeeDTO → (邮费的选法, 一口价的邮费)。
+
+    对不上四种选法的（比如 App 里设的运费模板）是 KEEP_POST。
+    """
+    if _true(post.get("canFreeShipping")):
+        return "free", None
+    if not _true(post.get("supportFreight")):
+        return "none", None
+    template = str(post.get("templateId") or "0")
+    fee = _int(post.get("postPriceInCent"))
+    if template == "-100":
+        return "distance", None
+    if template == "0" and fee > 0:
+        return "fixed", fee
+    return KEEP_POST, None
+
+
+def image_info(img: UploadedImage, major: bool) -> dict[str, Any]:
+    """传到闲鱼的一张图 → imageInfoDOList 的一项（网页端的写法），`major` 是首图。"""
+    return {
+        "extraInfo": {"isH": "false", "isT": "false", "raw": "false"},
+        "isQrCode": False,
+        "url": img.url,
+        "heightSize": img.height,
+        "widthSize": img.width,
+        "major": major,
+        "type": 0,
+        "status": "done",
+    }
+
+
 def build_publish_payload(
     *,
     desc: str,
@@ -345,45 +425,22 @@ def build_publish_payload(
 
     网页端只有描述框：标题和描述填同一串，平台自己截标题。
     """
-    check_desc(desc)
-    if not 1 <= len(images) <= MAX_IMAGES:
-        raise ValueError(f"图片要 1 到 {MAX_IMAGES} 张")
-    if price_cent <= 0:
-        raise ValueError("售价要大于 0")
-    if orig_price_cent is not None and orig_price_cent < 0:
-        raise ValueError("原价不能是负数")
-    if post_mode not in POST_MODES:
-        raise ValueError(f"不认识的邮费方式：{post_mode}")
-    if post_mode == "fixed" and not 0 < (post_price_cent or 0) <= MAX_POST_CENT:
-        raise ValueError("一口价邮费要大于 0、不超过 1000 元")
-    if not category.get("catId"):
-        raise ValueError("还没有分类，先推荐分类")
-    unsupported = unsupported_cards(cards)
-    if unsupported:
-        raise ValueError(f"这个分类网页端不支持发布（要填{'、'.join(unsupported)}），去闲鱼 App 发")
-
-    post = {**POST_MODES[post_mode], "onlyTakeSelf": take_self}
-    if post_mode == "fixed":
-        post["postPriceInCent"] = str(post_price_cent)
+    check_listing(
+        desc=desc,
+        image_count=len(images),
+        price_cent=price_cent,
+        orig_price_cent=orig_price_cent,
+        category=category,
+        cards=cards,
+    )
+    post = post_fee(post_mode, post_price_cent, take_self)
     return _drop_none(
         {
             "freebies": False,
             "itemTypeStr": "b",
             "quantity": "1",
             "simpleItem": "true",
-            "imageInfoDOList": [
-                {
-                    "extraInfo": {"isH": "false", "isT": "false", "raw": "false"},
-                    "isQrCode": False,
-                    "url": img.url,
-                    "heightSize": img.height,
-                    "widthSize": img.width,
-                    "major": index == 0,
-                    "type": 0,
-                    "status": "done",
-                }
-                for index, img in enumerate(images)
-            ],
+            "imageInfoDOList": [image_info(img, index == 0) for index, img in enumerate(images)],
             "itemTextDTO": {"desc": desc, "title": desc, "titleDescSeparate": False},
             "itemLabelExtList": labels_from_cards(cards),
             "itemPriceDTO": {

@@ -1,5 +1,6 @@
 import { Loader2Icon, RefreshCwIcon } from "lucide-react"
 import { useMemo, useState } from "react"
+import { useNavigate } from "react-router"
 import { toast } from "sonner"
 
 import { CountFilter } from "@/components/count-filter"
@@ -17,7 +18,6 @@ import { errorMessage, type Item } from "@/lib/api"
 import { itemState, timeAgo, type ItemState } from "@/lib/format"
 
 import { ConfirmItemDialog } from "./confirm-dialog"
-import { DescDialog } from "./desc-dialog"
 import { ItemDetailSheet } from "./item-detail-sheet"
 import { ItemsTable, type ItemActionKind } from "./items-table"
 import { OpsList } from "./ops-list"
@@ -74,6 +74,11 @@ export function ItemsPage() {
   const [tab, setTab] = useUrlParam<Tab>("status", "online", TABS.map((t) => t.value))
   const [search, setSearch] = useState("")
   const [action, setAction] = useState<{ kind: ItemActionKind; item: Item } | null>(null)
+  const navigate = useNavigate()
+  const onAction = (kind: ItemActionKind, item: Item) => {
+    if (kind === "edit") navigate(`/items/${item.item_id}/edit`)
+    else setAction({ kind, item })
+  }
 
   const all = useMemo(() => items.data?.items ?? [], [items.data])
   const byState = useMemo(() => {
@@ -106,7 +111,7 @@ export function ItemsPage() {
         {query ? `「${search.trim()}」没有匹配的商品` : `没有${TABS.find((t) => t.value === tab)?.label}的商品`}
       </EmptyState>
     )
-  else body = <ItemsTable items={visible} onAction={(kind, item) => setAction({ kind, item })} />
+  else body = <ItemsTable items={visible} onAction={onAction} />
 
   return (
     <div className="flex flex-col gap-6">
@@ -166,7 +171,6 @@ export function ItemsPage() {
       {action?.kind === "price" && (
         <PriceDialog account={account} item={action.item} onClose={close} />
       )}
-      {action?.kind === "desc" && <DescDialog account={account} item={action.item} onClose={close} />}
       {(action?.kind === "downshelf" || action?.kind === "delete") && (
         <ConfirmItemDialog account={account} item={action.item} kind={action.kind} onClose={close} />
       )}

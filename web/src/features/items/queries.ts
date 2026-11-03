@@ -61,14 +61,6 @@ export function useChangePrice(account: string) {
   })
 }
 
-export function useChangeDesc(account: string) {
-  const refresh = useRefresh(account)
-  return useMutation({
-    mutationFn: (v: { itemId: string; desc: string }) => api.changeDesc(account, v.itemId, v.desc),
-    onSettled: (_data, _error, v) => refresh(v.itemId),
-  })
-}
-
 export function useDownshelf(account: string) {
   const refresh = useRefresh(account)
   return useMutation({

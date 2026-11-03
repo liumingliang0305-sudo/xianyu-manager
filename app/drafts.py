@@ -1,13 +1,19 @@
-"""发布商品：先在本地存草稿，改好了再发到闲鱼。
+"""发布商品：先在本地存草稿，改好了再发到闲鱼。编辑已有的商品也是一个草稿，表单一样。
 
 草稿的图片存在本机（app/images.py），发布时才传到闲鱼，传过的地址记在草稿里，发布失败重试时不再传。
 分类和属性用平台的推荐（xianyu_core/publish.py）：先按描述推荐一次，改了哪一项再推荐一次，
 推荐结果原样存在草稿里。发布成功以后草稿留着，记下商品 ID，商品先记进本地商品表。
 每次发布（成功失败都算）记进 item_ops，action 是 publish。
+
+编辑已有商品（`edit_item`）：拿一次编辑页的表单初值（editDetail，卖家自己的接口）存成草稿，
+原样记在 `origin` 里。闲鱼上已有的图片不下载，草稿里只记地址。改好了提交（edit 接口），请求体照
+origin 改，表单里没有的（数量、服务……）原样带回。提交记进 item_ops，action 是 edit。
+编辑草稿不在发布页的列表里。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import asdict, dataclass, field
@@ -17,9 +23,16 @@ from app.accounts import Accounts
 from app.db import Database, Row
 from app.images import ImageStore
 from app.items import ItemService
-from xianyu_core.item import ItemCard
+from xianyu_core.item import (
+    ItemApi,
+    ItemCard,
+    build_edit_payload,
+    image_from_detail,
+    post_fee_from_detail,
+)
 from xianyu_core.publish import (
     CATEGORY,
+    KEEP_POST,
     MAX_IMAGES,
     NORMAL_CARD,
     POST_MODES,
@@ -28,13 +41,28 @@ from xianyu_core.publish import (
     address_from_poi,
     build_publish_payload,
     check_desc,
+    check_listing,
     choose,
+    image_info,
+    labels_from_cards,
+    post_fee,
+    post_mode_from,
     submit_payload,
     unsupported_cards,
 )
 
 ADDRESS_KEYS = ("area", "city", "divisionId", "gps", "poiId", "poiName", "prov")
 TITLE_LENGTH = 30  # 发布后先记进商品表的标题取描述的前多少个字，同步时换成平台截的
+# 编辑提交时比较的几块请求体 → 改动记录里的名字
+EDIT_FIELDS = {
+    "itemTextDTO": "描述",
+    "imageInfoDOList": "图片",
+    "itemPriceDTO": "价格",
+    "itemCatDTO": "分类",
+    "itemLabelExtList": "属性",
+    "itemPostFeeDTO": "邮费",
+    "itemAddrDTO": "发货地",
+}
 
 
 class DraftNotFoundError(LookupError):
@@ -68,6 +96,8 @@ class Draft:
     created_at: float
     updated_at: float
     published_at: float | None
+    edit_item_id: str | None  # 编辑已有商品的草稿：改的是哪个商品
+    origin: dict[str, Any] | None = field(repr=False)  # 建草稿时的 editDetail
 
     @classmethod
     def from_row(cls, row: Row) -> Draft:
@@ -78,8 +108,29 @@ class Draft:
                 "cards": json.loads(row["cards"]),
                 "category": json.loads(row["category"]) if row["category"] else None,
                 "address": json.loads(row["address"]) if row["address"] else None,
+                "origin": json.loads(row["origin"]) if row["origin"] else None,
             }
         )
+
+    def current_labels(self) -> list[dict[str, str]]:
+        """编辑已有商品、还没重新推荐时，商品现在的属性（不含分类）：[{name, value}]。"""
+        if self.cards or not self.origin:
+            return []
+        result = []
+        for label in self.origin.get("itemLabelExtList") or []:
+            # "属性ID##属性名:值ID##值名"
+            prop, _, value = str(label.get("properties") or "").partition(":")
+            prop_id, _, prop_name = prop.partition("##")
+            if prop_id != CATEGORY and prop_name:
+                result.append(
+                    {"name": prop_name, "value": label.get("text") or value.partition("##")[2]}
+                )
+        return result
+
+    def can_keep_post(self) -> bool:
+        """编辑的商品原来的邮费对不上四种选法（比如 App 里设的运费模板），可以原样沿用。"""
+        post = (self.origin or {}).get("itemPostFeeDTO") or {}
+        return bool(self.origin) and post_mode_from(post)[0] == KEEP_POST
 
     def properties(self) -> list[dict[str, Any]]:
         """推荐出来的分类和属性，给页面选。
@@ -129,9 +180,9 @@ class DraftService:
     # ---- 本地 ----
 
     def list(self, account_id: str) -> list[Draft]:
-        """还没发布的在前，各自按最近改动排。"""
+        """发新商品的草稿，还没发布的在前，各自按最近改动排。编辑已有商品的不在里面。"""
         rows = self._db.execute(
-            "SELECT * FROM drafts WHERE account_id = %s"
+            "SELECT * FROM drafts WHERE account_id = %s AND edit_item_id IS NULL"
             " ORDER BY item_id IS NOT NULL, updated_at DESC",
             (account_id,),
         )
@@ -149,7 +200,7 @@ class DraftService:
         """新建一个空草稿。发货地沿用这个账号最近一个选过发货地的草稿。"""
         last = self._db.execute(
             "SELECT address FROM drafts WHERE account_id = %s AND address IS NOT NULL"
-            " ORDER BY updated_at DESC LIMIT 1",
+            " AND edit_item_id IS NULL ORDER BY updated_at DESC LIMIT 1",
             (account_id,),
         ).fetchone()
         now = time.time()
@@ -176,7 +227,7 @@ class DraftService:
     ) -> Draft:
         """保存页面上的表单（整个提交）。`image_order` 是图片的新顺序，图片本身另外加删。"""
         draft = self._editable(account_id, draft_id)
-        if post_mode not in POST_MODES:
+        if post_mode not in POST_MODES and not (post_mode == KEEP_POST and draft.can_keep_post()):
             raise ValueError(f"不认识的邮费方式：{post_mode}")
         for name, value in (
             ("售价", price_cent),
@@ -232,7 +283,11 @@ class DraftService:
         draft = self.get(account_id, draft_id)
         if all(img.sha != sha for img in draft.images):
             raise DraftNotFoundError("草稿里没有这张图片")
-        return self._images.read(sha)
+        try:
+            return self._images.read(sha)
+        except FileNotFoundError:
+            # 编辑的商品在闲鱼上原有的图，只记了地址
+            raise DraftNotFoundError("这张图在闲鱼上，本机没有") from None
 
     def delete(self, account_id: str, draft_id: int) -> None:
         """删掉草稿和只有它用的图片。已经发布的商品不受影响。"""
@@ -266,9 +321,78 @@ class DraftService:
                 result.append(address_option(poi))
         return result
 
-    async def publish(self, account_id: str, draft_id: int) -> Draft:
-        """发到闲鱼。先在本地把能查的都查一遍（不请求平台），再查发布限制和违禁词、传图、发布。"""
+    async def edit_item(self, account_id: str, item_id: str) -> Draft:
+        """编辑已经在闲鱼上的商品：拿一次编辑页的表单初值（editDetail）存成草稿。
+
+        这个商品有还没提交的编辑草稿就接着用，不请求平台；以前提交过的删掉。
+        """
+        row = self._db.execute(
+            "SELECT * FROM drafts WHERE account_id = %s AND edit_item_id = %s AND item_id IS NULL"
+            " ORDER BY id DESC LIMIT 1",
+            (account_id, item_id),
+        ).fetchone()
+        if row:
+            return Draft.from_row(row)
+        async with self._accounts.mtop(account_id) as mtop:
+            detail = await ItemApi(mtop).edit_detail(item_id)
+        if detail.get("itemSkuList"):
+            raise ValueError("多规格商品网页端不支持编辑，请在闲鱼 App 里改")
+
+        for old in self._db.execute(
+            "SELECT id FROM drafts WHERE account_id = %s AND edit_item_id = %s",
+            (account_id, item_id),
+        ).fetchall():
+            self.delete(account_id, old["id"])
+        price = detail.get("itemPriceDTO") or {}
+        post = detail.get("itemPostFeeDTO") or {}
+        post_mode, post_price = post_mode_from(post)
+        images = [
+            DraftImage(
+                sha=hashlib.sha256(img["url"].encode()).hexdigest(),
+                width=_int_or_none(img.get("widthSize")) or 0,
+                height=_int_or_none(img.get("heightSize")) or 0,
+                url=img["url"],
+            )
+            for img in detail.get("imageInfoDOList") or []
+            if img.get("url")
+        ]
+        category = detail.get("itemCatDTO")
+        address = detail.get("itemAddrDTO")
+        now = time.time()
+        row = self._db.execute(
+            "INSERT INTO drafts (account_id, edit_item_id, origin, description, price_cent,"
+            " orig_price_cent, post_mode, post_price_cent, take_self, images, category, address,"
+            " created_at, updated_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (
+                account_id,
+                item_id,
+                json.dumps(detail, ensure_ascii=False),
+                (detail.get("itemTextDTO") or {}).get("desc") or "",
+                _int_or_none(price.get("priceInCent")) or None,
+                _int_or_none(price.get("origPriceInCent")) or None,
+                post_mode,
+                post_price,
+                post.get("onlyTakeSelf") in (True, "true"),
+                _images_json(images),
+                json.dumps(category, ensure_ascii=False) if category else None,
+                json.dumps({key: address.get(key) for key in ADDRESS_KEYS}, ensure_ascii=False)
+                if address
+                else None,
+                now,
+                now,
+            ),
+        ).fetchone()
+        return Draft.from_row(row)
+
+    async def publish(self, account_id: str, draft_id: int, *, force: bool = False) -> Draft:
+        """发到闲鱼。先在本地把能查的都查一遍（不请求平台），再查发布限制和违禁词、传图、发布。
+
+        编辑已有商品的草稿是把改动提交上去（`_submit_edit`），`force` 是改价超过保护线也提交。
+        """
         draft = self._editable(account_id, draft_id)
+        if draft.edit_item_id:
+            return await self._submit_edit(draft, force=force)
         self._payload(draft, [UploadedImage("", img.width, img.height) for img in draft.images])
         detail = {"draft_id": draft.id, "price": draft.price_cent}
         try:
@@ -276,13 +400,7 @@ class DraftService:
                 api = PublishApi(mtop)
                 await api.check_limit()
                 await api.check_words(draft.description, account_id)
-                for img in draft.images:
-                    if img.url:
-                        continue
-                    content = self._images.read(img.sha)
-                    img.url = (await api.upload(content, f"{img.sha[:16]}.jpg")).url
-                    # 传一张记一张，发布失败重试时不用再传
-                    self._save_images(draft.id, draft.images)
+                await self._upload(api, draft)
                 uploaded = [UploadedImage(i.url or "", i.width, i.height) for i in draft.images]
                 payload = self._payload(draft, uploaded)
                 payload["userRightsProtocols"] = await api.services(payload, draft.cards)
@@ -319,8 +437,106 @@ class DraftService:
     def _editable(self, account_id: str, draft_id: int) -> Draft:
         draft = self.get(account_id, draft_id)
         if draft.item_id:
-            raise ValueError("这个草稿已经发布了，不能再改")
+            done = "这些改动已经提交到闲鱼了" if draft.edit_item_id else "这个草稿已经发布了"
+            raise ValueError(f"{done}，不能再改")
         return draft
+
+    async def _upload(self, api: PublishApi, draft: Draft) -> None:
+        """把还没传过的图传到闲鱼。传一张记一张，失败重试时不用再传。"""
+        for img in draft.images:
+            if img.url:
+                continue
+            content = self._images.read(img.sha)
+            img.url = (await api.upload(content, f"{img.sha[:16]}.jpg")).url
+            self._save_images(draft.id, draft.images)
+
+    async def _submit_edit(self, draft: Draft, *, force: bool) -> Draft:
+        """把编辑草稿提交到闲鱼。
+
+        先在本地查一遍、看改了哪几块，什么都没改就不提交。描述改了才查违禁词，分类换了才重新查服务。
+        """
+        account_id, item_id = draft.account_id, draft.edit_item_id or ""
+        origin = draft.origin or {}
+        changed = _changed(origin, self._edit_payload(draft))
+        if not changed:
+            raise ValueError("和闲鱼上的一样，没有要提交的改动")
+        old_price = _int_or_none((origin.get("itemPriceDTO") or {}).get("priceInCent")) or 0
+        detail: dict[str, Any] = {"draft_id": draft.id, "fields": changed}
+        if "价格" in changed:
+            if not force:
+                self._items.check_price(old_price, draft.price_cent or 0)
+            detail.update({"from": old_price, "to": draft.price_cent})
+        try:
+            async with self._accounts.mtop(account_id) as mtop:
+                api = PublishApi(mtop)
+                if "描述" in changed:
+                    await api.check_words(draft.description, account_id)
+                await self._upload(api, draft)
+                payload = self._edit_payload(draft)
+                if "分类" in changed:
+                    payload["userRightsProtocols"] = await api.services(payload, draft.cards)
+                await ItemApi(mtop).submit(payload)
+        except Exception as exc:
+            message = str(exc) or type(exc).__name__
+            self._items.log_op(account_id, item_id, "edit", detail, error=message)
+            self._db.execute("UPDATE drafts SET error = %s WHERE id = %s", (message, draft.id))
+            raise
+        self._items.log_op(account_id, item_id, "edit", detail, error=None)
+        now = time.time()
+        self._db.execute(
+            "UPDATE drafts SET item_id = %s, error = NULL, published_at = %s, updated_at = %s"
+            " WHERE id = %s",
+            (item_id, now, now, draft.id),
+        )
+        self._items.update_listing(
+            account_id,
+            item_id,
+            title=_title(draft.description),
+            price_cent=draft.price_cent or 0,
+            pic_url=draft.images[0].url or "",
+        )
+        return self.get(account_id, draft.id)
+
+    def _edit_payload(self, draft: Draft) -> dict[str, Any]:
+        """编辑草稿 → edit 的请求体。还没传的图地址是空的，只用来检查和比较。"""
+        if draft.price_cent is None:
+            raise ValueError("还没填售价")
+        if not draft.address:
+            raise ValueError("还没选发货地")
+        check_listing(
+            desc=draft.description,
+            image_count=len(draft.images),
+            price_cent=draft.price_cent,
+            orig_price_cent=draft.orig_price_cent,
+            category=draft.category or {},
+            cards=draft.cards,
+        )
+        origin = draft.origin or {}
+        # 闲鱼上原有的图照 editDetail 带回去，新加的按发布页的写法
+        known = {img.get("url"): img for img in origin.get("imageInfoDOList") or []}
+        images = [
+            {**image_from_detail(known[img.url]), "major": index == 0}
+            if img.url in known
+            else image_info(UploadedImage(img.url or "", img.width, img.height), index == 0)
+            for index, img in enumerate(draft.images)
+        ]
+        # 邮费没换就照 editDetail 带回去（网页端编辑页也是这样，包邮时也带着 templateId）
+        same_post = post_mode_from(origin.get("itemPostFeeDTO") or {})
+        if draft.post_mode == KEEP_POST or (draft.post_mode, draft.post_price_cent) == same_post:
+            post = {**post_fee_from_detail(origin), "onlyTakeSelf": draft.take_self}
+        else:
+            post = post_fee(draft.post_mode, draft.post_price_cent, draft.take_self)
+        return build_edit_payload(
+            origin,
+            price_cent=draft.price_cent,
+            orig_price_cent=draft.orig_price_cent or 0,
+            desc=draft.description,
+            images=images,
+            labels=labels_from_cards(draft.cards) if draft.cards else None,
+            category=draft.category,
+            post=post,
+            address=draft.address,
+        )
 
     def _payload(self, draft: Draft, images: list[UploadedImage]) -> dict[str, Any]:
         check_desc(draft.description)
@@ -342,8 +558,17 @@ class DraftService:
         )
 
     async def _recommend(self, draft: Draft, cards: list[dict[str, Any]]) -> Draft:
+        # 编辑的商品第一次推荐时还没有卡片，带上它现在的标签和类目
+        labels = None
+        if draft.origin and not cards:
+            labels = draft.origin.get("itemLabelExtList") or []
         async with self._accounts.mtop(draft.account_id) as mtop:
-            result = await PublishApi(mtop).recommend(draft.description, cards)
+            result = await PublishApi(mtop).recommend(
+                draft.description,
+                cards,
+                labels=labels,
+                category=draft.category if labels is not None else None,
+            )
         self._db.execute(
             "UPDATE drafts SET cards = %s, category = %s, updated_at = %s WHERE id = %s",
             (
@@ -382,6 +607,23 @@ def address_option(poi: dict[str, Any]) -> dict[str, Any]:
         del parts[1]
     key = str(poi.get("poiId"))
     return {"key": key, "name": dto["poiName"], "detail": "".join(parts), "address": dto}
+
+
+def _changed(origin: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    """编辑的请求体和闲鱼上原来的比，改了哪几块（EDIT_FIELDS 里的名字）。"""
+    base = build_edit_payload(origin)
+    return [
+        name
+        for key, name in EDIT_FIELDS.items()
+        if _comparable(key, payload.get(key)) != _comparable(key, base.get(key))
+    ]
+
+
+def _comparable(key: str, value: Any) -> Any:
+    """比较时不管数字是数还是字符串；标签只比选了什么（重新推荐以后字段会多几个）。"""
+    if key == "itemLabelExtList":
+        return sorted(str(label.get("properties")) for label in value or [])
+    return json.loads(json.dumps(value), parse_int=str)
 
 
 def _images_json(images: list[DraftImage]) -> str:

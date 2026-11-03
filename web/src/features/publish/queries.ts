@@ -1,9 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
 import { api, draftImage, type Draft, type DraftForm } from "@/lib/api"
 
 export const draftKeys = {
   list: (account: string) => ["drafts", account] as const,
+  /** 编辑一个已有商品的草稿，不在上面的列表里 */
+  edit: (account: string, itemId: string) => ["edit-draft", account, itemId] as const,
   image: (account: string, sha: string) => ["draft-image", account, sha] as const,
   addresses: (account: string) => ["publish-addresses", account] as const,
   places: (keyword: string) => ["publish-places", keyword] as const,
@@ -48,13 +50,34 @@ export function usePlaces(keyword: string) {
   })
 }
 
-/** 接口返回的草稿换进列表缓存里。 */
+/**
+ * 编辑一个已有商品：拿这个商品的编辑草稿，没有就按闲鱼上现在的样子建一个（请求一次闲鱼）。
+ * 之后改动都存在草稿里，不再自己重新拉；失败了不自动重试，免得在风控时反复请求。
+ */
+export function useEditDraft(account: string, itemId: string) {
+  return useQuery({
+    queryKey: draftKeys.edit(account, itemId),
+    queryFn: () => api.editItem(account, itemId),
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/** 接口返回的草稿换进缓存：发布页的列表，或者编辑商品的那一个。 */
+export function putDraft(client: QueryClient, account: string, draft: Draft) {
+  if (draft.edit_item_id) {
+    client.setQueryData(draftKeys.edit(account, draft.edit_item_id), draft)
+    return
+  }
+  client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
+    old?.map((d) => (d.id === draft.id ? draft : d)),
+  )
+}
+
 function usePutDraft(account: string) {
   const client = useQueryClient()
-  return (draft: Draft) =>
-    client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
-      old?.map((d) => (d.id === draft.id ? draft : d)),
-    )
+  return (draft: Draft) => putDraft(client, account, draft)
 }
 
 export function useCreateDraft(account: string) {
@@ -74,14 +97,20 @@ export function useSaveDraft(account: string, draftId: number) {
   })
 }
 
+/** 删草稿。编辑商品的草稿删了就是放弃改动，下次编辑重新从闲鱼拉。 */
 export function useDeleteDraft(account: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (draftId: number) => api.deleteDraft(account, draftId),
-    onSuccess: (_data, draftId) =>
+    mutationFn: (draft: Draft) => api.deleteDraft(account, draft.id),
+    onSuccess: (_data, draft) => {
+      if (draft.edit_item_id) {
+        client.removeQueries({ queryKey: draftKeys.edit(account, draft.edit_item_id) })
+        return
+      }
       client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
-        old?.filter((d) => d.id !== draftId),
-      ),
+        old?.filter((d) => d.id !== draft.id),
+      )
+    },
   })
 }
 
@@ -118,11 +147,22 @@ export function useChooseLabel(account: string, draftId: number) {
   })
 }
 
-/** 发布成功或失败都刷新：失败原因记在草稿上，商品列表和改动记录也会多一条。 */
-export function usePublish(account: string, draftId: number) {
+/**
+ * 发布（编辑草稿是提交改动），成功或失败都刷新：失败原因记在草稿上，商品列表和改动记录也会多一条。
+ * 编辑草稿提交成功以后就用完了，从缓存里拿掉，下次编辑重新从闲鱼拉。
+ */
+export function usePublish(account: string, draft: Draft) {
   const client = useQueryClient()
+  const put = usePutDraft(account)
   return useMutation({
-    mutationFn: () => api.publish(account, draftId),
+    mutationFn: (force: boolean = false) => api.publish(account, draft.id, force),
+    onSuccess: (done) => {
+      if (done.edit_item_id) client.removeQueries({ queryKey: draftKeys.edit(account, done.edit_item_id) })
+    },
+    onError: () => {
+      // 失败原因记在草稿上，编辑草稿不在列表里，单独再取一次
+      if (draft.edit_item_id) void api.getDraft(account, draft.id).then(put)
+    },
     onSettled: () => {
       client.invalidateQueries({ queryKey: draftKeys.list(account) })
       client.invalidateQueries({ queryKey: ["items", account] })

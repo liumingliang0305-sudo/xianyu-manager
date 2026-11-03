@@ -6,9 +6,11 @@ import {
   ImagePlusIcon,
   Loader2Icon,
   MapPinIcon,
+  SaveIcon,
   SendIcon,
   SparklesIcon,
   Trash2Icon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
@@ -40,6 +42,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   api,
+  ApiError,
   errorMessage,
   type Address,
   type AddressOption,
@@ -53,7 +56,7 @@ import { cn } from "@/lib/utils"
 
 import { DraftImage } from "./draft-image"
 import {
-  draftKeys,
+  putDraft,
   useAddImage,
   useAddresses,
   useChooseLabel,
@@ -78,6 +81,8 @@ const POST_OPTIONS: { value: PostMode; label: string }[] = [
   { value: "fixed", label: "一口价" },
   { value: "none", label: "无需邮寄" },
 ]
+/** 编辑的商品原来的邮费对不上上面四种时才有 */
+const KEEP_POST = { value: "keep", label: "沿用原来的" } as const
 
 interface FormState {
   description: string
@@ -236,6 +241,7 @@ function ImageTile({
   account,
   draftId,
   sha,
+  url,
   index,
   total,
   busy,
@@ -245,6 +251,7 @@ function ImageTile({
   account: string
   draftId: number
   sha: string
+  url: string | null
   index: number
   total: number
   busy: boolean
@@ -253,7 +260,7 @@ function ImageTile({
 }) {
   return (
     <li className="group relative">
-      <DraftImage account={account} draftId={draftId} sha={sha} size={96} className="border" />
+      <DraftImage account={account} draftId={draftId} sha={sha} url={url} size={96} className="border" />
       {index === 0 && (
         <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium text-white">
           首图
@@ -485,16 +492,16 @@ function DeleteDraftDialog({
   onDeleted: () => void
 }) {
   const remove = useDeleteDraft(account)
+  const editing = draft.edit_item_id != null
+  let description = "草稿和它的图片会从后台服务器上删掉，不能恢复。"
+  if (editing) description = "暂存的改动和新加的图片都会删掉，闲鱼上的商品不受影响。下次编辑重新从闲鱼拉。"
+  else if (draft.item_id) description = "只删本地的草稿记录和图片，已经发到闲鱼的商品不受影响。"
   return (
     <AlertDialog open onOpenChange={(open) => !open && !remove.isPending && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>删除这个草稿？</AlertDialogTitle>
-          <AlertDialogDescription>
-            {draft.item_id
-              ? "只删本地的草稿记录和图片，已经发到闲鱼的商品不受影响。"
-              : "草稿和它的图片会从后台服务器上删掉，不能恢复。"}
-          </AlertDialogDescription>
+          <AlertDialogTitle>{editing ? "放弃这些改动？" : "删除这个草稿？"}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={remove.isPending}>取消</AlertDialogCancel>
@@ -503,9 +510,9 @@ function DeleteDraftDialog({
             disabled={remove.isPending}
             onClick={(e) => {
               e.preventDefault()
-              remove.mutate(draft.id, {
+              remove.mutate(draft, {
                 onSuccess: () => {
-                  toast.success("草稿已删除")
+                  toast.success(editing ? "已放弃改动" : "草稿已删除")
                   onDeleted()
                 },
                 onError: (error) => toast.error(errorMessage(error)),
@@ -513,7 +520,7 @@ function DeleteDraftDialog({
             }}
           >
             {remove.isPending && <Loader2Icon className="animate-spin" />}
-            删除
+            {editing ? "放弃改动" : "删除"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -564,7 +571,14 @@ function PublishedDraft({
       <ul className="flex flex-wrap gap-2">
         {draft.images.map((img) => (
           <li key={img.sha}>
-            <DraftImage account={account} draftId={draft.id} sha={img.sha} size={96} className="border" />
+            <DraftImage
+              account={account}
+              draftId={draft.id}
+              sha={img.sha}
+              url={img.url}
+              size={96}
+              className="border"
+            />
           </li>
         ))}
       </ul>
@@ -589,17 +603,52 @@ function PublishedDraft({
   )
 }
 
+/**
+ * 一个草稿的表单。发新商品和编辑已有商品（draft.edit_item_id）用的是同一个表单，
+ * 编辑时"发布"换成"保存到闲鱼"，"删除草稿"换成"放弃改动"。
+ * `onPublished`：发布（提交改动）成功以后。
+ */
 export function DraftEditor({
   account,
   draft,
   onDeleted,
+  onPublished,
 }: {
   account: string
   draft: Draft
   onDeleted: () => void
+  onPublished?: (draft: Draft) => void
 }) {
   if (draft.item_id) return <PublishedDraft account={account} draft={draft} onDeleted={onDeleted} />
-  return <EditableDraft account={account} draft={draft} onDeleted={onDeleted} />
+  return (
+    <EditableDraft account={account} draft={draft} onDeleted={onDeleted} onPublished={onPublished} />
+  )
+}
+
+/** 改价超过保护线时让用户再确认一次 */
+function PriceGuardDialog({
+  message,
+  onConfirm,
+  onClose,
+}: {
+  message: string
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <AlertDialog open onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>价格改得有点多</AlertDialogTitle>
+          <AlertDialogDescription>{message}。确认没输错再保存。</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>回去改</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>确认保存</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
 }
 
 /** 正在编辑的草稿。表单停手 0.8 秒自动保存；推荐分类、发布前先把没保存的存掉。 */
@@ -607,24 +656,28 @@ function EditableDraft({
   account,
   draft,
   onDeleted,
+  onPublished,
 }: {
   account: string
   draft: Draft
   onDeleted: () => void
+  onPublished?: (draft: Draft) => void
 }) {
   const client = useQueryClient()
   const [form, setForm] = useState(() => fromDraft(draft))
   const [dirty, setDirty] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [guard, setGuard] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const editing = draft.edit_item_id != null
 
   const save = useSaveDraft(account, draft.id)
   const addImage = useAddImage(account, draft.id)
   const removeImage = useRemoveImage(account, draft.id)
   const recommend = useRecommend(account, draft.id)
   const choose = useChooseLabel(account, draft.id)
-  const publish = usePublish(account, draft.id)
+  const publish = usePublish(account, draft)
 
   const errors = priceErrors(form)
   const invalid = Object.keys(errors).length > 0
@@ -639,11 +692,9 @@ function EditableDraft({
     () => () => {
       const { form, dirty, invalid, order } = latest.current
       if (!dirty || invalid) return
-      void api.updateDraft(account, draft.id, toPayload(form, order)).then((saved) =>
-        client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
-          old?.map((d) => (d.id === saved.id ? saved : d)),
-        ),
-      )
+      void api
+        .updateDraft(account, draft.id, toPayload(form, order))
+        .then((saved) => putDraft(client, account, saved))
     },
     [account, draft.id, client],
   )
@@ -716,13 +767,18 @@ function EditableDraft({
     }
   }
 
-  const runPublish = async () => {
+  const runPublish = async (force = false) => {
+    setGuard(null)
     try {
       await flush()
-      const done = await publish.mutateAsync()
-      toast.success(`已发布到闲鱼，商品 ID ${done.item_id}`)
+      const done = await publish.mutateAsync(force)
+      // 先把未保存标记清掉，跳走时卸载不会再存一遍
+      latest.current.dirty = false
+      toast.success(editing ? "已保存到闲鱼" : `已发布到闲鱼，商品 ID ${done.item_id}`)
+      onPublished?.(done)
     } catch (error) {
-      toast.error(`发布失败：${errorMessage(error)}`)
+      if (error instanceof ApiError && error.code === "price_guard") setGuard(error.message)
+      else toast.error(`${editing ? "保存到闲鱼" : "发布"}失败：${errorMessage(error)}`)
     }
   }
 
@@ -731,11 +787,14 @@ function EditableDraft({
   const labelBusy = recommend.isPending || choose.isPending || busy
   const descEmoji = EMOJI.test(form.description)
 
+  // 编辑时自动保存只是暂存在后台，点"保存到闲鱼"才改到闲鱼上，用词上分开
+  const saveWord = editing ? "暂存" : "保存"
   let saveState: string
-  if (save.isPending) saveState = "保存中…"
-  else if (invalid) saveState = "价格格式不对，没保存"
-  else if (dirty) saveState = "有改动，马上保存"
-  else saveState = `已保存 · ${timeAgo(draft.updated_at)}`
+  if (save.isPending) saveState = `${saveWord}中…`
+  else if (invalid) saveState = `价格格式不对，没${saveWord}`
+  else if (dirty) saveState = `有改动，马上${saveWord}`
+  else saveState = `已${saveWord} · ${timeAgo(draft.updated_at)}`
+  const postOptions = draft.post_keep ? [...POST_OPTIONS, KEEP_POST] : POST_OPTIONS
 
   return (
     <div className="flex flex-col">
@@ -744,7 +803,11 @@ function EditableDraft({
           label="图片"
           required
           hintId="draft-images-hint"
-          hint="1–9 张，第一张是首图，可以直接拖进来。图片存在后台服务器上，点发布时才传到闲鱼；图片里不能有二维码"
+          hint={
+            editing
+              ? "1–9 张，第一张是首图，可以直接拖进来。新加的图存在后台服务器上，点保存时才传到闲鱼；图片里不能有二维码"
+              : "1–9 张，第一张是首图，可以直接拖进来。图片存在后台服务器上，点发布时才传到闲鱼；图片里不能有二维码"
+          }
         >
           <ul
             aria-describedby="draft-images-hint"
@@ -770,6 +833,7 @@ function EditableDraft({
                 account={account}
                 draftId={draft.id}
                 sha={img.sha}
+                url={img.url}
                 index={i}
                 total={draft.images.length}
                 busy={save.isPending || removeImage.isPending || busy}
@@ -846,7 +910,9 @@ function EditableDraft({
           hint={
             draft.properties.length
               ? "闲鱼按描述推荐的，平台预先选了一项。改了哪一项，闲鱼会按新的选择刷新别的属性；改了描述可以重新推荐"
-              : "写好描述后点「推荐分类」，闲鱼按描述推荐分类和品牌、成色这些属性"
+              : editing
+                ? "商品现在的分类和属性。想换的话点「重新推荐」，闲鱼按描述和现在的选择给出可选的"
+                : "写好描述后点「推荐分类」，闲鱼按描述推荐分类和品牌、成色这些属性"
           }
         >
           <div className="flex items-center gap-3">
@@ -857,7 +923,7 @@ function EditableDraft({
               onClick={() => void runRecommend()}
             >
               {recommend.isPending ? <Loader2Icon className="animate-spin" /> : <SparklesIcon />}
-              {draft.properties.length ? "重新推荐" : "推荐分类"}
+              {draft.properties.length || editing ? "重新推荐" : "推荐分类"}
             </Button>
             {draft.category && (
               <span className="text-sm">
@@ -867,9 +933,21 @@ function EditableDraft({
             {choose.isPending && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
           </div>
           {draft.unsupported.length > 0 && (
-            <Callout tone="warning" title="这个分类网页端不支持发布">
-              <p>要填{draft.unsupported.join("、")}。换个分类试试，或者去闲鱼 App 发。</p>
+            <Callout tone="warning" title={`这个分类网页端不支持${editing ? "编辑" : "发布"}`}>
+              <p>
+                要填{draft.unsupported.join("、")}。换个分类试试，或者去闲鱼 App {editing ? "改" : "发"}。
+              </p>
             </Callout>
+          )}
+          {draft.properties.length === 0 && draft.labels.length > 0 && (
+            <dl className="flex flex-col gap-2 rounded-lg border p-3 text-[13px]">
+              {draft.labels.map((label) => (
+                <div key={label.name} className="grid grid-cols-[6.5rem_1fr] gap-3">
+                  <dt className="text-muted-foreground">{label.name}</dt>
+                  <dd>{label.value}</dd>
+                </div>
+              ))}
+            </dl>
           )}
           {draft.properties.length > 0 && (
             <div className="flex flex-col gap-3 rounded-lg border p-3">
@@ -931,9 +1009,16 @@ function EditableDraft({
           </div>
         </Field>
 
-        <Field label="邮费">
+        <Field
+          label="邮费"
+          hint={
+            draft.post_keep
+              ? "商品原来用的是 App 里设的运费模板，网页端改不了模板；选「沿用原来的」就照原样"
+              : undefined
+          }
+        >
           <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="邮费">
-            {POST_OPTIONS.map((o) => (
+            {postOptions.map((o) => (
               <Chip
                 key={o.value}
                 role="radio"
@@ -982,7 +1067,11 @@ function EditableDraft({
           label="发货地"
           htmlFor="draft-address"
           required
-          hint="可以按名字搜，也可以从闲鱼账号的常用地址里选。新草稿会沿用上一个草稿选的"
+          hint={
+            editing
+              ? "可以按名字搜，也可以从闲鱼账号的常用地址里选"
+              : "可以按名字搜，也可以从闲鱼账号的常用地址里选。新草稿会沿用上一个草稿选的"
+          }
         >
           <AddressPicker
             account={account}
@@ -995,7 +1084,7 @@ function EditableDraft({
 
       <div className="flex flex-col gap-3 border-t px-6 py-4">
         {draft.error && (
-          <Callout tone="negative" title="上次发布失败">
+          <Callout tone="negative" title={editing ? "上次保存到闲鱼失败" : "上次发布失败"}>
             <p>{draft.error}</p>
           </Callout>
         )}
@@ -1008,15 +1097,15 @@ function EditableDraft({
             <span className="text-xs text-muted-foreground">还差：{lacks.join("、")}</span>
           )}
           <Button variant="ghost" onClick={() => setDeleting(true)} disabled={busy}>
-            <Trash2Icon />
-            删除草稿
+            {editing ? <Undo2Icon /> : <Trash2Icon />}
+            {editing ? "放弃改动" : "删除草稿"}
           </Button>
           <Button
             onClick={() => void runPublish()}
             disabled={busy || lacks.length > 0 || invalid || draft.unsupported.length > 0}
           >
-            {busy ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
-            {busy ? "发布中…" : "发布到闲鱼"}
+            {busy ? <Loader2Icon className="animate-spin" /> : editing ? <SaveIcon /> : <SendIcon />}
+            {editing ? (busy ? "保存中…" : "保存到闲鱼") : busy ? "发布中…" : "发布到闲鱼"}
           </Button>
         </div>
       </div>
@@ -1031,6 +1120,13 @@ function EditableDraft({
             latest.current.dirty = false
             onDeleted()
           }}
+        />
+      )}
+      {guard && (
+        <PriceGuardDialog
+          message={guard}
+          onConfirm={() => void runPublish(true)}
+          onClose={() => setGuard(null)}
         />
       )}
     </div>

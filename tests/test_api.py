@@ -138,10 +138,8 @@ def test_unknown_account_is_404(client):
     assert resp.json()["code"] == "account_not_found"
 
 
-def test_desc_downshelf_delete(client, platform):
+def test_downshelf_delete(client, platform):
     client.post(items_url("/sync"), json={})
-    assert client.put(items_url("/1001/desc"), json={"desc": " 新描述 "}).status_code == 200
-    assert platform.items["1001"]["title"] == "新描述"
     assert client.post(items_url("/1001/downshelf")).status_code == 200
     assert client.delete(items_url("/1002")).status_code == 200
     assert client.get(items_url()).json()["items"] == []
@@ -396,7 +394,7 @@ def test_draft_to_published_item(client, platform):
     resp = client.post(f"{url}/images", content=png(), headers={"content-type": "image/png"})
     assert resp.status_code == 200, resp.text
     [image] = resp.json()["images"]
-    assert (image["width"], image["height"], image["uploaded"]) == (80, 60, False)
+    assert (image["width"], image["height"], image["url"]) == (80, 60, None)
     resp = client.get(f"{url}/images/{image['sha']}")
     assert resp.headers["content-type"] == "image/jpeg"
     assert resp.content[:2] == b"\xff\xd8"
@@ -424,7 +422,7 @@ def test_draft_to_published_item(client, platform):
 
     draft = client.post(f"{url}/publish").json()
     assert draft["item_id"] == "9001"
-    assert draft["images"][0]["uploaded"] is True
+    assert draft["images"][0]["url"] == "https://img.example/up1.jpg"
     assert platform.published[0]["itemPostFeeDTO"]["postPriceInCent"] == "800"
     assert client.get(items_url()).json()["items"][0]["item_id"] == "9001"
     [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
@@ -432,6 +430,39 @@ def test_draft_to_published_item(client, platform):
 
     resp = client.put(url, json=form)
     assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+
+
+def test_edit_item_through_draft(client, platform):
+    client.post(items_url("/sync"), json={})
+    draft = client.post(items_url("/1001/edit")).json()
+    assert (draft["edit_item_id"], draft["description"], draft["post_keep"]) == (
+        "1001",
+        "洗衣机",
+        False,
+    )
+    assert draft["images"][0]["url"] == "http://img.example/1001.jpg"
+    assert draft["labels"] == [{"name": "成色", "value": "几乎全新"}]
+    assert client.get(drafts_url()).json() == {"drafts": []}
+
+    url = drafts_url(f"/{draft['id']}")
+    form = {
+        "description": "洗衣机 九成新",
+        "price": "100",
+        "post_mode": "free",
+        "images": [img["sha"] for img in draft["images"]],
+        "address": draft["address"],
+    }
+    client.put(url, json=form)
+    resp = client.post(f"{url}/publish")
+    assert (resp.status_code, resp.json()["code"]) == (409, "price_guard")
+    draft = client.post(f"{url}/publish", json={"force": True}).json()
+    assert draft["item_id"] == "1001"
+    assert (platform.items["1001"]["title"], platform.items["1001"]["price"]) == (
+        "洗衣机 九成新",
+        10000,
+    )
+    [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
+    assert (op["action"], op["detail"]["fields"]) == ("edit", ["描述", "价格"])
 
 
 def test_draft_errors(client, platform):

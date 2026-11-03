@@ -17,7 +17,9 @@
 - 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
   GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接；
 - 发布：先存草稿（app/drafts.py），图片传到 .../drafts/{id}/images（请求体就是图片文件），
-  存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）。
+  存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）；
+- 编辑商品：POST .../items/{id}/edit 拿到这个商品的编辑草稿，之后和发布一样用
+  .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼。
 """
 
 from __future__ import annotations
@@ -160,8 +162,8 @@ class PriceIn(BaseModel):
     force: bool = False
 
 
-class DescIn(BaseModel):
-    desc: str
+class PublishIn(BaseModel):
+    force: bool = False  # 编辑草稿改价超过保护线也提交
 
 
 class OrderAddIn(BaseModel):
@@ -588,14 +590,13 @@ def create_app(
             )
         return {"old_price_cent": old, "price_cent": price}
 
-    @authed.put("/api/accounts/{account_id}/items/{item_id}/desc")
-    async def change_desc(
-        request: Request, account_id: str, item_id: str, body: DescIn
-    ) -> dict[str, Any]:
+    @authed.post("/api/accounts/{account_id}/items/{item_id}/edit")
+    async def edit_item(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
+        """这个商品的编辑草稿，没有就按闲鱼上现在的样子建一个（请求一次 editDetail）。"""
         account_id = account(request, account_id)
         async with locks[account_id]:
-            await items(request).change_desc(account_id, item_id, body.desc.strip())
-        return {"ok": True}
+            draft = await drafts(request).edit_item(account_id, item_id)
+        return _draft(draft)
 
     @authed.post("/api/accounts/{account_id}/items/{item_id}/downshelf")
     async def downshelf(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
@@ -720,10 +721,14 @@ def create_app(
         return _draft(draft)
 
     @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/publish")
-    async def publish_draft(request: Request, account_id: str, draft_id: int) -> dict[str, Any]:
+    async def publish_draft(
+        request: Request, account_id: str, draft_id: int, body: PublishIn | None = None
+    ) -> dict[str, Any]:
+        """发布新商品；编辑草稿是把改动提交到闲鱼。"""
         account_id = account(request, account_id)
+        force = body.force if body else False
         async with locks[account_id]:
-            draft = await drafts(request).publish(account_id, draft_id)
+            draft = await drafts(request).publish(account_id, draft_id, force=force)
         return _draft(draft)
 
     @authed.get("/api/accounts/{account_id}/publish/addresses")
@@ -974,7 +979,10 @@ def _block(block: Block | None) -> dict[str, Any] | None:
 
 
 def _draft(draft: Draft) -> dict[str, Any]:
-    """草稿给页面的样子：推荐卡片换成可选的属性列表，图片只说传没传过闲鱼。"""
+    """草稿给页面的样子：推荐卡片换成可选的属性列表。
+
+    图片的 `url` 是闲鱼上的地址（传过或者编辑的商品原有的），还没传是 None。
+    """
     category = draft.category or {}
     return {
         "id": draft.id,
@@ -983,16 +991,19 @@ def _draft(draft: Draft) -> dict[str, Any]:
         "orig_price_cent": draft.orig_price_cent,
         "post_mode": draft.post_mode,
         "post_price_cent": draft.post_price_cent,
+        "post_keep": draft.can_keep_post(),
         "take_self": draft.take_self,
         "images": [
-            {"sha": img.sha, "width": img.width, "height": img.height, "uploaded": bool(img.url)}
+            {"sha": img.sha, "width": img.width, "height": img.height, "url": img.url}
             for img in draft.images
         ],
         "category": category.get("catName") or None,
         "properties": draft.properties(),
+        "labels": draft.current_labels(),
         "unsupported": draft.unsupported(),
         "address": draft.address,
         "item_id": draft.item_id,
+        "edit_item_id": draft.edit_item_id,
         "error": draft.error,
         "created_at": draft.created_at,
         "updated_at": draft.updated_at,

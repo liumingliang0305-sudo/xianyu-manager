@@ -192,20 +192,21 @@ class ItemApi:
         *,
         price_cent: int | None = None,
         orig_price_cent: int | None = None,
-        desc: str | None = None,
         detail: dict[str, Any] | None = None,
     ) -> str:
-        """改价格、原价或描述，没传的字段保持原样。返回平台回的 itemId。
+        """改价格或原价，别的字段保持原样。返回平台回的 itemId。
 
         `detail` 是刚拿到的 editDetail 结果，传了就不再查一次。
         """
         if detail is None:
             detail = await self.edit_detail(item_id)
-        payload = build_edit_payload(
-            detail, price_cent=price_cent, orig_price_cent=orig_price_cent, desc=desc
-        )
+        payload = build_edit_payload(detail, price_cent=price_cent, orig_price_cent=orig_price_cent)
+        return await self.submit(payload)
+
+    async def submit(self, payload: dict[str, Any]) -> str:
+        """提交编辑页的整个表单（build_edit_payload 的结果），返回平台回的 itemId。"""
         data = await self._mtop.call(EDIT_API, payload, spm_cnt=SPM_PUBLISH)
-        return str(data.get("itemId") or item_id)
+        return str(data.get("itemId") or payload.get("itemId") or "")
 
     async def downshelf(self, item_id: str) -> None:
         await self._mtop.call(DOWNSHELF_API, {"itemId": item_id}, version="2.0", spm_cnt=SPM_ITEM)
@@ -220,8 +221,18 @@ def build_edit_payload(
     price_cent: int | None = None,
     orig_price_cent: int | None = None,
     desc: str | None = None,
+    images: list[dict[str, Any]] | None = None,
+    labels: list[dict[str, Any]] | None = None,
+    category: dict[str, Any] | None = None,
+    post: dict[str, Any] | None = None,
+    address: dict[str, Any] | None = None,
+    services: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """editDetail 的返回 → edit 的请求体，和网页端编辑页点"发布"时提交的一致。
+
+    改价只传价格；编辑页（app/drafts.py）把整个表单传进来：`images` 是 imageInfoDOList（顺序就是
+    新顺序，首图由调用方标），`labels` 是 itemLabelExtList，`category`、`post`、`address`、
+    `services` 是同名的 DTO。没传的照 editDetail 原样带回。
 
     网页端表单只登记了图片、描述、标签、价格、服务、邮费、地址七项，提交时再补上类目和
     几项默认值。有两处和网页端不同：
@@ -241,10 +252,16 @@ def build_edit_payload(
 
     price = detail.get("itemPriceDTO") or {}
     text = detail.get("itemTextDTO") or {}
-    post = detail.get("itemPostFeeDTO") or {}
-    addr = detail.get("itemAddrDTO") or {}
-    cat = detail.get("itemCatDTO") or {}
+    addr = detail.get("itemAddrDTO") if address is None else address
+    cat = detail.get("itemCatDTO") if category is None else category
     new_desc = (text.get("desc") or "") if desc is None else desc
+    if images is None:
+        images = [image_from_detail(img) for img in detail.get("imageInfoDOList") or []]
+    if services is None:
+        services = [
+            {"enable": _bool(p.get("enable")), "serviceCode": p.get("serviceCode")}
+            for p in detail.get("userRightsProtocols") or []
+        ]
 
     return _drop_none(
         {
@@ -252,10 +269,12 @@ def build_edit_payload(
             "itemTypeStr": detail.get("itemTypeStr") or "b",
             "quantity": str(detail.get("quantity") or "1"),
             "simpleItem": "true",
-            "imageInfoDOList": [_image(img) for img in detail.get("imageInfoDOList") or []],
+            "imageInfoDOList": images,
             # 网页端只有描述框，标题就是描述，平台自己截取
             "itemTextDTO": {"desc": new_desc, "title": new_desc, "titleDescSeparate": False},
-            "itemLabelExtList": detail.get("itemLabelExtList") or [],
+            "itemLabelExtList": (
+                detail.get("itemLabelExtList") or [] if labels is None else labels
+            ),
             "itemPriceDTO": {
                 "origPriceInCent": _cents(
                     price.get("origPriceInCent") if orig_price_cent is None else orig_price_cent
@@ -264,23 +283,15 @@ def build_edit_payload(
                     price.get("priceInCent") if price_cent is None else price_cent
                 ),
             },
-            "userRightsProtocols": [
-                {"enable": _bool(p.get("enable")), "serviceCode": p.get("serviceCode")}
-                for p in detail.get("userRightsProtocols") or []
-            ],
-            "itemPostFeeDTO": {
-                "canFreeShipping": _bool(post.get("canFreeShipping")),
-                "supportFreight": _bool(post.get("supportFreight")),
-                "onlyTakeSelf": _bool(post.get("onlyTakeSelf")),
-                "templateId": post.get("templateId"),
-                "postPriceInCent": _cents(post.get("postPriceInCent")),
-            },
+            "userRightsProtocols": services,
+            "itemPostFeeDTO": post_fee_from_detail(detail) if post is None else post,
             "itemAddrDTO": {
-                key: addr.get(key) or ""
+                key: (addr or {}).get(key) or ""
                 for key in ("area", "city", "divisionId", "gps", "poiId", "poiName", "prov")
             },
             "itemCatDTO": {
-                key: cat.get(key) or "" for key in ("catId", "catName", "channelCatId", "tbCatId")
+                key: (cat or {}).get(key) or ""
+                for key in ("catId", "catName", "channelCatId", "tbCatId")
             },
             "itemId": str(detail.get("itemId", "")),
             "uniqueCode": unique_code(),
@@ -296,7 +307,20 @@ def unique_code() -> str:
     return f"{int(time.time() * 1000)}{random.randrange(1000)}"
 
 
-def _image(img: dict[str, Any]) -> dict[str, Any]:
+def post_fee_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    """editDetail 里的邮费 → 请求体的 itemPostFeeDTO（布尔值转回来，0 元不传）。"""
+    post = detail.get("itemPostFeeDTO") or {}
+    return {
+        "canFreeShipping": _bool(post.get("canFreeShipping")),
+        "supportFreight": _bool(post.get("supportFreight")),
+        "onlyTakeSelf": _bool(post.get("onlyTakeSelf")),
+        "templateId": post.get("templateId"),
+        "postPriceInCent": _cents(post.get("postPriceInCent")),
+    }
+
+
+def image_from_detail(img: dict[str, Any]) -> dict[str, Any]:
+    """editDetail 里的一张图 → 请求体的 imageInfoDOList 一项（字符串转回布尔和整数）。"""
     extra = img.get("extraInfo") or {}
     return _drop_none(
         {

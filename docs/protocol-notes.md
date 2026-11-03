@@ -77,6 +77,13 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 两次编辑前后比对 editDetail，除 `priceInCent` 外所有字段（图片、描述、标签、地址、邮费、类目）都没变，
 说明直接带回 editDetail 里的标签是可行的。
 
+本系统的编辑页（[app/drafts.py](../app/drafts.py) 的 `edit_item`）：打开时调一次 `editDetail`，原样存进草稿，表单和发布页一样；
+提交时请求体照这份 editDetail 改：原有的图照 editDetail 带回（换了顺序就重标 `major`），新加的图按发布页的写法；
+邮费没换就原样带回（包邮时也带着 `templateId: "0"`，和网页端编辑页一样），对不上四种选法的（App 里设的运费模板）只能沿用；
+重新推荐分类时，第一次带上 editDetail 里的标签和类目当 `selectedList`、`catId`（🔍 写法和推荐过以后再推荐一样，
+没对照过网页端编辑页的请求）；描述改了才查违禁词，分类换了才重新查服务。拉初值**不用** `pc.detail`：那是买家看的
+商品详情接口，2026-11-03 改价后几秒调它就被 RGV587 风控，`editDetail` 和 `edit` 没事。
+
 ## 发布商品
 
 > 来源：2026-11-03 读网页端发布页（goofish.com/publish）xy-site 0.0.179 的 `p_publish-index.js`，并用已登录账号

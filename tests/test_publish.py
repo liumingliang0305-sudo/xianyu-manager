@@ -11,6 +11,7 @@ from xianyu_core.publish import (
     check_desc,
     choose,
     labels_from_cards,
+    post_mode_from,
     submit_payload,
     unsupported_cards,
 )
@@ -187,3 +188,34 @@ def test_check_desc_length():
     check_desc("好" * 1500)
     with pytest.raises(ValueError, match="最多 1500"):
         check_desc("好" * 1501)
+
+
+@pytest.mark.parametrize(
+    ("post", "expected"),
+    [
+        ({"canFreeShipping": "true", "supportFreight": "true", "templateId": "0"}, ("free", None)),
+        (
+            {"canFreeShipping": "false", "supportFreight": "true", "templateId": "-100"},
+            ("distance", None),
+        ),
+        (
+            {
+                "canFreeShipping": "false",
+                "supportFreight": "true",
+                "templateId": "0",
+                "postPriceInCent": "800",
+            },
+            ("fixed", 800),
+        ),
+        (
+            {"canFreeShipping": "false", "supportFreight": "false", "templateId": "0"},
+            ("none", None),
+        ),
+        (
+            {"canFreeShipping": "false", "supportFreight": "true", "templateId": "778"},
+            ("keep", None),
+        ),
+    ],
+)
+def test_post_mode_from_edit_detail(post, expected):
+    assert post_mode_from(post) == expected

@@ -1,4 +1,6 @@
-"""商品管理：同步到本地库、查询、改价、改描述、下架、删除。
+"""商品管理：同步到本地库、查询、改价、下架、删除。
+
+改描述、图片、邮费这些走编辑页，见 app/drafts.py。
 
 每次改动都记进 item_ops，失败也记，方便事后查"系统到底动过什么"。
 """
@@ -204,7 +206,7 @@ class ItemService:
             detail = await api.edit_detail(item_id)
             old = int((detail.get("itemPriceDTO") or {}).get("priceInCent") or 0)
             if not force:
-                self._check_price(old, price_cent)
+                self.check_price(old, price_cent)
             change = {"from": old, "to": price_cent}
             if orig_price_cent is not None:
                 change["orig_to"] = orig_price_cent
@@ -224,20 +226,6 @@ class ItemService:
             )
         return old
 
-    async def change_desc(self, account_id: str, item_id: str, desc: str) -> None:
-        """改描述。标题由平台从描述里截，下次同步时更新。"""
-        async with self._accounts.mtop(account_id) as mtop:
-            api = ItemApi(mtop)
-            detail = await api.edit_detail(item_id)
-            old = (detail.get("itemTextDTO") or {}).get("desc") or ""
-            await self._record(
-                account_id,
-                item_id,
-                "desc",
-                {"from": old, "to": desc},
-                api.edit(item_id, desc=desc, detail=detail),
-            )
-
     async def downshelf(self, account_id: str, item_id: str) -> None:
         async with self._accounts.mtop(account_id) as mtop:
             await self._record(
@@ -256,6 +244,21 @@ class ItemService:
         with self._db.transaction():
             self._db.execute(
                 "DELETE FROM items WHERE account_id = %s AND item_id = %s", (account_id, item_id)
+            )
+
+    def check_price(self, old: int, new: int) -> None:
+        """改价幅度超过保护线时抛 PriceGuardError。编辑页提交时也用。"""
+        check_price_change(old, new, self._max_change)
+
+    def update_listing(
+        self, account_id: str, item_id: str, *, title: str, price_cent: int, pic_url: str
+    ) -> None:
+        """编辑页提交以后先改本地库里的标题、价格、首图，下次同步时以平台上的为准。"""
+        with self._db.transaction():
+            self._db.execute(
+                "UPDATE items SET title = %s, price_cent = %s, pic_url = %s"
+                " WHERE account_id = %s AND item_id = %s",
+                (title, price_cent, pic_url, account_id, item_id),
             )
 
     def add_published(self, account_id: str, card: ItemCard) -> None:
@@ -289,9 +292,6 @@ class ItemService:
             )
 
     # ---- 内部 ----
-
-    def _check_price(self, old: int, new: int) -> None:
-        check_price_change(old, new, self._max_change)
 
     async def _record(
         self,

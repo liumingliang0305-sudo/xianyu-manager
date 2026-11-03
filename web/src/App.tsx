@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { LoginPage } from "@/features/auth/login-page"
+import { ItemEditPage } from "@/features/items/item-edit-page"
 import { ItemsPage } from "@/features/items/items-page"
 import { MessagesPage } from "@/features/messages/messages-page"
 import { OrdersPage } from "@/features/orders/orders-page"
@@ -44,6 +45,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/items" replace />} />
           <Route path="items" element={<ItemsPage />} />
+          <Route path="items/:itemId/edit" element={<ItemEditPage />} />
           <Route path="publish" element={<PublishPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="messages" element={<MessagesPage />} />

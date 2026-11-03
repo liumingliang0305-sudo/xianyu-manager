@@ -99,14 +99,17 @@ export interface ItemOp {
   account_id: string
   /** 发布失败时还没有商品 ID，是空串 */
   item_id: string
-  action: "price" | "desc" | "downshelf" | "delete" | "publish"
+  /** desc 是以前的"改描述"，现在改描述走编辑（edit），旧记录还在 */
+  action: "price" | "desc" | "edit" | "downshelf" | "delete" | "publish"
   detail: {
     from?: number | string
     to?: number | string
     orig_to?: number
-    /** 发布：从哪个草稿发的、售价（分） */
+    /** 发布、编辑：从哪个草稿提交的；price 是发布的售价（分） */
     draft_id?: number
     price?: number | null
+    /** 编辑：改了哪几块（"描述"、"图片"、"价格"……）；改了价格时 from、to 是新旧售价 */
+    fields?: string[]
   }
   ok: boolean
   error: string | null
@@ -334,8 +337,8 @@ export interface SearchResult {
   total: number | null
 }
 
-/** 邮费：包邮、按距离计费、一口价、无需邮寄 */
-export type PostMode = "free" | "distance" | "fixed" | "none"
+/** 邮费：包邮、按距离计费、一口价、无需邮寄；keep 是编辑的商品沿用原来的（App 里设的运费模板之类） */
+export type PostMode = "free" | "distance" | "fixed" | "none" | "keep"
 
 /** 发货地，闲鱼的 itemAddrDTO 原样，存进草稿 */
 export interface Address {
@@ -357,12 +360,12 @@ export interface AddressOption {
   address: Address
 }
 
-/** 草稿里的一张图，文件存在后台服务器上；uploaded：发布时已经传到闲鱼了 */
+/** 草稿里的一张图。url 是闲鱼上的地址（传过的，或者编辑的商品原有的），null 是还只在后台服务器上 */
 export interface DraftImage {
   sha: string
   width: number
   height: number
-  uploaded: boolean
+  url: string | null
 }
 
 /** 闲鱼推荐的分类或属性（品牌、成色……），selected 是选中的 key */
@@ -382,18 +385,24 @@ export interface Draft {
   post_mode: PostMode
   /** 一口价的邮费 */
   post_price_cent: number | null
+  /** 编辑的商品原来的邮费对不上四种选法，可以选 keep 沿用 */
+  post_keep: boolean
   take_self: boolean
   images: DraftImage[]
   /** 分类名，还没推荐过是 null */
   category: string | null
   /** 第一项是分类（id "-10000"），后面是属性 */
   properties: DraftProperty[]
+  /** 编辑的商品还没重新推荐时，它现在的属性（不含分类） */
+  labels: { name: string; value: string }[]
   /** 网页端不支持发布的东西（要填 3C 证书编号之类），有就发不了 */
   unsupported: string[]
   address: Address | null
-  /** 发布成功后的商品 ID */
+  /** 发布成功后的商品 ID；编辑草稿提交成功后是改的那个商品 */
   item_id: string | null
-  /** 上次发布失败的原因 */
+  /** 编辑已有商品的草稿：改的是哪个商品。发新商品的是 null */
+  edit_item_id: string | null
+  /** 上次发布（提交）失败的原因 */
   error: string | null
   created_at: number
   updated_at: number
@@ -618,11 +627,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  changeDesc: (account: string, itemId: string, desc: string) =>
-    request<{ ok: true }>(`${itemsPath(account)}/${itemId}/desc`, {
-      method: "PUT",
-      body: JSON.stringify({ desc }),
-    }),
+  /** 这个商品的编辑草稿，没有就按闲鱼上现在的样子建一个（会请求一次闲鱼） */
+  editItem: (account: string, itemId: string) =>
+    request<Draft>(`${itemsPath(account)}/${itemId}/edit`, { method: "POST" }),
 
   downshelf: (account: string, itemId: string) =>
     request<{ ok: true }>(`${itemsPath(account)}/${itemId}/downshelf`, { method: "POST" }),
@@ -724,6 +731,8 @@ export const api = {
 
   createDraft: (account: string) => request<Draft>(draftsPath(account), { method: "POST" }),
 
+  getDraft: (account: string, draftId: number) => request<Draft>(`${draftsPath(account)}/${draftId}`),
+
   /** 保存表单，整个提交 */
   updateDraft: (account: string, draftId: number, form: DraftForm) =>
     request<Draft>(`${draftsPath(account)}/${draftId}`, {
@@ -757,9 +766,12 @@ export const api = {
       body: JSON.stringify({ property_id: propertyId, keys }),
     }),
 
-  /** 发到闲鱼：查发布限制和违禁词、传图、发布 */
-  publish: (account: string, draftId: number) =>
-    request<Draft>(`${draftsPath(account)}/${draftId}/publish`, { method: "POST" }),
+  /** 发到闲鱼：查发布限制和违禁词、传图、发布。编辑草稿是把改动提交上去，force：改价超过保护线也提交 */
+  publish: (account: string, draftId: number, force = false) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    }),
 
   /** 闲鱼账号里上次用的地址和常用地址（会请求闲鱼）；search：后台配了高德 key，能按名字搜 */
   addresses: (account: string) =>

@@ -3,8 +3,8 @@ import {
   EllipsisIcon,
   ExternalLinkIcon,
   EyeIcon,
-  FileTextIcon,
   PencilIcon,
+  SquarePenIcon,
   Trash2Icon,
 } from "lucide-react"
 
@@ -30,7 +30,8 @@ import { count, itemState, itemUrl, yuan } from "@/lib/format"
 
 import { ItemThumb, StateBadge } from "./item-bits"
 
-export type ItemActionKind = "detail" | "price" | "desc" | "downshelf" | "delete"
+/** edit 是去编辑页，别的在商品页上弹窗 */
+export type ItemActionKind = "detail" | "price" | "edit" | "downshelf" | "delete"
 
 type OnAction = (kind: ItemActionKind, item: Item) => void
 
@@ -63,13 +64,13 @@ function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
         {editable && (
           <>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onAction("edit", item)}>
+              <SquarePenIcon />
+              编辑商品
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onAction("price", item)}>
               <PencilIcon />
               改价
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => onAction("desc", item)}>
-              <FileTextIcon />
-              改描述
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onAction("downshelf", item)}>
               <ArchiveIcon />
@@ -145,10 +146,16 @@ export function ItemsTable({ items, onAction }: { items: Item[]; onAction: OnAct
                 <TableCell>
                   <div className="flex items-center justify-end gap-1">
                     {itemState(item) === "online" && (
-                      <Button variant="outline" size="sm" onClick={() => onAction("price", item)}>
-                        <PencilIcon />
-                        改价
-                      </Button>
+                      <>
+                        <Button variant="outline" size="sm" onClick={() => onAction("price", item)}>
+                          <PencilIcon />
+                          改价
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => onAction("edit", item)}>
+                          <SquarePenIcon />
+                          编辑
+                        </Button>
+                      </>
                     )}
                     <ItemMenu item={item} onAction={onAction} />
                   </div>
