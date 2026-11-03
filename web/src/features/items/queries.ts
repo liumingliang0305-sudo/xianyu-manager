@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { api } from "@/lib/api"
+import { draftKeys } from "@/features/publish/queries"
+import { api, type Draft } from "@/lib/api"
 
 export const itemKeys = {
   list: (account: string) => ["items", account] as const,
@@ -66,6 +67,18 @@ export function useDownshelf(account: string) {
   return useMutation({
     mutationFn: (itemId: string) => api.downshelf(account, itemId),
     onSettled: (_data, _error, itemId) => refresh(itemId),
+  })
+}
+
+/** 重新上架：拿到照这个商品抄的草稿，放进发布页的列表（已经在里面的换掉），跳过去时直接就是它。 */
+export function useRelist(account: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (itemId: string) => api.relistItem(account, itemId),
+    onSuccess: (draft) =>
+      client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
+        old ? [draft, ...old.filter((d) => d.id !== draft.id)] : old,
+      ),
   })
 }
 

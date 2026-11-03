@@ -431,3 +431,128 @@ def test_multi_sku_items_cannot_be_edited(service, platform):
     platform.items["1001"]["sku"] = [{"priceInCent": "100"}]
     with pytest.raises(ValueError, match="多规格"):
         run(service.edit_item(UNB, "1001"))
+
+
+# ---- 重新上架 ----
+
+
+def test_relist_copies_item_into_publish_draft(service, platform, items):
+    run(items.sync(UNB))
+    run(items.downshelf(UNB, "1001"))
+    calls = len(platform.calls)
+    draft = run(service.relist_item(UNB, "1001"))
+
+    assert (draft.relist_item_id, draft.edit_item_id, draft.item_id) == ("1001", None, None)
+    assert (draft.description, draft.price_cent, draft.post_mode) == ("洗衣机", 35800, "free")
+    assert [img.url for img in draft.images] == ["http://img.example/1001.jpg"]
+    assert draft.category["catName"] == "洗衣机"
+    assert draft.address["poiName"] == "某广场"
+    assert draft.current_labels() == [{"name": "成色", "value": "几乎全新"}]
+    assert [d.id for d in service.list(UNB)] == [draft.id]  # 在发布页的列表里
+    assert [api for api, _ in platform.calls[calls:]] == ["mtop.idle.pc.idleitem.editDetail"]
+
+    calls = len(platform.calls)
+    assert run(service.relist_item(UNB, "1001")).id == draft.id  # 接着改，不再请求平台
+    assert len(platform.calls) == calls
+
+
+def test_relist_publishes_a_new_item_shaped_like_the_old_one(service, platform, items):
+    run(items.sync(UNB))
+    run(items.downshelf(UNB, "1001"))
+    draft = run(service.relist_item(UNB, "1001"))
+    draft = run(service.publish(UNB, draft.id))
+
+    assert draft.item_id == "9001" and draft.error is None
+    [body] = platform.published
+    assert "itemId" not in body
+    assert (body["quantity"], body["defaultPrice"], body["sourceId"]) == (
+        "1",
+        False,
+        "pcMainPublish",
+    )
+    assert body["uniqueCode"]
+    # 原来的图不重传，照 editDetail 带上；属性、服务、邮费也照原来的
+    [img] = body["imageInfoDOList"]
+    assert (img["url"], img["major"], img["templateIndex"]) == (
+        "http://img.example/1001.jpg",
+        True,
+        "27923_1",
+    )
+    assert [label["text"] for label in body["itemLabelExtList"]] == ["洗衣机", "几乎全新"]
+    assert body["userRightsProtocols"] == [{"enable": True, "serviceCode": "OLD"}]
+    assert body["itemPostFeeDTO"]["templateId"] == "0"
+    assert body["itemCatDTO"]["catName"] == "洗衣机"
+    assert platform.uploads == []
+    assert [api for api, _ in platform.calls][-3:] == [
+        "mtop.idle.pc.idleitem.prepublish.check",
+        "mtop.taobao.idleitem.badwords.prepubcheck",
+        "mtop.idle.pc.idleitem.publish",
+    ]
+
+    new, old = items.get(UNB, "9001"), items.get(UNB, "1001")
+    assert (new.title, new.price_cent, new.pic_url) == (
+        "洗衣机",
+        35800,
+        "http://img.example/1001.jpg",
+    )
+    assert old.on_platform is False  # 原来的商品不动
+    [op] = items.history(UNB, "9001")
+    assert (op.action, op.ok, op.detail) == (
+        "relist",
+        True,
+        {"draft_id": draft.id, "price": 35800, "from_item": "1001"},
+    )
+    # 再上架一次就再抄一个
+    assert run(service.relist_item(UNB, "1001")).id != draft.id
+
+
+def test_relist_sold_item_with_edits_and_new_category(service, platform, items):
+    run(items.sync(UNB))
+    draft = run(service.relist_item(UNB, "1002"))  # 已卖出的
+    draft = service.add_image(UNB, draft.id, png("red"))
+    old, new = (img.sha for img in draft.images)
+    draft = service.update(
+        UNB, draft.id, **edit_form(draft, price_cent=120000, image_order=[new, old])
+    )
+    draft = run(service.recommend(UNB, draft.id))
+    draft = run(service.choose(UNB, draft.id, "-10000", ["126858404"]))
+    run(service.publish(UNB, draft.id))
+
+    body = platform.published[-1]
+    first, second = body["imageInfoDOList"]
+    assert (first["url"], first["major"]) == ("https://img.example/up1.jpg", True)
+    assert (second["url"], second["major"]) == ("http://img.example/1002.jpg", False)
+    assert body["itemPriceDTO"] == {"priceInCent": "120000"}
+    assert body["itemCatDTO"]["catName"] == "台灯"
+    assert body["userRightsProtocols"][0]["serviceCode"] == "SVC"  # 换了分类，服务重新查
+
+
+def test_relist_keeps_post_template_from_app(service, platform, items):
+    template = {"canFreeShipping": "false", "supportFreight": "true", "templateId": "778"}
+    platform.items["1002"]["post"] = {**template, "onlyTakeSelf": "false"}
+    draft = run(service.relist_item(UNB, "1002"))
+    assert (draft.post_mode, draft.can_keep_post()) == ("keep", True)
+    run(service.publish(UNB, draft.id))
+    assert platform.published[-1]["itemPostFeeDTO"]["templateId"] == "778"
+
+
+def test_relist_refuses_items_still_on_sale(service, platform, items):
+    run(items.sync(UNB))
+    with pytest.raises(ValueError, match="还在卖"):
+        run(service.relist_item(UNB, "1001"))
+    platform.items["1002"]["sku"] = [{"priceInCent": "100"}]
+    with pytest.raises(ValueError, match="多规格"):
+        run(service.relist_item(UNB, "1002"))
+
+
+def test_failed_relist_is_logged_and_can_retry(service, platform, items):
+    draft = run(service.relist_item(UNB, "1002"))
+    platform.fail["mtop.idle.pc.idleitem.publish"] = "FAIL_BIZ_X::类目不对"
+    with pytest.raises(Exception, match="类目不对"):
+        run(service.publish(UNB, draft.id))
+    assert "类目不对" in service.get(UNB, draft.id).error
+    [op] = items.history(UNB)
+    assert (op.action, op.ok, op.item_id, op.detail["from_item"]) == ("relist", False, "", "1002")
+
+    del platform.fail["mtop.idle.pc.idleitem.publish"]
+    assert run(service.publish(UNB, draft.id)).item_id == "9001"

@@ -18,7 +18,7 @@ import { useDeleteItem, useDownshelf } from "./queries"
 const COPY = {
   downshelf: {
     title: "下架这个商品？",
-    body: "下架后买家就看不到了。网页端没有重新上架的入口，之后要在闲鱼 App 里重新上架。",
+    body: "下架后买家就看不到了。之后可以在这里「重新上架」，照原样发一个新商品（商品 ID 是新的）；想让这个商品本身回来，要在闲鱼 App 里重新上架。",
     action: "下架",
     done: "已下架",
   },

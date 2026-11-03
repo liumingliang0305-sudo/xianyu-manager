@@ -10,6 +10,7 @@ const ACTION_LABEL: Record<ItemOp["action"], string> = {
   downshelf: "下架",
   delete: "删除",
   publish: "发布",
+  relist: "重新上架",
 }
 
 function change(op: ItemOp): string {
@@ -18,6 +19,7 @@ function change(op: ItemOp): string {
     return op.detail.orig_to != null ? `${text}，原价 ${yuan(op.detail.orig_to)}` : text
   }
   if (op.action === "publish") return yuan(op.detail.price)
+  if (op.action === "relist") return `${yuan(op.detail.price)}，照 ${op.detail.from_item} 发的新商品`
   if (op.action === "edit") {
     const fields = (op.detail.fields ?? []).join("、")
     return op.detail.to != null

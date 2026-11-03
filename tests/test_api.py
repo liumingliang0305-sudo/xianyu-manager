@@ -465,6 +465,26 @@ def test_edit_item_through_draft(client, platform):
     assert (op["action"], op["detail"]["fields"]) == ("edit", ["描述", "价格"])
 
 
+def test_relist_item_through_publish_draft(client, platform):
+    client.post(items_url("/sync"), json={})
+    resp = client.post(items_url("/1001/relist"))
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")  # 还在卖
+
+    draft = client.post(items_url("/1002/relist")).json()
+    assert (draft["relist_item_id"], draft["edit_item_id"], draft["description"]) == (
+        "1002",
+        None,
+        "平板",
+    )
+    assert draft["labels"] == [{"name": "成色", "value": "几乎全新"}]
+    assert [d["id"] for d in client.get(drafts_url()).json()["drafts"]] == [draft["id"]]
+
+    draft = client.post(drafts_url(f"/{draft['id']}/publish")).json()
+    assert draft["item_id"] == "9001"
+    [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
+    assert (op["action"], op["item_id"], op["detail"]["from_item"]) == ("relist", "9001", "1002")
+
+
 def test_draft_errors(client, platform):
     assert client.get(drafts_url("/999")).json()["code"] == "draft_not_found"
     draft = client.post(drafts_url()).json()

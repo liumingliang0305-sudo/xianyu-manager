@@ -100,14 +100,16 @@ export interface ItemOp {
   /** 发布失败时还没有商品 ID，是空串 */
   item_id: string
   /** desc 是以前的"改描述"，现在改描述走编辑（edit），旧记录还在 */
-  action: "price" | "desc" | "edit" | "downshelf" | "delete" | "publish"
+  action: "price" | "desc" | "edit" | "downshelf" | "delete" | "publish" | "relist"
   detail: {
     from?: number | string
     to?: number | string
     orig_to?: number
-    /** 发布、编辑：从哪个草稿提交的；price 是发布的售价（分） */
+    /** 发布、编辑、重新上架：从哪个草稿提交的；price 是发布的售价（分） */
     draft_id?: number
     price?: number | null
+    /** 重新上架：照哪个商品抄的 */
+    from_item?: string
     /** 编辑：改了哪几块（"描述"、"图片"、"价格"……）；改了价格时 from、to 是新旧售价 */
     fields?: string[]
   }
@@ -402,6 +404,8 @@ export interface Draft {
   item_id: string | null
   /** 编辑已有商品的草稿：改的是哪个商品。发新商品的是 null */
   edit_item_id: string | null
+  /** 重新上架的草稿：照哪个商品抄的，发布出去是一个新商品。别的是 null */
+  relist_item_id: string | null
   /** 上次发布（提交）失败的原因 */
   error: string | null
   created_at: number
@@ -630,6 +634,10 @@ export const api = {
   /** 这个商品的编辑草稿，没有就按闲鱼上现在的样子建一个（会请求一次闲鱼） */
   editItem: (account: string, itemId: string) =>
     request<Draft>(`${itemsPath(account)}/${itemId}/edit`, { method: "POST" }),
+
+  /** 照下架、卖掉的商品抄一个发新商品的草稿，有没发的就接着用（没有时请求一次闲鱼） */
+  relistItem: (account: string, itemId: string) =>
+    request<Draft>(`${itemsPath(account)}/${itemId}/relist`, { method: "POST" }),
 
   downshelf: (account: string, itemId: string) =>
     request<{ ok: true }>(`${itemsPath(account)}/${itemId}/downshelf`, { method: "POST" }),

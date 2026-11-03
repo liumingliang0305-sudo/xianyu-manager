@@ -9,6 +9,12 @@
 原样记在 `origin` 里。闲鱼上已有的图片不下载，草稿里只记地址。改好了提交（edit 接口），请求体照
 origin 改，表单里没有的（数量、服务……）原样带回。提交记进 item_ops，action 是 edit。
 编辑草稿不在发布页的列表里。
+
+重新上架（`relist_item`）：网页端没有让下架、卖掉的商品回到在售的接口，这里是照原商品再发一个新商品。
+建草稿和编辑一样拿一次 editDetail 存进 origin，草稿在发布页的列表里，改好了发布。
+请求体照 origin 拼，和编辑的一样（原来的图不重传，属性、服务、App 里设的运费模板原样带上），
+去掉 itemId、数量改成 1 件，调发布接口。发出去的商品 ID 是新的，原来的商品不动。
+记进 item_ops 的 action 是 relist。
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ from typing import Any
 from app.accounts import Accounts
 from app.db import Database, Row
 from app.images import ImageStore
-from app.items import ItemService
+from app.items import ONLINE, ItemService
 from xianyu_core.item import (
     ItemApi,
     ItemCard,
@@ -98,6 +104,7 @@ class Draft:
     published_at: float | None
     edit_item_id: str | None  # 编辑已有商品的草稿：改的是哪个商品
     origin: dict[str, Any] | None = field(repr=False)  # 建草稿时的 editDetail
+    relist_item_id: str | None  # 重新上架的草稿：照哪个商品抄的
 
     @classmethod
     def from_row(cls, row: Row) -> Draft:
@@ -113,7 +120,7 @@ class Draft:
         )
 
     def current_labels(self) -> list[dict[str, str]]:
-        """编辑已有商品、还没重新推荐时，商品现在的属性（不含分类）：[{name, value}]。"""
+        """编辑（重新上架）的商品、还没重新推荐时，商品现在的属性（不含分类）：[{name, value}]。"""
         if self.cards or not self.origin:
             return []
         result = []
@@ -128,7 +135,7 @@ class Draft:
         return result
 
     def can_keep_post(self) -> bool:
-        """编辑的商品原来的邮费对不上四种选法（比如 App 里设的运费模板），可以原样沿用。"""
+        """编辑、重新上架的商品原来的邮费对不上四种选法（比如 App 里设的运费模板），可以沿用。"""
         post = (self.origin or {}).get("itemPostFeeDTO") or {}
         return bool(self.origin) and post_mode_from(post)[0] == KEEP_POST
 
@@ -343,6 +350,39 @@ class DraftService:
             (account_id, item_id),
         ).fetchall():
             self.delete(account_id, old["id"])
+        return self._insert_from_detail(account_id, detail, edit_item_id=item_id)
+
+    async def relist_item(self, account_id: str, item_id: str) -> Draft:
+        """重新上架一个下架或卖掉的商品：照它在闲鱼上的样子（editDetail）抄一个发新商品的草稿。
+
+        发布出去是一个新商品（新的商品 ID，想要、浏览从零算），原来的商品不动。
+        这个商品有还没发的重新上架草稿就接着用，不请求平台；发过的留着，再上架就再抄一个。
+        """
+        record = self._items.get(account_id, item_id)
+        if record and record.on_platform and record.status == ONLINE:
+            raise ValueError("这个商品还在卖，不用重新上架（App 里下架了的话先同步一次）")
+        row = self._db.execute(
+            "SELECT * FROM drafts WHERE account_id = %s AND relist_item_id = %s AND item_id IS NULL"
+            " ORDER BY id DESC LIMIT 1",
+            (account_id, item_id),
+        ).fetchone()
+        if row:
+            return Draft.from_row(row)
+        async with self._accounts.mtop(account_id) as mtop:
+            detail = await ItemApi(mtop).edit_detail(item_id)
+        if detail.get("itemSkuList"):
+            raise ValueError("多规格商品网页端发不了，请在闲鱼 App 里重新上架")
+        return self._insert_from_detail(account_id, detail, relist_item_id=item_id)
+
+    def _insert_from_detail(
+        self,
+        account_id: str,
+        detail: dict[str, Any],
+        *,
+        edit_item_id: str | None = None,
+        relist_item_id: str | None = None,
+    ) -> Draft:
+        """editDetail → 一个新草稿，原样记在 origin 里。闲鱼上的图不下载，只记地址。"""
         price = detail.get("itemPriceDTO") or {}
         post = detail.get("itemPostFeeDTO") or {}
         post_mode, post_price = post_mode_from(post)
@@ -360,13 +400,14 @@ class DraftService:
         address = detail.get("itemAddrDTO")
         now = time.time()
         row = self._db.execute(
-            "INSERT INTO drafts (account_id, edit_item_id, origin, description, price_cent,"
-            " orig_price_cent, post_mode, post_price_cent, take_self, images, category, address,"
-            " created_at, updated_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            "INSERT INTO drafts (account_id, edit_item_id, relist_item_id, origin, description,"
+            " price_cent, orig_price_cent, post_mode, post_price_cent, take_self, images, category,"
+            " address, created_at, updated_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 account_id,
-                item_id,
+                edit_item_id,
+                relist_item_id,
                 json.dumps(detail, ensure_ascii=False),
                 (detail.get("itemTextDTO") or {}).get("desc") or "",
                 _int_or_none(price.get("priceInCent")) or None,
@@ -389,28 +430,33 @@ class DraftService:
         """发到闲鱼。先在本地把能查的都查一遍（不请求平台），再查发布限制和违禁词、传图、发布。
 
         编辑已有商品的草稿是把改动提交上去（`_submit_edit`），`force` 是改价超过保护线也提交。
+        重新上架的草稿也是发新商品，只是请求体照原商品拼（见 `_publish_payload`）。
         """
         draft = self._editable(account_id, draft_id)
         if draft.edit_item_id:
             return await self._submit_edit(draft, force=force)
-        self._payload(draft, [UploadedImage("", img.width, img.height) for img in draft.images])
-        detail = {"draft_id": draft.id, "price": draft.price_cent}
+        # 本地检查，图还没传，地址先空着
+        if draft.relist_item_id:
+            self._edit_payload(draft)
+        else:
+            self._payload(draft, [UploadedImage("", img.width, img.height) for img in draft.images])
+        action = "relist" if draft.relist_item_id else "publish"
+        detail: dict[str, Any] = {"draft_id": draft.id, "price": draft.price_cent}
+        if draft.relist_item_id:
+            detail["from_item"] = draft.relist_item_id
         try:
             async with self._accounts.mtop(account_id) as mtop:
                 api = PublishApi(mtop)
                 await api.check_limit()
                 await api.check_words(draft.description, account_id)
                 await self._upload(api, draft)
-                uploaded = [UploadedImage(i.url or "", i.width, i.height) for i in draft.images]
-                payload = self._payload(draft, uploaded)
-                payload["userRightsProtocols"] = await api.services(payload, draft.cards)
-                item_id = await api.publish(submit_payload(payload))
+                item_id = await api.publish(await self._publish_payload(api, draft))
         except Exception as exc:
             message = str(exc) or type(exc).__name__
-            self._items.log_op(account_id, "", "publish", detail, error=message)
+            self._items.log_op(account_id, "", action, detail, error=message)
             self._db.execute("UPDATE drafts SET error = %s WHERE id = %s", (message, draft.id))
             raise
-        self._items.log_op(account_id, item_id, "publish", detail, error=None)
+        self._items.log_op(account_id, item_id, action, detail, error=None)
         now = time.time()
         self._db.execute(
             "UPDATE drafts SET item_id = %s, error = NULL, published_at = %s, updated_at = %s"
@@ -497,8 +543,26 @@ class DraftService:
         )
         return self.get(account_id, draft.id)
 
+    async def _publish_payload(self, api: PublishApi, draft: Draft) -> dict[str, Any]:
+        """图传完以后的发布请求体，和网页端发布页的一样。
+
+        重新上架的照原商品的 editDetail 拼，和编辑的一样，去掉 itemId 就是发新商品（网页端的发布
+        和编辑请求体就差这一项）；数量和发布页一样是 1 件，原来的可能是卖完的 0 件。
+        换了分类才重新查服务。
+        """
+        if not draft.relist_item_id:
+            uploaded = [UploadedImage(img.url or "", img.width, img.height) for img in draft.images]
+            payload = self._payload(draft, uploaded)
+            payload["userRightsProtocols"] = await api.services(payload, draft.cards)
+            return submit_payload(payload)
+        payload = self._edit_payload(draft)
+        del payload["itemId"]
+        if "分类" in _changed(draft.origin or {}, payload):
+            payload["userRightsProtocols"] = await api.services(payload, draft.cards)
+        return {**payload, "quantity": "1", "defaultPrice": False}
+
     def _edit_payload(self, draft: Draft) -> dict[str, Any]:
-        """编辑草稿 → edit 的请求体。还没传的图地址是空的，只用来检查和比较。"""
+        """编辑（重新上架）草稿 → edit 的请求体。还没传的图地址是空的，只用来检查和比较。"""
         if draft.price_cent is None:
             raise ValueError("还没填售价")
         if not draft.address:

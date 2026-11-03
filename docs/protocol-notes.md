@@ -84,6 +84,19 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 没对照过网页端编辑页的请求）；描述改了才查违禁词，分类换了才重新查服务。拉初值**不用** `pc.detail`：那是买家看的
 商品详情接口，2026-11-03 改价后几秒调它就被 RGV587 风控，`editDetail` 和 `edit` 没事。
 
+### 重新上架
+
+网页端没有重新上架：2026-11-03 翻了 xy-site 0.0.179 的 `main.js` 和 15 个页面脚本，商品的写接口只有 `edit`、
+`downshelf`、`delete`、`publish` 和闲鱼自己的草稿箱，没有 upshelf 之类的接口，"我发布的"里也看不到下架的商品。
+App 里让原商品回到在售的接口没抓过，不猜接口名去调（写操作，调错了容易被风控）。
+
+本系统的做法（[app/drafts.py](../app/drafts.py) 的 `relist_item`）是照原商品发一个新商品：用 `editDetail` 拉原商品的表单
+存进草稿（和编辑一样记在 origin），发布时请求体照编辑的拼，去掉 `itemId`、`quantity` 改成 `"1"`（卖完的商品可能是 0）、
+补上发布页有的 `defaultPrice: false`，调 `publish`。网页端发布和编辑的请求体本来就只差 `itemId`（见上面"编辑的请求体"）。
+原来的图直接用闲鱼上的地址，不重传；属性、服务、App 里设的运费模板原样带上，换了分类才重新查服务。
+🔍 还没在线上试过：下架、卖掉的商品 `editDetail` 拿不拿得到，`publish` 收不收 editDetail 格式的图片（多了 `imgPath`、
+`templateIndex` 这些字段），以第一次实测为准。
+
 ## 发布商品
 
 > 来源：2026-11-03 读网页端发布页（goofish.com/publish）xy-site 0.0.179 的 `p_publish-index.js`，并用已登录账号

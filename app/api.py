@@ -19,7 +19,8 @@
 - 发布：先存草稿（app/drafts.py），图片传到 .../drafts/{id}/images（请求体就是图片文件），
   存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）；
 - 编辑商品：POST .../items/{id}/edit 拿到这个商品的编辑草稿，之后和发布一样用
-  .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼。
+  .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
+- 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发。
 """
 
 from __future__ import annotations
@@ -598,6 +599,14 @@ def create_app(
             draft = await drafts(request).edit_item(account_id, item_id)
         return _draft(draft)
 
+    @authed.post("/api/accounts/{account_id}/items/{item_id}/relist")
+    async def relist_item(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
+        """照这个商品抄一个发新商品的草稿（请求一次 editDetail），有没发的就接着用。"""
+        account_id = account(request, account_id)
+        async with locks[account_id]:
+            draft = await drafts(request).relist_item(account_id, item_id)
+        return _draft(draft)
+
     @authed.post("/api/accounts/{account_id}/items/{item_id}/downshelf")
     async def downshelf(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
         account_id = account(request, account_id)
@@ -1004,6 +1013,7 @@ def _draft(draft: Draft) -> dict[str, Any]:
         "address": draft.address,
         "item_id": draft.item_id,
         "edit_item_id": draft.edit_item_id,
+        "relist_item_id": draft.relist_item_id,
         "error": draft.error,
         "created_at": draft.created_at,
         "updated_at": draft.updated_at,

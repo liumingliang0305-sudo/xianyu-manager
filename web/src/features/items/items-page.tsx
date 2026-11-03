@@ -22,7 +22,7 @@ import { ItemDetailSheet } from "./item-detail-sheet"
 import { ItemsTable, type ItemActionKind } from "./items-table"
 import { OpsList } from "./ops-list"
 import { PriceDialog } from "./price-dialog"
-import { useItemOps, useItems, useSyncItems } from "./queries"
+import { useItemOps, useItems, useRelist, useSyncItems } from "./queries"
 
 type Tab = ItemState | "all"
 
@@ -75,8 +75,20 @@ export function ItemsPage() {
   const [search, setSearch] = useState("")
   const [action, setAction] = useState<{ kind: ItemActionKind; item: Item } | null>(null)
   const navigate = useNavigate()
+  const relist = useRelist(account)
+  // 重新上架先抄成草稿（可能要请求一次闲鱼），再去发布页打开它，改好了在那里发
+  const startRelist = (item: Item) => {
+    if (relist.isPending) return
+    const loading = toast.loading("正在照原商品建草稿…")
+    relist.mutate(item.item_id, {
+      onSuccess: (draft) => navigate(`/publish?draft=${draft.id}`),
+      onError: (error) => toast.error(`重新上架失败：${errorMessage(error)}`),
+      onSettled: () => toast.dismiss(loading),
+    })
+  }
   const onAction = (kind: ItemActionKind, item: Item) => {
     if (kind === "edit") navigate(`/items/${item.item_id}/edit`)
+    else if (kind === "relist") startRelist(item)
     else setAction({ kind, item })
   }
 

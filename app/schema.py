@@ -129,6 +129,8 @@ drafts = Table(
     # 发新商品的草稿是 NULL
     Column("edit_item_id", Text),
     Column("origin", Text),
+    # 重新上架的草稿：照哪个商品抄的（origin 是那个商品的 editDetail），发布出去是个新商品
+    Column("relist_item_id", Text),
     Column("created_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),
     Column("published_at", Double),

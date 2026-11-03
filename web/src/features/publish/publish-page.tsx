@@ -52,7 +52,7 @@ function DraftRow({
   let status
   if (draft.item_id) status = <StatusPill tone="positive">已发布</StatusPill>
   else if (draft.error) status = <StatusPill tone="negative">发布失败</StatusPill>
-  else status = <StatusPill tone="neutral">草稿</StatusPill>
+  else status = <StatusPill tone="neutral">{draft.relist_item_id ? "重新上架" : "草稿"}</StatusPill>
   return (
     <li>
       <button

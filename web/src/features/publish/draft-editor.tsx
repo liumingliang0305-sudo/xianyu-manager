@@ -554,6 +554,16 @@ function PublishedDraft({
           <span className="font-mono" translate="no">
             {draft.item_id}
           </span>
+          {draft.relist_item_id && (
+            <span className="text-muted-foreground">
+              {" "}
+              · 照{" "}
+              <span className="font-mono" translate="no">
+                {draft.relist_item_id}
+              </span>{" "}
+              重新上架
+            </span>
+          )}
         </p>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={() => setDeleting(true)}>
@@ -671,6 +681,7 @@ function EditableDraft({
   const [guard, setGuard] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const editing = draft.edit_item_id != null
+  const relisting = draft.relist_item_id != null
 
   const save = useSaveDraft(account, draft.id)
   const addImage = useAddImage(account, draft.id)
@@ -798,16 +809,22 @@ function EditableDraft({
 
   return (
     <div className="flex flex-col">
+      {relisting && (
+        <p className="mx-6 mt-6 rounded-lg bg-muted/60 px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
+          照商品{" "}
+          <span className="font-mono text-foreground" translate="no">
+            {draft.relist_item_id}
+          </span>{" "}
+          抄的，用来重新上架。发布后是一个新商品：商品 ID 是新的，想要、浏览从零算，原来的商品不动。
+          原来的图已经在闲鱼上，不用重传。
+        </p>
+      )}
       <div className="divide-y divide-rule px-6 pt-6">
         <Field
           label="图片"
           required
           hintId="draft-images-hint"
-          hint={
-            editing
-              ? "1–9 张，第一张是首图，可以直接拖进来。新加的图存在后台服务器上，点保存时才传到闲鱼；图片里不能有二维码"
-              : "1–9 张，第一张是首图，可以直接拖进来。图片存在后台服务器上，点发布时才传到闲鱼；图片里不能有二维码"
-          }
+          hint={`1–9 张，第一张是首图，可以直接拖进来。${editing || relisting ? "新加的图" : "图片"}存在后台服务器上，点${editing ? "保存" : "发布"}时才传到闲鱼；图片里不能有二维码`}
         >
           <ul
             aria-describedby="draft-images-hint"
@@ -910,8 +927,8 @@ function EditableDraft({
           hint={
             draft.properties.length
               ? "闲鱼按描述推荐的，平台预先选了一项。改了哪一项，闲鱼会按新的选择刷新别的属性；改了描述可以重新推荐"
-              : editing
-                ? "商品现在的分类和属性。想换的话点「重新推荐」，闲鱼按描述和现在的选择给出可选的"
+              : editing || relisting
+                ? `${editing ? "商品现在" : "原来商品"}的分类和属性。想换的话点「重新推荐」，闲鱼按描述和现在的选择给出可选的`
                 : "写好描述后点「推荐分类」，闲鱼按描述推荐分类和品牌、成色这些属性"
           }
         >
@@ -923,7 +940,7 @@ function EditableDraft({
               onClick={() => void runRecommend()}
             >
               {recommend.isPending ? <Loader2Icon className="animate-spin" /> : <SparklesIcon />}
-              {draft.properties.length || editing ? "重新推荐" : "推荐分类"}
+              {draft.properties.length || editing || relisting ? "重新推荐" : "推荐分类"}
             </Button>
             {draft.category && (
               <span className="text-sm">
@@ -1068,7 +1085,7 @@ function EditableDraft({
           htmlFor="draft-address"
           required
           hint={
-            editing
+            editing || relisting
               ? "可以按名字搜，也可以从闲鱼账号的常用地址里选"
               : "可以按名字搜，也可以从闲鱼账号的常用地址里选。新草稿会沿用上一个草稿选的"
           }

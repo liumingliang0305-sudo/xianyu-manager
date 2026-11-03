@@ -53,6 +53,10 @@
   打开时用卖家自己的 editDetail 拉一次表单初值，改动先暂存在后台，点"保存到闲鱼"才提交；
   表单里没有的（数量、服务……）原样带回，App 里设的运费模板可以沿用（[app/drafts.py](app/drafts.py)）。
   以前的"改描述"弹窗拉初值用的是买家看的商品详情接口（`pc.detail`），容易触发风控，已经去掉
+- [x] 重新上架：商品页里已卖出、不在主页的商品点"重新上架"，照原商品抄一个草稿进发布页，改好了发。
+  网页端没有让原商品回到在售的接口，这里是发一个新商品（商品 ID 是新的，想要、浏览从零算），原来的商品不动；
+  原来的图不重传，属性、服务、App 里设的运费模板原样带上（[app/drafts.py](app/drafts.py)，
+  见[协议笔记](docs/protocol-notes.md#重新上架)）。和发布一样，线上还没真正发过
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
@@ -352,7 +356,7 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/lib/auth.ts      登录状态：访问令牌放在内存里，打开页面时拿 cookie 里的刷新令牌换
   src/features/auth/   登录页、改密码、浏览器插件令牌
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
-  src/features/items/  商品管理页：列表、详情、改价、编辑页、下架、删除、改动记录
+  src/features/items/  商品管理页：列表、详情、改价、编辑页、下架、重新上架、删除、改动记录
   src/features/orders/ 订单管理页：卖出的 / 买到的切换、添加订单、按状态分组、实时详情、待付款订单改价、移除、改动记录
   src/features/messages/ 消息页：会话列表、聊天记录、往前翻历史、回复，新消息通过 SSE 实时刷新
   src/features/search/ 搜索页：搜闲鱼上的商品，排序、筛选，往后加载

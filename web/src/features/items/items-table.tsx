@@ -1,5 +1,6 @@
 import {
   ArchiveIcon,
+  ArchiveRestoreIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   EyeIcon,
@@ -30,8 +31,8 @@ import { count, itemState, itemUrl, yuan } from "@/lib/format"
 
 import { ItemThumb, StateBadge } from "./item-bits"
 
-/** edit 是去编辑页，别的在商品页上弹窗 */
-export type ItemActionKind = "detail" | "price" | "edit" | "downshelf" | "delete"
+/** edit 是去编辑页，relist 是抄成草稿去发布页，别的在商品页上弹窗 */
+export type ItemActionKind = "detail" | "price" | "edit" | "downshelf" | "delete" | "relist"
 
 type OnAction = (kind: ItemActionKind, item: Item) => void
 
@@ -75,6 +76,15 @@ function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
             <DropdownMenuItem onSelect={() => onAction("downshelf", item)}>
               <ArchiveIcon />
               下架
+            </DropdownMenuItem>
+          </>
+        )}
+        {!editable && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onAction("relist", item)}>
+              <ArchiveRestoreIcon />
+              重新上架
             </DropdownMenuItem>
           </>
         )}
@@ -145,7 +155,7 @@ export function ItemsTable({ items, onAction }: { items: Item[]; onAction: OnAct
                 <TableCell className="text-right tabular-nums">{count(item.collect_count)}</TableCell>
                 <TableCell>
                   <div className="flex items-center justify-end gap-1">
-                    {itemState(item) === "online" && (
+                    {itemState(item) === "online" ? (
                       <>
                         <Button variant="outline" size="sm" onClick={() => onAction("price", item)}>
                           <PencilIcon />
@@ -156,6 +166,11 @@ export function ItemsTable({ items, onAction }: { items: Item[]; onAction: OnAct
                           编辑
                         </Button>
                       </>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={() => onAction("relist", item)}>
+                        <ArchiveRestoreIcon />
+                        重新上架
+                      </Button>
                     )}
                     <ItemMenu item={item} onAction={onAction} />
                   </div>
