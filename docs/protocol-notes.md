@@ -129,6 +129,17 @@ description, imageInfos, uniqueCode}`；推荐过以后再推荐，还带上 `cu
 和坐标无关）、`commonAddresses`（常用地址）、`nearbyAddresses`（坐标附近）。默认用 `selectedPoi`，没有就用常用地址第一个。
 一个地址转成 `itemAddrDTO`：`{area, city, divisionId, gps: "纬度,经度", poiId, poiName: poi 或 "城市 区", prov}`。
 
+"宝贝所在地"弹窗里能按名字搜：网页端在浏览器里加载高德地图 JS 接口 2.0（用的是闲鱼自己的高德 key），
+搜索框接高德的输入提示（`AMap.AutoComplete`），选中一个地点后用 `AMap.PlaceSearch.searchNearBy` 搜周围 1 公里当"附近地址"。
+选中的地点按 `{address, area: adname, city: cityname, divisionId: adcode, latitude, longitude, poi: name, poiId: id, prov: pname}`
+转成上面的格式。闲鱼自己没有按名字搜地址的接口（几个前端文件里和地址有关的只有 `poi.get`），存进商品的就是高德的地点：
+`poiId` 是高德的地点 ID，`divisionId` 是高德的行政区编码。`poi.get` 传任意坐标都会返回那附近的地址。
+
+本系统用自己的高德"Web 服务" key 在后台调高德的关键字搜索（`restapi.amap.com/v3/place/text`，[app/places.py](../app/places.py)），
+不用闲鱼的 key。要带 `extensions=all`：`base` 不给 `adcode`。没有值的字段高德给空数组。2026-11-03 实测搜"光谷苑"，
+第一个结果的地点 ID、坐标、行政区编码和闲鱼常用地址里的那条完全一样；省市名带"省""市"（`poi.get` 里没有），
+和网页端搜出来存的一样。
+
 **邮费**（`itemPostFeeDTO`，四选一，另有"支持自提" `onlyTakeSelf`）：包邮 `{canFreeShipping: true, supportFreight: true}`；
 按距离计费 `{canFreeShipping: false, supportFreight: true, templateId: "-100"}`；一口价 `{canFreeShipping: false, supportFreight: true,
 templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFreeShipping: false, supportFreight: false, templateId: "0"}`。
@@ -142,6 +153,7 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 本系统的做法（[xianyu_core/publish.py](../xianyu_core/publish.py)、[app/drafts.py](../app/drafts.py)）：草稿和图片先存在本机
 （图片在 `data/images`），点发布时依次查发布限制、违禁词，把还没传过的图传到闲鱼（传过的地址记在草稿里，重试不再传），
 查服务，最后发布。推荐只按描述推荐，不带图（图还在本机）。发布在限流里算"改动"，传图算"读"。
+发货地可以从 `poi.get` 的常用地址里选，也可以用高德按名字搜（见上面"发货地"）。
 
 ## 订单
 

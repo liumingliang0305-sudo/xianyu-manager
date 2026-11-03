@@ -262,12 +262,8 @@ class DraftService:
             selected, common = await PublishApi(mtop).addresses()
         result: list[dict[str, Any]] = []
         for poi in [selected, *common] if selected else common:
-            if not poi or any(r["key"] == str(poi.get("poiId")) for r in result):
-                continue
-            dto = address_from_poi(poi)
-            detail = "".join(str(poi.get(k) or "") for k in ("prov", "city", "area", "address"))
-            key = str(poi.get("poiId"))
-            result.append({"key": key, "name": dto["poiName"], "detail": detail, "address": dto})
+            if poi and all(r["key"] != str(poi.get("poiId")) for r in result):
+                result.append(address_option(poi))
         return result
 
     async def publish(self, account_id: str, draft_id: int) -> Draft:
@@ -373,6 +369,19 @@ class DraftService:
             ).fetchone()
             if not used:
                 self._images.delete(sha)
+
+
+def address_option(poi: dict[str, Any]) -> dict[str, Any]:
+    """闲鱼 poi.get 格式的一个地址（高德搜出来的也转成这个格式）→ 页面上的一个选项。
+
+    `address` 是 itemAddrDTO，页面选中后原样放进草稿。
+    """
+    dto = address_from_poi(poi)
+    parts = [str(poi.get(key) or "") for key in ("prov", "city", "area", "address")]
+    if parts[0] == parts[1]:  # 直辖市：北京市北京市东城区
+        del parts[1]
+    key = str(poi.get("poiId"))
+    return {"key": key, "name": dto["poiName"], "detail": "".join(parts), "address": dto}
 
 
 def _images_json(images: list[DraftImage]) -> str:

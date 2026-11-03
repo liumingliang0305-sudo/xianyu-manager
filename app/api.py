@@ -17,7 +17,7 @@
 - 消息：`messages=True` 时每个账号连一条即时消息长连接（app/messages.py），新消息通过
   GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接；
 - 发布：先存草稿（app/drafts.py），图片传到 .../drafts/{id}/images（请求体就是图片文件），
-  存在本机 data/images；点发布时才传到闲鱼。
+  存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）。
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from app.auth import (
     TooManyAttemptsError,
     client_ip,
 )
-from app.drafts import Draft, DraftNotFoundError, DraftService
+from app.drafts import Draft, DraftNotFoundError, DraftService, address_option
 from app.items import ItemService, PriceGuardError
 from app.login import (
     LoginNotFoundError,
@@ -63,6 +63,7 @@ from app.login import (
 )
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderService
+from app.places import PlaceSearch, PlacesUnavailableError
 from app.search import SearchService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
@@ -133,6 +134,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (RateLimitedError, 429, "rate_limited"),
     (ImSendUncertainError, 504, "send_uncertain"),
     (PublishBlockedError, 409, "publish_blocked"),
+    (PlacesUnavailableError, 503, "places_unavailable"),
     (XianyuError, 502, "platform_error"),
     (ValueError, 400, "invalid"),
 ]
@@ -218,6 +220,7 @@ def create_app(
     database_url: str | None = None,
     accounts_dir: str | Path = DEFAULT_DIR,
     images_dir: str | Path = image_store.DEFAULT_DIR,
+    amap_key: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     interval: float = 1.5,
     web_dist: Path | None = WEB_DIST,
@@ -234,12 +237,15 @@ def create_app(
     `login_check_interval`：定时确认登录态的间隔（秒，见 app/keepalive.py），None 时不定时查。
     `auth_key`：访问令牌的签名密钥文件，不给时用 data/auth.key，没有就生成。
     `images_dir`：草稿图片放哪，默认 data/images。
+    `amap_key`：高德"Web 服务"的 key，发货地按名字搜用；没有时只能从常用地址里选
+    （见 app/places.py）。
 
     `messages`：连不连即时消息。不连时消息接口只能看本地库里已有的。
     `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
     searcher = SearchService(accounts)
+    places = PlaceSearch(amap_key, transport=transport)
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
     tokens = AccessTokens(auth.load_key(auth_key or auth.KEY_PATH))
     limiter = LoginLimiter()
@@ -722,11 +728,21 @@ def create_app(
 
     @authed.get("/api/accounts/{account_id}/publish/addresses")
     async def publish_addresses(request: Request, account_id: str) -> dict[str, Any]:
-        """可选的发货地（上次用的、常用地址），选好的 address 原样放进草稿。"""
+        """可选的发货地（上次用的、常用地址），选好的 address 原样放进草稿。
+
+        `search`：能不能按名字搜（配了高德 key 没有）。
+        """
         account_id = account(request, account_id)
         async with locks[account_id]:
             addresses = await drafts(request).addresses(account_id)
-        return {"addresses": addresses}
+        return {"addresses": addresses, "search": places.enabled}
+
+    @authed.get("/api/publish/places")
+    async def search_places(q: str, city: str = "") -> dict[str, Any]:
+        """按名字搜发货地（高德），最多 10 个，格式和常用地址一样。不请求闲鱼。"""
+        if len(q) > 50:
+            raise ValueError("搜索词太长")
+        return {"places": [address_option(poi) for poi in await places.search(q, city)]}
 
     @authed.get("/api/accounts/{account_id}/orders")
     async def list_orders(

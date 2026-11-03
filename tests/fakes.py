@@ -73,12 +73,16 @@ class FakePlatform:
         self.published: list[dict] = []  # publish 收到的请求体
         self.publish_limited = False
         self.bad_words: list[str] = []
+        self.amap_queries: list[dict] = []  # 高德关键字搜索收到的参数
+        self.amap_info = "OK"  # 不是 OK 时高德返回出错（key 不对、额度用完）
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "passport.goofish.com":
             return self.passport(request)
         if request.url.host == "stream-upload.goofish.com":
             return self.upload(request)
+        if request.url.host == "restapi.amap.com":
+            return self.amap_search(request)
         api = request.url.params["api"]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         data = json.loads(form["data"])
@@ -202,6 +206,15 @@ class FakePlatform:
         self.uploads.append(request.content)
         url = f"https://img.example/up{len(self.uploads)}.jpg"
         return httpx.Response(200, json={"success": True, "object": {"url": url, "pix": "80x60"}})
+
+    def amap_search(self, request: httpx.Request) -> httpx.Response:
+        """高德关键字搜索：名字里有搜索词的地点。"""
+        query = dict(request.url.params)
+        self.amap_queries.append(query)
+        if self.amap_info != "OK":
+            return httpx.Response(200, json={"status": "0", "info": self.amap_info})
+        pois = [p for p in AMAP_POIS if query["keywords"] in p["name"]]
+        return httpx.Response(200, json={"status": "1", "info": "OK", "pois": pois})
 
     def mtop_idle_pc_idleitem_prepublish_check(self, data):
         if self.publish_limited:
@@ -399,6 +412,31 @@ POI_HOME = {
     "address": "同业路340号",
 }
 POI_SHOP = {**POI_HOME, "poi": "万达广场", "poiId": "B0GDVC8H1H", "address": "龙岗大道"}
+
+# 高德关键字搜索的返回（v3/place/text），没有值的字段是空数组
+AMAP_POIS = [
+    {
+        "id": "B000A7BD6C",
+        "name": "北京站",
+        "address": "毛家湾胡同甲13号",
+        "location": "116.427287,39.903030",
+        "pname": "北京市",
+        "cityname": "北京市",
+        "adname": "东城区",
+        "adcode": "110101",
+    },
+    {
+        "id": "B0FFFAB6J2",
+        "name": "北京路步行街",
+        "address": [],
+        "location": "113.269295,23.125148",
+        "pname": "广东省",
+        "cityname": "广州市",
+        "adname": "越秀区",
+        "adcode": "440104",
+    },
+    {"id": "", "name": "北京市", "address": [], "location": [], "adcode": "110000"},
+]
 
 # 假的类目推荐：两个分类、一个品牌属性。描述里有"充电宝"时多一张要填 3C 证书的卡片（网页端不支持）
 CATEGORIES = [("126858403", "落地灯", "50025403"), ("126858404", "台灯", "50025404")]

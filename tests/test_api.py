@@ -464,3 +464,28 @@ def test_other_users_cannot_see_drafts(client, database_url):
     sign_in(client, "other")
     resp = client.get(drafts_url(f"/{draft['id']}"))
     assert (resp.status_code, resp.json()["code"]) == (404, "account_not_found")
+
+
+def test_place_search(tmp_path, accounts, platform, database_url, client):
+    resp = client.get("/api/publish/places", params={"q": "北京站"})
+    assert (resp.status_code, resp.json()["code"]) == (503, "places_unavailable")
+    assert client.get(f"/api/accounts/{UNB}/publish/addresses").json()["search"] is False
+
+    app = create_app(
+        database_url=database_url,
+        guard=Guard(),
+        accounts_dir=accounts.root,
+        images_dir=tmp_path / "images",
+        transport=httpx.MockTransport(platform),
+        web_dist=None,
+        amap_key="k",
+    )
+    with TestClient(app) as other:
+        sign_in(other)
+        [place] = other.get("/api/publish/places", params={"q": "北京站"}).json()["places"]
+        assert (place["name"], place["address"]["poiId"]) == ("北京站", "B000A7BD6C")
+        assert other.get(f"/api/accounts/{UNB}/publish/addresses").json()["search"] is True
+        # 搜出来的地址原样存进草稿
+        draft = other.post(drafts_url()).json()
+        draft = other.put(drafts_url(f"/{draft['id']}"), json={"address": place["address"]}).json()
+        assert draft["address"]["gps"] == "39.903030,116.427287"

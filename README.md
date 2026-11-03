@@ -45,8 +45,9 @@
   接口见[协议笔记](docs/protocol-notes.md#搜索)）。以后的捡漏监控、同行价都从这里搜
 - [x] 发布商品：后台"发布"页先存草稿（图片、描述、价格、邮费、发货地），检查好了再发到闲鱼。
   图片存在服务器的 `data/images` 里，点发布时才传到闲鱼；分类和品牌、成色这些属性用闲鱼按描述推荐的，可以改；
-  发货地从闲鱼账号的常用地址里选。发布前和网页端一样查发布限制和违禁词，网页端不支持的分类（要填 3C 证书编号之类）
-  不让发（[xianyu_core/publish.py](xianyu_core/publish.py)、[app/drafts.py](app/drafts.py)，
+  发货地和网页端一样能按名字搜（用自己的高德 key，见下面"高德 key"），也能从闲鱼账号的常用地址里选。
+  发布前和网页端一样查发布限制和违禁词，网页端不支持的分类（要填 3C 证书编号之类）不让发
+  （[xianyu_core/publish.py](xianyu_core/publish.py)、[app/drafts.py](app/drafts.py)、[app/places.py](app/places.py)，
   接口见[协议笔记](docs/protocol-notes.md#发布商品)）。线上还没真正发过一件
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
@@ -122,6 +123,21 @@ pnpm -C web dev
 旁边的 `<unb>.im.json` 是即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删；
 `<unb>.im.lock` 是文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开。
 发布草稿的图片存在 `data/images/<sha256>.jpg`（统一转成 JPEG，同一张图只存一份），删草稿时只有它用的图跟着删。
+
+### 高德 key
+
+发布页按名字搜发货地要一个高德开放平台的 key（[console.amap.com](https://console.amap.com/dev/key/app)，
+个人认证开发者，建应用、添加 Key，**服务平台选"Web 服务"**）。key 只在后台用，不发给浏览器。没配的时候只能从常用地址里选。
+
+- 本机：存进 `data/amap.key`（一行，`data/` 不进 git），重启 `xym serve`：
+
+  ```bash
+  read -rs "k?高德 key: " && printf '%s\n' "$k" > data/amap.key && chmod 600 data/amap.key && unset k
+  ```
+
+- 服务器：在 `/etc/xym.env` 里加一行 `AMAP_KEY=<key>`，`systemctl restart xym`。环境变量比文件优先。
+
+高德那边设了 IP 白名单的话，要把应用服务器的公网 IP 和本机出口 IP 都加上。
 
 ### 用户和登录
 

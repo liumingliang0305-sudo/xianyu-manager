@@ -761,10 +761,17 @@ export const api = {
   publish: (account: string, draftId: number) =>
     request<Draft>(`${draftsPath(account)}/${draftId}/publish`, { method: "POST" }),
 
+  /** 闲鱼账号里上次用的地址和常用地址（会请求闲鱼）；search：后台配了高德 key，能按名字搜 */
   addresses: (account: string) =>
-    request<{ addresses: AddressOption[] }>(
+    request<{ addresses: AddressOption[]; search: boolean }>(
       `/accounts/${encodeURIComponent(account)}/publish/addresses`,
-    ).then((r) => r.addresses),
+    ),
+
+  /** 按名字搜发货地（后台用高德搜，不请求闲鱼），最多 10 个 */
+  searchPlaces: (keyword: string) =>
+    request<{ places: AddressOption[] }>(
+      `/publish/places?q=${encodeURIComponent(keyword)}`,
+    ).then((r) => r.places),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

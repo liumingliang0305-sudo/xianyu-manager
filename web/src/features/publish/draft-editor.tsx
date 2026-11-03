@@ -5,6 +5,7 @@ import {
   ExternalLinkIcon,
   ImagePlusIcon,
   Loader2Icon,
+  MapPinIcon,
   SendIcon,
   SparklesIcon,
   Trash2Icon,
@@ -14,7 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { toast } from "sonner"
 
 import { Callout } from "@/components/callout"
-import { LoadError } from "@/components/states"
+import { EmptyNote, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,6 +27,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -34,6 +42,7 @@ import {
   api,
   errorMessage,
   type Address,
+  type AddressOption,
   type Draft,
   type DraftForm,
   type DraftProperty,
@@ -49,6 +58,7 @@ import {
   useAddresses,
   useChooseLabel,
   useDeleteDraft,
+  usePlaces,
   usePublish,
   useRecommend,
   useRemoveImage,
@@ -323,47 +333,143 @@ function PropertyRow({
   )
 }
 
-function AddressSelect({
+/** 输入停下 ms 毫秒以后才变的值，搜索框用：不是每敲一个字都搜一次 */
+function useDebounced<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return settled
+}
+
+/** 省市区，直辖市不重复写 */
+function region(address: Address): string {
+  const parts = [address.prov, address.city, address.area]
+  if (parts[0] === parts[1]) parts.splice(1, 1)
+  return parts.filter(Boolean).join("")
+}
+
+function AddressList({
+  title,
+  options,
+  onPick,
+}: {
+  title: string
+  options: AddressOption[]
+  onPick: (address: Address) => void
+}) {
+  return (
+    <div>
+      <h3 className="pb-1 text-xs text-muted-foreground">{title}</h3>
+      <ul className="-mx-2">
+        {options.map((o) => (
+          <li key={o.key}>
+            <button
+              type="button"
+              onClick={() => onPick(o.address)}
+              className="w-full rounded-md px-2 py-2 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <span className="block text-sm font-medium">{o.name}</span>
+              <span className="block text-xs text-muted-foreground">{o.detail}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** 选发货地：按名字搜（后台用高德搜），不搜的时候列闲鱼账号里的常用地址。和闲鱼网页端的"宝贝所在地"一样 */
+function AddressDialog({
+  account,
+  onPick,
+  onClose,
+}: {
+  account: string
+  onPick: (address: Address) => void
+  onClose: () => void
+}) {
+  const addresses = useAddresses(account)
+  const [text, setText] = useState("")
+  const keyword = useDebounced(text.trim(), 400)
+  const places = usePlaces(keyword)
+  const canSearch = addresses.data?.search ?? true
+  const pick = (address: Address) => {
+    onPick(address)
+    onClose()
+  }
+
+  let body: ReactNode
+  if (keyword) {
+    if (places.isPending) body = <RowsSkeleton rows={3} height="h-10" />
+    else if (places.isError)
+      body = <LoadError what="搜索" error={places.error} onRetry={() => void places.refetch()} />
+    else if (places.data.length === 0) body = <EmptyNote>没搜到「{keyword}」，换个说法试试</EmptyNote>
+    else body = <AddressList title="搜索结果" options={places.data} onPick={pick} />
+  } else if (addresses.isPending) body = <RowsSkeleton rows={3} height="h-10" />
+  else if (addresses.isError)
+    body = (
+      <LoadError what="读取常用地址" error={addresses.error} onRetry={() => void addresses.refetch()} />
+    )
+  else if (addresses.data.addresses.length === 0)
+    body = <EmptyNote>闲鱼账号里还没有常用地址，搜一个吧</EmptyNote>
+  else body = <AddressList title="常用地址" options={addresses.data.addresses} onPick={pick} />
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>选发货地</DialogTitle>
+          <DialogDescription>
+            {canSearch
+              ? "搜小区、商场、街道，或者从常用地址里选。发货地准一点，闲鱼会推给更多同城买家"
+              : "后台没配高德 key，只能从常用地址里选"}
+          </DialogDescription>
+        </DialogHeader>
+        {canSearch && (
+          <SearchInput
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="搜地点，比如 光谷苑…"
+            aria-label="搜发货地"
+            autoFocus
+          />
+        )}
+        <div className="-mx-6 max-h-[55vh] min-h-40 overflow-y-auto overscroll-contain px-6">{body}</div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AddressPicker({
   account,
   value,
+  disabled,
   onChange,
 }: {
   account: string
   value: Address | null
+  disabled: boolean
   onChange: (address: Address) => void
 }) {
-  const addresses = useAddresses(account)
-  if (addresses.isError) {
-    return (
-      <LoadError
-        what="读取闲鱼上的地址"
-        error={addresses.error}
-        onRetry={() => void addresses.refetch()}
-        className="justify-start px-0 py-1"
-      />
-    )
-  }
-  const options = addresses.data ?? []
-  const known = value && options.some((o) => o.key === value.poiId)
+  const [open, setOpen] = useState(false)
   return (
-    <select
-      id="draft-address"
-      value={value?.poiId ?? ""}
-      disabled={addresses.isPending}
-      onChange={(e) => {
-        const option = options.find((o) => o.key === e.target.value)
-        if (option) onChange(option.address)
-      }}
-      className="h-8 w-full max-w-md rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30"
-    >
-      {!value && <option value="">{addresses.isPending ? "正在读闲鱼上的地址…" : "选择发货地…"}</option>}
-      {value && !known && <option value={value.poiId}>{value.poiName}</option>}
-      {options.map((o) => (
-        <option key={o.key} value={o.key}>
-          {o.name}（{o.detail}）
-        </option>
-      ))}
-    </select>
+    <div className="flex items-center gap-4">
+      {value ? (
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{value.poiName}</div>
+          <div className="truncate text-xs text-muted-foreground">{region(value)}</div>
+        </div>
+      ) : (
+        <span className="text-sm text-muted-foreground">还没选</span>
+      )}
+      <Button id="draft-address" variant="outline" size="sm" disabled={disabled} onClick={() => setOpen(true)}>
+        <MapPinIcon />
+        {value ? "换一个" : "选发货地"}
+      </Button>
+      {open && <AddressDialog account={account} onPick={onChange} onClose={() => setOpen(false)} />}
+    </div>
   )
 }
 
@@ -876,9 +982,14 @@ function EditableDraft({
           label="发货地"
           htmlFor="draft-address"
           required
-          hint="闲鱼账号里上次用的地址和常用地址。新草稿会沿用上一个草稿选的"
+          hint="可以按名字搜，也可以从闲鱼账号的常用地址里选。新草稿会沿用上一个草稿选的"
         >
-          <AddressSelect account={account} value={form.address} onChange={(address) => update({ address })} />
+          <AddressPicker
+            account={account}
+            value={form.address}
+            disabled={busy}
+            onChange={(address) => update({ address })}
+          />
         </Field>
       </div>
 

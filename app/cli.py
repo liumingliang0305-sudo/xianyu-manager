@@ -86,6 +86,7 @@ async def run_users(args: argparse.Namespace) -> int:
 
 
 def serve(args: argparse.Namespace) -> int:
+    from app import places
     from app.api import WEB_DIST, create_app
     from app.keepalive import LOGIN_CHECK_INTERVAL
 
@@ -107,6 +108,7 @@ def serve(args: argparse.Namespace) -> int:
         accounts_dir=args.accounts,
         login_check_interval=LOGIN_CHECK_INTERVAL,
         messages=True,
+        amap_key=places.load_key(),
     )
     run_server(app, args.host, args.port)
     return 0

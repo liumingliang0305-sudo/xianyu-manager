@@ -6,6 +6,7 @@ export const draftKeys = {
   list: (account: string) => ["drafts", account] as const,
   image: (account: string, sha: string) => ["draft-image", account, sha] as const,
   addresses: (account: string) => ["publish-addresses", account] as const,
+  places: (keyword: string) => ["publish-places", keyword] as const,
 }
 
 /** 本地的草稿，没发的在前。读本地，不请求闲鱼。 */
@@ -27,12 +28,23 @@ export function useDraftImage(account: string, draftId: number, sha: string | un
   })
 }
 
-/** 可选的发货地，会请求一次闲鱼；十分钟内不再查。 */
+/** 常用地址，会请求一次闲鱼；十分钟内不再查。 */
 export function useAddresses(account: string) {
   return useQuery({
     queryKey: draftKeys.addresses(account),
     queryFn: () => api.addresses(account),
     staleTime: 10 * 60_000,
+  })
+}
+
+/** 按名字搜发货地（高德）。同一个词十分钟内不再搜，空的不搜。 */
+export function usePlaces(keyword: string) {
+  return useQuery({
+    queryKey: draftKeys.places(keyword),
+    queryFn: () => api.searchPlaces(keyword),
+    enabled: keyword.trim() !== "",
+    staleTime: 10 * 60_000,
+    retry: false,
   })
 }
 
