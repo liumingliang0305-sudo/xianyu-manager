@@ -11,7 +11,7 @@ from fake_im import FakeIm, chat_message, conversation, entry, history_message, 
 from fakes import UNB, add_user, sign_in
 from fastapi.testclient import TestClient
 
-from app import messages
+from app import db, messages
 from app.api import create_app, sse_events
 from app.messages import ImLock, ImOfflineError, MessageHub, MessageStore
 from xianyu_core.credential import Credential
@@ -906,3 +906,54 @@ def test_api_records_orders_from_trade_messages(accounts, platform, database_url
         wait_for(client, {sold: "to_ship"})
     details = [d["tid"] for api, d in platform.calls if api.endswith("order.detail")]
     assert bought not in details  # 卡片上写着是买家的不拉
+
+
+def test_api_trade_message_triggers_item_sync(accounts, platform, database_url):
+    """卖出的订单从交易消息里新记下，过一会儿自动同步一次商品（卖掉的商品状态跟着变）。"""
+    sold = "5003000000001"
+    platform.orders[sold] = {
+        "item_id": "1001",
+        "status": "等待卖家发货",
+        "price": 35800,
+        "post": 0,
+        "created": 1761900000000,
+    }
+    now = time.time()
+    conn = db.connect(database_url)
+    # 定时同步都刚跑过，这次的商品同步只能是交易消息触发的
+    conn.executemany(
+        "INSERT INTO sync_jobs (account_id, job, last_run_at, next_run_at) VALUES (%s, %s, %s, %s)",
+        [(UNB, job, now, now + 3600) for job in ("items", "sold", "bought")],
+    )
+    conn.close()
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [conversation("777", UNB, "200", modified_ms=T + 3000)]
+    server.chats = {"777": [chat(1), card(2, sold)]}
+    app = create_app(
+        database_url=database_url,
+        guard=Guard(),
+        accounts_dir=accounts.root,
+        transport=httpx.MockTransport(platform),
+        interval=0,
+        web_dist=None,
+        messages=True,
+        im_connect=server.connect,
+        im_options=IM_OPTIONS,
+        auto_sync=True,
+        auto_sync_options={"tick": 3600, "trigger_delay": 0},
+    )
+    url = f"/api/accounts/{UNB}"
+    add_user(database_url, accounts=[UNB])
+    with TestClient(app) as client:
+        sign_in(client)
+        deadline = time.monotonic() + 3
+        while True:
+            jobs = {j["job"]: j for j in client.get(f"{url}/autosync").json()["jobs"]}
+            if jobs["items"]["last_trigger"] == "message":
+                break
+            assert time.monotonic() < deadline, jobs
+            time.sleep(0.01)
+        items = client.get(f"{url}/items").json()["items"]
+    assert sorted(i["item_id"] for i in items) == ["1001", "1002"]
+    assert jobs["sold"]["last_trigger"] is None  # 订单的定时同步没跑

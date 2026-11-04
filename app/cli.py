@@ -108,6 +108,7 @@ def serve(args: argparse.Namespace) -> int:
         accounts_dir=args.accounts,
         login_check_interval=LOGIN_CHECK_INTERVAL,
         messages=True,
+        auto_sync=True,
         amap_key=places.load_key(),
     )
     run_server(app, args.host, args.port)

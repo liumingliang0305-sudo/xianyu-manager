@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 
+import { autoSyncKeys, onSyncEvent } from "@/features/autosync/queries"
 import { api, subscribeMessages, type OrderSide } from "@/lib/api"
 
 export const orderKeys = {
@@ -17,16 +18,20 @@ export function useOrders(account: string) {
 }
 
 /**
- * 订阅后台的推送：交易消息自动记下、刷新了订单时推一条 orders，收到就刷新列表。
- * 断了会自己重连，重连上先刷新一次，补上断开期间漏掉的。
+ * 订阅后台的推送：交易消息自动记下、刷新了订单时推一条 orders，收到就刷新列表；
+ * 自动同步开始、结束推 sync（见 onSyncEvent）。断了会自己重连，重连上先刷新一次，补上断开期间漏掉的。
  */
 export function useOrderStream(account: string) {
   const client = useQueryClient()
   useEffect(() => {
     const controller = new AbortController()
-    const refresh = () => void client.invalidateQueries({ queryKey: orderKeys.list(account) })
-    const onEvent = (type: string) => {
-      if (type === "orders") refresh()
+    const refresh = () => {
+      void client.invalidateQueries({ queryKey: orderKeys.list(account) })
+      void client.invalidateQueries({ queryKey: autoSyncKeys.status(account) })
+    }
+    const onEvent = (type: string, data: string) => {
+      if (type === "orders") void client.invalidateQueries({ queryKey: orderKeys.list(account) })
+      else if (type === "sync") onSyncEvent(client, account, data)
     }
     void subscribeMessages(account, controller.signal, refresh, onEvent)
     return () => controller.abort()

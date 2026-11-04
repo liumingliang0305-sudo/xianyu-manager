@@ -513,6 +513,9 @@ class OrderFeed:
     同一笔订单在排队时又来了卡片，只拉一次。拉的时候拿账号的锁（和别的平台请求串行），过限流和熔断。
     出错（登录失效、风控、网络）就跳过这一笔：一笔订单从拍下到评价有好几张卡片，下一张来了会再拉，
     订单页的"刷新状态"也会刷新本地没结束的订单。
+
+    `on_status(账号, 订单)`：新记下一笔订单、或者订单状态变了时调，xym serve 里卖出的订单变了
+    就排一次商品同步（app/autosync.py）。
     """
 
     def __init__(
@@ -522,11 +525,13 @@ class OrderFeed:
         *,
         interval: float = 1.5,
         on_change: Callable[[str], None] | None = None,
+        on_status: Callable[[str, OrderRecord], None] | None = None,
     ):
         self._orders = orders
         self._locks = locks
         self._interval = interval
         self._on_change = on_change
+        self._on_status = on_status
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._pending: set[tuple[str, str]] = set()
         self._missing: set[tuple[str, str]] = set()
@@ -567,6 +572,7 @@ class OrderFeed:
     async def _track(self, account_id: str, order_id: str) -> str | None:
         try:
             async with self._locks[account_id]:
+                before = self._orders.get(account_id, order_id)
                 result = await self._orders.track(account_id, order_id)
         except (XianyuError, httpx.HTTPError) as exc:
             log.warning("账号 %s：交易消息里的订单 %s 没记上：%s", account_id, order_id, exc)
@@ -585,6 +591,9 @@ class OrderFeed:
             )
             if self._on_change:
                 self._on_change(account_id)
+            after = self._orders.get(account_id, order_id)
+            if self._on_status and after and (before is None or before.status != after.status):
+                self._on_status(account_id, after)
         return result
 
 

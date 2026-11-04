@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { AutoSyncButton } from "@/features/autosync/auto-sync-dialog"
+import { useAutoSyncVisit, useSyncJob, useSyncStream } from "@/features/autosync/queries"
 import { useCurrentAccount } from "@/hooks/use-account"
 import { useUrlParam } from "@/hooks/use-url-param"
 import { errorMessage, type Item } from "@/lib/api"
@@ -33,9 +35,19 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "all", label: "全部" },
 ]
 
-function SyncControls({ account, hasItems }: { account: string; hasItems: boolean }) {
+/** `running`：后台正在同步商品（自动的、或者别的页面点的），按钮先不让点 */
+function SyncControls({
+  account,
+  hasItems,
+  running,
+}: {
+  account: string
+  hasItems: boolean
+  running: boolean
+}) {
   const [withStats, setWithStats] = useState(true)
   const sync = useSyncItems(account)
+  const busy = sync.isPending || running
 
   const run = () =>
     sync.mutate(withStats, {
@@ -59,9 +71,9 @@ function SyncControls({ account, hasItems }: { account: string; hasItems: boolea
         </TooltipTrigger>
         <TooltipContent>逐个拉在售商品的详情，商品多时会慢一些</TooltipContent>
       </Tooltip>
-      <Button onClick={run} disabled={sync.isPending} variant={hasItems ? "outline" : "default"}>
-        {sync.isPending ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-        {sync.isPending ? "同步中…" : "从闲鱼同步"}
+      <Button onClick={run} disabled={busy} variant={hasItems ? "outline" : "default"}>
+        {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+        {busy ? "同步中…" : "从闲鱼同步"}
       </Button>
     </div>
   )
@@ -69,6 +81,9 @@ function SyncControls({ account, hasItems }: { account: string; hasItems: boolea
 
 export function ItemsPage() {
   const account = useCurrentAccount()
+  useSyncStream(account, ["items"])
+  useAutoSyncVisit(account, ["items"])
+  const syncing = useSyncJob(account, "items")?.running ?? false
   const items = useItems(account)
   const ops = useItemOps(account)
   const [tab, setTab] = useUrlParam<Tab>("status", "online", TABS.map((t) => t.value))
@@ -131,7 +146,9 @@ export function ItemsPage() {
   else if (items.isError)
     body = <LoadError what="读取本地商品" error={items.error} onRetry={() => void items.refetch()} />
   else if (all.length === 0)
-    body = (
+    body = syncing ? (
+      <EmptyState title="正在从闲鱼同步商品…">同步完列表会自己出来</EmptyState>
+    ) : (
       <EmptyState title="本地还没有商品">
         点右上角「从闲鱼同步」，把主页上的商品拉下来
       </EmptyState>
@@ -149,7 +166,12 @@ export function ItemsPage() {
       <PageHeader
         title="商品"
         description={`主页上的商品 · 上次同步 ${items.isPending ? "…" : timeAgo(items.data?.last_synced_at)}`}
-        actions={<SyncControls account={account} hasItems={all.length > 0} />}
+        actions={
+          <>
+            <AutoSyncButton account={account} job="items" />
+            <SyncControls account={account} hasItems={all.length > 0} running={syncing} />
+          </>
+        }
       />
 
       <div className="flex flex-col gap-3">

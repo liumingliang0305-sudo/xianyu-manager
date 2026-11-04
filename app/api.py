@@ -21,7 +21,10 @@
 - 编辑商品：POST .../items/{id}/edit 拿到这个商品的编辑草稿，之后和发布一样用
   .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
 - 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发；
-  请求体 {"publish": true} 是抄完直接发。
+  请求体 {"publish": true} 是抄完直接发；
+- 自动同步（app/autosync.py）：`auto_sync=True` 时商品、订单按交易消息、打开页面、定时三条路
+  自动同步，.../autosync 看状态、改设置；手动同步（.../items/sync、.../orders/sync）也记在一起。
+  同步开始、结束都通过消息的推送流发一条 sync 事件。
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ from app.auth import (
     TooManyAttemptsError,
     client_ip,
 )
+from app.autosync import INTERVAL_CHOICES, ITEMS, JOBS, MANUAL, AutoSync
 from app.drafts import Draft, DraftNotFoundError, DraftService, address_option
 from app.items import ItemService, PriceGuardError
 from app.login import (
@@ -66,7 +70,7 @@ from app.login import (
     same_login,
 )
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
-from app.orders import OrderFeed, OrderService
+from app.orders import OrderFeed, OrderRecord, OrderService
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.search import SearchService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
@@ -81,6 +85,7 @@ from xianyu_core.errors import (
 )
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
+from xianyu_core.order import SOLD
 from xianyu_core.publish import PublishBlockedError
 from xianyu_core.search import SearchQuery
 
@@ -180,6 +185,15 @@ class OrderSyncIn(BaseModel):
     side: str = "sold"  # sold 卖出的，bought 买到的
 
 
+class AutoSyncIn(BaseModel):
+    enabled: bool | None = None
+    interval: float | None = None  # 秒，只能是 INTERVAL_CHOICES 里的
+
+
+class VisitIn(BaseModel):
+    jobs: list[str]
+
+
 class CookieImportIn(BaseModel):
     cookie: str  # 浏览器开发者工具里复制的 Cookie 请求头
 
@@ -239,6 +253,8 @@ def create_app(
     im_connect: Callable[..., Awaitable[Any]] = websockets.connect,
     im_options: dict[str, Any] | None = None,
     auth_key: str | Path | None = None,
+    auto_sync: bool = False,
+    auto_sync_options: dict[str, Any] | None = None,
 ) -> FastAPI:
     """`database_url`：数据库连接串，不给时用 db.default_url()（环境变量 DATABASE_URL）。
     `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态。
@@ -250,6 +266,9 @@ def create_app(
 
     `messages`：连不连即时消息。不连时消息接口只能看本地库里已有的。
     `im_connect`、`im_options` 给测试换假的服务端、调快节奏（见 MessageHub）。
+
+    `auto_sync`：开不开自动同步（app/autosync.py）。不开时手动同步照样记结果。
+    `auto_sync_options` 给测试调快节奏（见 AutoSync）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
     searcher = SearchService(accounts)
@@ -279,12 +298,30 @@ def create_app(
         app.state.drafts = DraftService(
             conn, accounts, app.state.items, image_store.ImageStore(images_dir)
         )
-        # 交易消息里的订单自动记进本地库，记下了推给页面（hub 在下面建，回调时才用到）
+        # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
+        autosync = AutoSync(
+            conn,
+            accounts,
+            locks,
+            app.state.items,
+            app.state.orders,
+            publish=lambda account_id, event: hub.publish(account_id, event),
+            **(auto_sync_options or {}),
+        )
+        app.state.autosync = autosync
+
+        def order_status_changed(account_id: str, order: OrderRecord) -> None:
+            # 卖出的订单新记下、状态变了，商品多半也变了（卖掉了、退款后回到在售）
+            if order.side == SOLD:
+                autosync.later(account_id, ITEMS)
+
+        # 交易消息里的订单自动记进本地库，记下了推给页面
         feed = OrderFeed(
             app.state.orders,
             locks,
             interval=interval,
             on_change=lambda account_id: hub.publish(account_id, {"type": "orders"}),
+            on_status=order_status_changed,
         )
         hub = MessageHub(
             MessageStore(conn),
@@ -297,6 +334,8 @@ def create_app(
         app.state.messages = hub
         if messages:
             await hub.start()
+        if auto_sync:
+            autosync.start()
         keeper = None
         if login_check_interval:
             keeper = asyncio.create_task(
@@ -309,6 +348,7 @@ def create_app(
                 keeper.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await keeper
+            await autosync.aclose()
             await hub.aclose()
             await feed.aclose()
             for login in logins.values():
@@ -338,6 +378,18 @@ def create_app(
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
+
+    def autosync(request: Request) -> AutoSync:
+        return request.app.state.autosync
+
+    def autosync_info(request: Request, account_id: str) -> dict[str, Any]:
+        service = autosync(request)
+        return {
+            "active": service.active,
+            "paused": service.paused(account_id),
+            "intervals": list(INTERVAL_CHOICES),
+            "jobs": [asdict(s) for s in service.statuses(account_id)],
+        }
 
     def current_user(request: Request) -> User:
         """请求头里的访问令牌对应的用户。没带、过期、作废（改了密码、停用了）都是 401。"""
@@ -570,8 +622,7 @@ def create_app(
     @authed.post("/api/accounts/{account_id}/items/sync")
     async def sync_items(request: Request, account_id: str, body: SyncIn) -> dict[str, Any]:
         account_id = account(request, account_id)
-        async with locks[account_id]:
-            result = await items(request).sync(account_id, with_stats=body.stats)
+        result = await autosync(request).run(account_id, ITEMS, MANUAL, stats=body.stats)
         return asdict(result)
 
     @authed.get("/api/accounts/{account_id}/items/{item_id}/detail")
@@ -801,9 +852,10 @@ def create_app(
         """刷新一边的订单：买到的整页同步"我买到的"，卖出的见 OrderService.sync。
         不带请求体是卖出的。"""
         account_id = account(request, account_id)
-        side = body.side if body else "sold"
-        async with locks[account_id]:
-            result = await orders(request).sync(account_id, side)
+        side = body.side if body else SOLD
+        if side not in JOBS or side == ITEMS:
+            raise ValueError(f"不认识的订单类型：{side}")
+        result = await autosync(request).run(account_id, side, MANUAL)
         return asdict(result)
 
     @authed.post("/api/accounts/{account_id}/orders/scan")
@@ -855,6 +907,31 @@ def create_app(
     ) -> dict[str, Any]:
         ops = orders(request).history(account(request, account_id), order_id, limit=min(limit, 500))
         return {"ops": [asdict(op) for op in ops]}
+
+    @authed.get("/api/accounts/{account_id}/autosync")
+    async def autosync_status(request: Request, account_id: str) -> dict[str, Any]:
+        """自动同步的设置和每种同步上次的结果。`active`：后台开没开自动同步；`paused`：账号现在
+        为什么不自动同步（熔断、登录失效、碰到过风控），能同步时是 null。"""
+        return autosync_info(request, account(request, account_id))
+
+    @authed.put("/api/accounts/{account_id}/autosync/{job}")
+    async def configure_autosync(
+        request: Request, account_id: str, job: str, body: AutoSyncIn
+    ) -> dict[str, Any]:
+        """开关一种同步（items / sold / bought）、改定时的间隔。"""
+        account_id = account(request, account_id)
+        autosync(request).configure(account_id, job, enabled=body.enabled, interval=body.interval)
+        return autosync_info(request, account_id)
+
+    @authed.post("/api/accounts/{account_id}/autosync/visit")
+    async def visit_autosync(request: Request, account_id: str, body: VisitIn) -> dict[str, Any]:
+        """页面打开了：这几种同步数据旧了就在后台同步一次（见 AutoSync.visit），马上返回状态。"""
+        account_id = account(request, account_id)
+        unknown = set(body.jobs) - set(JOBS)
+        if unknown:
+            raise ValueError(f"不认识的同步：{', '.join(sorted(unknown))}")
+        autosync(request).visit(account_id, body.jobs)
+        return autosync_info(request, account_id)
 
     @authed.get("/api/accounts/{account_id}/conversations")
     async def list_conversations(request: Request, account_id: str) -> dict[str, Any]:

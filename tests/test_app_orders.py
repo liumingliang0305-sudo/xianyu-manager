@@ -209,6 +209,30 @@ def test_feed_records_orders_from_trade_messages(service, platform):
     assert [o.order_id for o in service.list(UNB, side="bought")] == [bought]
 
 
+def test_feed_reports_new_orders_and_status_changes(service, platform):
+    order_id = add_long_order(platform, "5003000000001")
+    seen = []
+
+    async def go():
+        feed = OrderFeed(
+            service,
+            defaultdict(asyncio.Lock),
+            interval=0,
+            on_status=lambda account_id, order: seen.append((account_id, order.status)),
+        )
+        feed.notify(UNB, order_id, "seller")  # 新记下
+        await feed.join()
+        feed.notify(UNB, order_id, "seller")  # 状态没变
+        await feed.join()
+        platform.orders[order_id]["status"] = "已发货"
+        feed.notify(UNB, order_id, "seller")  # 状态变了
+        await feed.join()
+        await feed.aclose()
+
+    run(go())
+    assert seen == [(UNB, TO_SHIP), (UNB, "shipped")]
+
+
 def test_sync_without_list_permission_refreshes_open_orders(service, platform):
     shipping = add_long_order(platform, "5003000000001")
     finished = add_long_order(platform, "5003000000002", status="交易成功")

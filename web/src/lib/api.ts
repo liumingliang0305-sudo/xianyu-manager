@@ -127,6 +127,40 @@ export interface SyncResult {
 /** 卖出的（当前账号是卖家）还是买到的 */
 export type OrderSide = "sold" | "bought"
 
+/** 自动同步的三种：商品、卖出的还没结束的订单、买到的订单 */
+export type SyncJob = "items" | OrderSide
+
+/** 谁触发的：定时、打开页面、交易消息、手动 */
+export type SyncTrigger = "schedule" | "visit" | "message" | "manual"
+
+export interface SyncJobStatus {
+  job: SyncJob
+  enabled: boolean
+  /** 定时同步的间隔，秒 */
+  interval: number
+  /** 上次跑完的时间，成功失败都算 */
+  last_run_at: number | null
+  last_ok_at: number | null
+  last_trigger: SyncTrigger | null
+  /** 上次失败的原因，成功了是 null */
+  last_error: string | null
+  /** 上次成功时各项几个：added、updated、gone（商品）或 changed、failed（订单） */
+  last_result: Record<string, number>
+  /** 下次定时同步的时间，null 是马上 */
+  next_run_at: number | null
+  running: boolean
+}
+
+export interface AutoSyncState {
+  /** 后台开没开自动同步（xym serve 才开） */
+  active: boolean
+  /** 账号现在为什么不自动同步（熔断、登录失效、碰到过风控），能同步时是 null */
+  paused: string | null
+  /** 能选的定时间隔，秒 */
+  intervals: number[]
+  jobs: SyncJobStatus[]
+}
+
 /** 后端按平台的状态文字归类，认不出的是 other */
 export type OrderStatus = "unpaid" | "to_ship" | "shipped" | "done" | "closed" | "refund" | "other"
 
@@ -484,6 +518,8 @@ async function request<T>(path: string, init?: RequestInit, { auth = true } = {}
 const itemsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/items`
 const draftsPath = (account: string) => `/accounts/${encodeURIComponent(account)}/drafts`
 const ordersPath = (account: string) => `/accounts/${encodeURIComponent(account)}/orders`
+
+const autoSyncPath = (account: string) => `/accounts/${encodeURIComponent(account)}/autosync`
 const convPath = (account: string, cid: string) =>
   `/accounts/${encodeURIComponent(account)}/conversations/${encodeURIComponent(cid)}`
 
@@ -670,6 +706,22 @@ export const api = {
     request<OrderSyncResult>(`${ordersPath(account)}/sync`, {
       method: "POST",
       body: JSON.stringify({ side }),
+    }),
+
+  autoSync: (account: string) => request<AutoSyncState>(autoSyncPath(account)),
+
+  /** 打开了页面：这几种数据旧了后台就同步一次（在后台跑，马上返回），同步完通过推送流通知 */
+  visitAutoSync: (account: string, jobs: SyncJob[]) =>
+    request<AutoSyncState>(`${autoSyncPath(account)}/visit`, {
+      method: "POST",
+      body: JSON.stringify({ jobs }),
+    }),
+
+  /** 开关一种自动同步、改定时的间隔（秒） */
+  configureAutoSync: (account: string, job: SyncJob, body: { enabled?: boolean; interval?: number }) =>
+    request<AutoSyncState>(`${autoSyncPath(account)}/${job}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
 
   /** 从本地存的消息里找订单（卖出的、买到的），逐笔拉详情记下来（会请求闲鱼，订单多时要一会儿） */

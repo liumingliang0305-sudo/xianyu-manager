@@ -222,3 +222,20 @@ messages = Table(
     Column("received_at", Double, nullable=False),
     Index("messages_conv", "account_id", "cid", "sent_at"),
 )
+
+# 自动同步（app/autosync.py）：每个账号每种同步一行，存设置和上次跑的结果。
+# 手动点同步也记在这里，定时任务从这次往后顺延
+sync_jobs = Table(
+    "sync_jobs",
+    metadata,
+    Column("account_id", Text, primary_key=True),
+    Column("job", Text, primary_key=True),  # items 商品 / sold 卖出的进行中订单 / bought 买到的订单
+    Column("enabled", Boolean, nullable=False, server_default=text("true")),
+    Column("interval", Double),  # 定时同步的间隔（秒），NULL 是默认值
+    Column("last_run_at", Double),  # 上次跑完的时间，成功失败都算
+    Column("last_ok_at", Double),  # 上次成功的时间
+    Column("last_trigger", Text),  # schedule 定时 / visit 打开页面 / message 交易消息 / manual 手动
+    Column("last_error", Text),  # 上次失败的原因，成功了清掉
+    Column("last_result", Text, nullable=False, server_default="{}"),  # JSON：上次成功时各项几个
+    Column("next_run_at", Double),  # 下次定时同步的时间，NULL 是到期了（从没跑过）
+)

@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AutoSyncButton } from "@/features/autosync/auto-sync-dialog"
+import { useAutoSyncVisit, useSyncJob } from "@/features/autosync/queries"
 import { useCurrentAccount } from "@/hooks/use-account"
 import { useUrlParam } from "@/hooks/use-url-param"
 import { errorMessage, type Order, type OrderSide, type OrderStatus } from "@/lib/api"
@@ -36,18 +38,21 @@ const DAY = 86_400
 
 /**
  * 买到的整页同步"我买到的"；卖出的个人卖家没有列表，是逐个拉本地还没结束的订单，专业卖家整页同步。
- * `primary`：这一边还没有订单时，同步就是第一步，用主按钮。
+ * `primary`：这一边还没有订单时，同步就是第一步，用主按钮。`running`：后台正在同步这一边，先不让点。
  */
 function RefreshButton({
   account,
   side,
   primary = false,
+  running = false,
 }: {
   account: string
   side: OrderSide
   primary?: boolean
+  running?: boolean
 }) {
   const sync = useSyncOrders(account)
+  const busy = sync.isPending || running
   const run = () =>
     sync.mutate(side, {
       onSuccess: (r) => {
@@ -69,9 +74,9 @@ function RefreshButton({
     })
   const label = side === "bought" ? "从闲鱼同步" : "刷新状态"
   return (
-    <Button onClick={run} disabled={sync.isPending} variant={primary ? "default" : "outline"}>
-      {sync.isPending ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-      {sync.isPending ? "同步中…" : label}
+    <Button onClick={run} disabled={busy} variant={primary ? "default" : "outline"}>
+      {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+      {busy ? "同步中…" : label}
     </Button>
   )
 }
@@ -112,6 +117,8 @@ export function OrdersPage() {
   const orders = useOrders(account)
   const ops = useOrderOps(account)
   const [side, setSide] = useUrlParam<OrderSide>("side", "sold", SIDES)
+  useAutoSyncVisit(account, [side])
+  const syncing = useSyncJob(account, side)?.running ?? false
   const [tab, setTab] = useUrlParam<Tab>("status", "all", TABS)
   const [search, setSearch] = useState("")
   const [action, setAction] = useState<{ kind: OrderActionKind; order: Order } | null>(null)
@@ -187,9 +194,10 @@ export function OrdersPage() {
     body = (
       <EmptyState
         title="还没有买到的订单"
-        action={<RefreshButton account={account} side={side} primary />}
+        action={<RefreshButton account={account} side={side} primary running={syncing} />}
       >
-        点「从闲鱼同步」把闲鱼「我买到的」整页拉下来；之后交易消息里的买到的订单也会自动记。
+        {"点「从闲鱼同步」把闲鱼「我买到的」整页拉下来；之后交易消息里的买到的订单会自动记，" +
+          "后台也会定时同步最新的几页。"}
       </EmptyState>
     )
   else if (visible.length === 0)
@@ -233,13 +241,16 @@ export function OrdersPage() {
           )
         }
         actions={
-          all.length > 0 && (
-            <>
-              <ScanButton account={account} />
-              <RefreshButton account={account} side={side} />
-              {add}
-            </>
-          )
+          <>
+            <AutoSyncButton account={account} job={side} />
+            {all.length > 0 && (
+              <>
+                <ScanButton account={account} />
+                <RefreshButton account={account} side={side} running={syncing} />
+                {add}
+              </>
+            )}
+          </>
         }
       />
 
