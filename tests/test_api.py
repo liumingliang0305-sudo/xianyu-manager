@@ -485,6 +485,16 @@ def test_relist_item_through_publish_draft(client, platform):
     assert (op["action"], op["item_id"], op["detail"]["from_item"]) == ("relist", "9001", "1002")
 
 
+def test_relist_item_directly(client, platform):
+    client.post(items_url("/sync"), json={})
+    draft = client.post(items_url("/1002/relist"), json={"publish": True}).json()
+    assert (draft["item_id"], draft["relist_item_id"]) == ("9001", "1002")
+    items = {it["item_id"]: it for it in client.get(items_url()).json()["items"]}
+    assert items["9001"]["status"] == 0
+    [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
+    assert (op["action"], op["item_id"]) == ("relist", "9001")
+
+
 def test_draft_errors(client, platform):
     assert client.get(drafts_url("/999")).json()["code"] == "draft_not_found"
     draft = client.post(drafts_url()).json()

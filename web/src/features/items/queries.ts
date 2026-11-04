@@ -70,15 +70,25 @@ export function useDownshelf(account: string) {
   })
 }
 
-/** 重新上架：拿到照这个商品抄的草稿，放进发布页的列表（已经在里面的换掉），跳过去时直接就是它。 */
+/**
+ * 重新上架：照这个商品抄一个草稿。publish 是抄完直接发，否则拿到草稿放进发布页的列表（已经在里面的换掉），
+ * 跳过去时直接就是它。直接发的成功失败都要刷新：新商品进列表，失败的草稿和原因进发布页。
+ */
 export function useRelist(account: string) {
   const client = useQueryClient()
+  const refresh = useRefresh(account)
   return useMutation({
-    mutationFn: (itemId: string) => api.relistItem(account, itemId),
+    mutationFn: (v: { itemId: string; publish: boolean }) =>
+      api.relistItem(account, v.itemId, v.publish),
     onSuccess: (draft) =>
       client.setQueryData<Draft[]>(draftKeys.list(account), (old) =>
         old ? [draft, ...old.filter((d) => d.id !== draft.id)] : old,
       ),
+    onSettled: (_data, _error, v) => {
+      if (!v.publish) return
+      refresh()
+      client.invalidateQueries({ queryKey: draftKeys.list(account) })
+    },
   })
 }
 

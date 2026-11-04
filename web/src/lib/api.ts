@@ -635,9 +635,12 @@ export const api = {
   editItem: (account: string, itemId: string) =>
     request<Draft>(`${itemsPath(account)}/${itemId}/edit`, { method: "POST" }),
 
-  /** 照下架、卖掉的商品抄一个发新商品的草稿，有没发的就接着用（没有时请求一次闲鱼） */
-  relistItem: (account: string, itemId: string) =>
-    request<Draft>(`${itemsPath(account)}/${itemId}/relist`, { method: "POST" }),
+  /** 照下架、卖掉的商品抄一个发新商品的草稿，有没发的就接着用（没有时请求一次闲鱼）；publish 是抄完直接发 */
+  relistItem: (account: string, itemId: string, publish = false) =>
+    request<Draft>(`${itemsPath(account)}/${itemId}/relist`, {
+      method: "POST",
+      body: JSON.stringify({ publish }),
+    }),
 
   downshelf: (account: string, itemId: string) =>
     request<{ ok: true }>(`${itemsPath(account)}/${itemId}/downshelf`, { method: "POST" }),

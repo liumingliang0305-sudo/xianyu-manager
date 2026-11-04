@@ -4,6 +4,7 @@ import {
   EllipsisIcon,
   ExternalLinkIcon,
   EyeIcon,
+  Loader2Icon,
   PencilIcon,
   SquarePenIcon,
   Trash2Icon,
@@ -31,8 +32,15 @@ import { count, itemState, itemUrl, yuan } from "@/lib/format"
 
 import { ItemThumb, StateBadge } from "./item-bits"
 
-/** edit 是去编辑页，relist 是抄成草稿去发布页，别的在商品页上弹窗 */
-export type ItemActionKind = "detail" | "price" | "edit" | "downshelf" | "delete" | "relist"
+/** edit 是去编辑页，relist 是照原样直接发一个新商品，relist-edit 是抄成草稿去发布页改好了再发，别的在商品页上弹窗 */
+export type ItemActionKind =
+  | "detail"
+  | "price"
+  | "edit"
+  | "downshelf"
+  | "delete"
+  | "relist"
+  | "relist-edit"
 
 type OnAction = (kind: ItemActionKind, item: Item) => void
 
@@ -86,6 +94,10 @@ function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
               <ArchiveRestoreIcon />
               重新上架
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onAction("relist-edit", item)}>
+              <SquarePenIcon />
+              编辑后上架
+            </DropdownMenuItem>
           </>
         )}
         <DropdownMenuSeparator />
@@ -117,8 +129,16 @@ function ItemCell({ item, onAction }: { item: Item; onAction: OnAction }) {
   )
 }
 
-/** 宽屏是表格，最后一行是合计；768px 以下换成两行的列表，字段挪到第二行，不丢 */
-export function ItemsTable({ items, onAction }: { items: Item[]; onAction: OnAction }) {
+/** 宽屏是表格，最后一行是合计；768px 以下换成两行的列表，字段挪到第二行，不丢。relisting 是正在重新上架的商品 */
+export function ItemsTable({
+  items,
+  onAction,
+  relisting,
+}: {
+  items: Item[]
+  onAction: OnAction
+  relisting?: string | null
+}) {
   // 在售商品没拉浏览、收藏时提示一句；已卖出的本来就不拉
   const missingStats = items.some((it) => itemState(it) === "online" && it.browse_count == null)
   return (
@@ -167,10 +187,29 @@ export function ItemsTable({ items, onAction }: { items: Item[]; onAction: OnAct
                         </Button>
                       </>
                     ) : (
-                      <Button variant="outline" size="sm" onClick={() => onAction("relist", item)}>
-                        <ArchiveRestoreIcon />
-                        重新上架
-                      </Button>
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={relisting === item.item_id}
+                          onClick={() => onAction("relist", item)}
+                        >
+                          {relisting === item.item_id ? (
+                            <Loader2Icon className="animate-spin" />
+                          ) : (
+                            <ArchiveRestoreIcon />
+                          )}
+                          {relisting === item.item_id ? "上架中…" : "重新上架"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAction("relist-edit", item)}
+                        >
+                          <SquarePenIcon />
+                          编辑后上架
+                        </Button>
+                      </>
                     )}
                     <ItemMenu item={item} onAction={onAction} />
                   </div>

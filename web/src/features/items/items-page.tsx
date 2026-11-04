@@ -76,21 +76,40 @@ export function ItemsPage() {
   const [action, setAction] = useState<{ kind: ItemActionKind; item: Item } | null>(null)
   const navigate = useNavigate()
   const relist = useRelist(account)
-  // 重新上架先抄成草稿（可能要请求一次闲鱼），再去发布页打开它，改好了在那里发
-  const startRelist = (item: Item) => {
+  // 编辑后上架：先抄成草稿（可能要请求一次闲鱼），再去发布页打开它，改好了在那里发
+  const editRelist = (item: Item) => {
     if (relist.isPending) return
     const loading = toast.loading("正在照原商品建草稿…")
-    relist.mutate(item.item_id, {
-      onSuccess: (draft) => navigate(`/publish?draft=${draft.id}`),
-      onError: (error) => toast.error(`重新上架失败：${errorMessage(error)}`),
-      onSettled: () => toast.dismiss(loading),
-    })
+    relist.mutate(
+      { itemId: item.item_id, publish: false },
+      {
+        onSuccess: (draft) => navigate(`/publish?draft=${draft.id}`),
+        onError: (error) => toast.error(`建草稿失败：${errorMessage(error)}`),
+        onSettled: () => toast.dismiss(loading),
+      },
+    )
+  }
+  // 重新上架：照原样直接发一个新商品。发不出去时草稿留在发布页，可以去改了再发
+  const relistNow = (item: Item) => {
+    if (relist.isPending) return
+    relist.mutate(
+      { itemId: item.item_id, publish: true },
+      {
+        onSuccess: (draft) => toast.success(`已重新上架，新商品 ID ${draft.item_id}`),
+        onError: (error) =>
+          toast.error(`重新上架失败：${errorMessage(error)}`, {
+            action: { label: "编辑后上架", onClick: () => editRelist(item) },
+          }),
+      },
+    )
   }
   const onAction = (kind: ItemActionKind, item: Item) => {
     if (kind === "edit") navigate(`/items/${item.item_id}/edit`)
-    else if (kind === "relist") startRelist(item)
+    else if (kind === "relist") relistNow(item)
+    else if (kind === "relist-edit") editRelist(item)
     else setAction({ kind, item })
   }
+  const relisting = relist.isPending && relist.variables.publish ? relist.variables.itemId : null
 
   const all = useMemo(() => items.data?.items ?? [], [items.data])
   const byState = useMemo(() => {
@@ -123,7 +142,7 @@ export function ItemsPage() {
         {query ? `「${search.trim()}」没有匹配的商品` : `没有${TABS.find((t) => t.value === tab)?.label}的商品`}
       </EmptyState>
     )
-  else body = <ItemsTable items={visible} onAction={onAction} />
+  else body = <ItemsTable items={visible} onAction={onAction} relisting={relisting} />
 
   return (
     <div className="flex flex-col gap-6">

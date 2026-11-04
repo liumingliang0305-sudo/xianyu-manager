@@ -20,7 +20,8 @@
   存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）；
 - 编辑商品：POST .../items/{id}/edit 拿到这个商品的编辑草稿，之后和发布一样用
   .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
-- 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发。
+- 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发；
+  请求体 {"publish": true} 是抄完直接发。
 """
 
 from __future__ import annotations
@@ -165,6 +166,10 @@ class PriceIn(BaseModel):
 
 class PublishIn(BaseModel):
     force: bool = False  # 编辑草稿改价超过保护线也提交
+
+
+class RelistIn(BaseModel):
+    publish: bool = False  # True 抄完直接发到闲鱼，False 只抄成草稿，在发布页改好了再发
 
 
 class OrderAddIn(BaseModel):
@@ -600,11 +605,18 @@ def create_app(
         return _draft(draft)
 
     @authed.post("/api/accounts/{account_id}/items/{item_id}/relist")
-    async def relist_item(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
-        """照这个商品抄一个发新商品的草稿（请求一次 editDetail），有没发的就接着用。"""
+    async def relist_item(
+        request: Request, account_id: str, item_id: str, body: RelistIn | None = None
+    ) -> dict[str, Any]:
+        """照这个商品抄一个发新商品的草稿（请求一次 editDetail），有没发的就接着用。
+
+        `publish` 是抄完直接发；发失败了草稿留在发布页的列表里，原因记在上面。
+        """
         account_id = account(request, account_id)
         async with locks[account_id]:
             draft = await drafts(request).relist_item(account_id, item_id)
+            if body and body.publish:
+                draft = await drafts(request).publish(account_id, draft.id)
         return _draft(draft)
 
     @authed.post("/api/accounts/{account_id}/items/{item_id}/downshelf")
