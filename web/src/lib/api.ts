@@ -23,11 +23,41 @@ export interface LoginStatus {
   keep_login_until: number | null
 }
 
+/** 从平台个人主页拉来的资料，一天拉一次；没拉到过时都是空的，fetched_at 是 null */
+export interface AccountProfile {
+  nick: string
+  /** 头像地址（https），没有是空串 */
+  avatar: string
+  /** IP 属地，"广东省" */
+  ip_location: string
+  /** "卖家信用极好"，没有是空串 */
+  seller_credit: string
+  followers: number | null
+  fetched_at: number | null
+}
+
+/** 本地库里数出来的概况，不请求平台 */
+export interface AccountStats {
+  /** 在售商品（主页上还在的） */
+  on_sale: number
+  /** 卖出的、待发货的订单 */
+  to_ship: number
+  /** 未读消息 */
+  unread: number
+}
+
 export interface Account {
   id: string
   saved_at: number | null
+  /** 归到这个用户名下的时间 */
+  added_at: number | null
   login: LoginStatus
   block: AccountBlock | null
+  profile: AccountProfile
+  /** 自己写的备注，平台上看不到；没写是空串 */
+  remark: string
+  stats: AccountStats
+  im: ImStatus
 }
 
 /**
@@ -630,6 +660,17 @@ export const api = {
     request<{ ok: boolean }>(`/accounts/${encodeURIComponent(account)}/block`, {
       method: "DELETE",
     }),
+
+  /** 改备注（最多 20 个字），空串是清掉 */
+  setRemark: (account: string, remark: string) =>
+    request<Account>(`/accounts/${encodeURIComponent(account)}/remark`, {
+      method: "PUT",
+      body: JSON.stringify({ remark }),
+    }),
+
+  /** 移除账号：删登录凭证和归属，本地的商品、订单、消息留着 */
+  removeAccount: (account: string) =>
+    request<{ ok: true }>(`/accounts/${encodeURIComponent(account)}`, { method: "DELETE" }),
 
   /** 取一张新二维码，上一张没扫完的作废 */
   startLogin: () => request<LoginProgress & { qr_svg: string }>("/login", { method: "POST" }),

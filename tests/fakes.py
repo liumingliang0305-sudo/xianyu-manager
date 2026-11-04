@@ -77,6 +77,10 @@ class FakePlatform:
         self.bad_words: list[str] = []
         self.amap_queries: list[dict] = []  # 高德关键字搜索收到的参数
         self.amap_info = "OK"  # 不是 OK 时高德返回出错（key 不对、额度用完）
+        # 账号矩阵：unb → 个人主页的昵称（没有的回"鱼友<unb>"）
+        self.nicknames: dict[str, str] = {}
+        self.unb = UNB  # 这次请求 cookie 里的 unb
+        self.login_user: str | None = None  # 设了的话"当前登录用户"总是它，不看 cookie
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "passport.goofish.com":
@@ -90,6 +94,7 @@ class FakePlatform:
         data = json.loads(form["data"])
         self.calls.append((api, data))
         self.headers.append(request.headers)
+        self.unb = _jar(request).get("unb") or UNB
         if self.session_expired:
             return httpx.Response(200, json={"ret": ["FAIL_SYS_SESSION_EXPIRED::Session过期"]})
         if api in self.fail:
@@ -116,7 +121,27 @@ class FakePlatform:
         )
 
     def mtop_taobao_idlemessage_pc_loginuser_get(self, data):
-        return {"userId": int(UNB)}
+        return {"userId": int(self.login_user or self.unb)}
+
+    def mtop_idle_web_user_page_head(self, data):
+        assert data == {"self": True}
+        return {
+            "baseInfo": {"kcUserId": self.unb, "self": True},
+            "module": {
+                "base": {
+                    "displayName": self.nicknames.get(self.unb, f"鱼友{self.unb}"),
+                    "avatar": {"avatar": f"http://img.alicdn.com/bao/uploaded/{self.unb}.jpg"},
+                    "ipLocation": "广东省",
+                    "introduction": "",
+                    "ylzTags": [
+                        {"code": "cs_seller_level", "text": "卖家信用极好", "attributes": {}},
+                        {"code": "cs_buyer_level", "text": "买家信用良好", "attributes": {}},
+                    ],
+                },
+                "social": {"followStatus": 1, "followers": "3", "following": "8"},
+                "tabs": {"item": {"number": 2, "name": "宝贝"}},
+            },
+        }
 
     def mtop_taobao_idlemessage_pc_login_token(self, data):
         self.im_tokens += 1
@@ -454,6 +479,14 @@ class FakePlatform:
 
 
 # ---- 发布 ----
+
+
+def _jar(request: httpx.Request) -> dict[str, str]:
+    cookies = {}
+    for part in request.headers.get("cookie", "").split(";"):
+        name, _, value = part.strip().partition("=")
+        cookies[name] = value
+    return cookies
 
 
 def png(color="red", size=(80, 60), mode="RGB") -> bytes:

@@ -3,11 +3,13 @@ import {
   CheckIcon,
   ChevronsUpDownIcon,
   KeyRoundIcon,
+  LayoutGridIcon,
   LogOutIcon,
   MessageSquareIcon,
   MoonIcon,
   PackageIcon,
   PlugIcon,
+  PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -18,9 +20,10 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useState, type ComponentType } from "react"
-import { NavLink, Outlet } from "react-router"
+import { NavLink, Outlet, useMatch, useNavigate } from "react-router"
 import { toast } from "sonner"
 
+import { AccountAvatar, LoginDot } from "@/components/account-bits"
 import { Brand } from "@/components/brand"
 import { Callout } from "@/components/callout"
 import { GuardBanner } from "@/components/guard-banner"
@@ -40,7 +43,8 @@ import { PasswordDialog } from "@/features/auth/password-dialog"
 import { PluginTokenDialog } from "@/features/auth/plugin-token-dialog"
 import { useAccount } from "@/hooks/use-account"
 import { useUser } from "@/hooks/use-auth"
-import { api, errorMessage, type Account, type LoginState, type LoginStatus } from "@/lib/api"
+import { LOGIN_LABEL, accountName, loginHint, maskId } from "@/lib/account"
+import { api, errorMessage, type Account, type LoginStatus } from "@/lib/api"
 import { signOut } from "@/lib/auth"
 import { dateTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -51,6 +55,7 @@ interface NavEntry {
   icon: ComponentType<{ className?: string }>
 }
 
+// 当前账号的几页
 const NAV: NavEntry[] = [
   { to: "/items", label: "商品", icon: PackageIcon },
   { to: "/publish", label: "发布", icon: SquarePenIcon },
@@ -58,26 +63,36 @@ const NAV: NavEntry[] = [
   { to: "/messages", label: "消息", icon: MessageSquareIcon },
   { to: "/search", label: "搜索", icon: SearchIcon },
 ]
+// 管所有账号的，和上面分开放
+const ACCOUNTS_NAV: NavEntry = { to: "/accounts", label: "账号矩阵", icon: LayoutGridIcon }
 
 const NAV_ITEM =
   "flex items-center gap-2 rounded-lg text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
 const NAV_ACTIVE = "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
 const NAV_IDLE = "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
 
-/** 宽屏：侧栏里竖着排，带图标 */
+function SideNavLink({ to, label, icon: Icon }: NavEntry) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) => cn(NAV_ITEM, "h-8 px-2.5", isActive ? NAV_ACTIVE : NAV_IDLE)}
+    >
+      <Icon className="size-4" />
+      {label}
+    </NavLink>
+  )
+}
+
+/** 宽屏：侧栏里竖着排，带图标。当前账号的几页在上，账号矩阵隔开放在下面 */
 function SideNav() {
   return (
     <nav aria-label="主导航" className="flex flex-col gap-0.5">
-      {NAV.map(({ to, label, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          className={({ isActive }) => cn(NAV_ITEM, "h-8 px-2.5", isActive ? NAV_ACTIVE : NAV_IDLE)}
-        >
-          <Icon className="size-4" />
-          {label}
-        </NavLink>
+      {NAV.map((entry) => (
+        <SideNavLink key={entry.to} {...entry} />
       ))}
+      <div className="mt-3">
+        <SideNavLink {...ACCOUNTS_NAV} />
+      </div>
     </nav>
   )
 }
@@ -86,7 +101,7 @@ function SideNav() {
 function TopNav() {
   return (
     <nav aria-label="主导航" className="flex items-center gap-0.5">
-      {NAV.map(({ to, label }) => (
+      {[...NAV, ACCOUNTS_NAV].map(({ to, label }) => (
         <NavLink
           key={to}
           to={to}
@@ -99,46 +114,13 @@ function TopNav() {
   )
 }
 
-function maskId(id: string) {
-  return id.length > 6 ? `${id.slice(0, 3)}…${id.slice(-4)}` : id
-}
-
-const LOGIN_LABEL: Record<LoginState, string> = {
-  valid: "有效",
-  expired: "已失效",
-  risk: "风控",
-  error: "未知",
-}
-
-const LOGIN_DOT: Record<LoginState, string> = {
-  valid: "bg-positive",
-  expired: "bg-destructive",
-  risk: "bg-warning-ink",
-  error: "bg-muted-foreground",
-}
-
-function loginHint(login: LoginStatus): string {
-  switch (login.state) {
-    case "valid":
-      return login.keep_login_until
-        ? `保持登录到 ${dateTime(login.keep_login_until)}`
-        : "没开保持登录，过期后要重新登录"
-    case "expired":
-      return "要重新登录"
-    case "risk":
-      return "到闲鱼 App 或网页完成验证后再检查"
-    case "error":
-      return "没查出来，稍后重新检查"
-  }
-}
-
-function LoginDot({ state }: { state: LoginState }) {
-  return <span className={cn("size-2 shrink-0 rounded-full", LOGIN_DOT[state])} aria-hidden />
-}
-
-/** 当前账号和登录态。宽屏放在侧栏顶上（这个后台管的是哪个账号），窄屏放在顶栏右边。 */
+/**
+ * 当前账号和登录态。宽屏放在侧栏顶上（这个后台管的是哪个账号），窄屏放在顶栏右边。
+ * 菜单里能切到别的账号、添加账号、去账号矩阵管所有账号。
+ */
 function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; compact?: boolean }) {
   const { accounts, account, setAccount } = useAccount()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const check = useMutation({
     mutationFn: api.checkAccount,
@@ -157,52 +139,62 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
   const current = accounts.find((a) => a.id === account)
   if (!account || !current) return null
   const state = current.login.state
+  const name = accountName(current)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {compact ? (
-          <Button variant="ghost" size="sm" aria-label={`闲鱼账号 ${account}，登录${LOGIN_LABEL[state]}`}>
-            <span className="font-mono" translate="no">
-              {maskId(account)}
-            </span>
+          <Button variant="ghost" size="sm" aria-label={`闲鱼账号 ${name}，登录${LOGIN_LABEL[state]}`}>
+            <span className="max-w-32 truncate">{name}</span>
             <LoginDot state={state} />
           </Button>
         ) : (
           <button
             type="button"
+            aria-label={`闲鱼账号 ${name}，登录${LOGIN_LABEL[state]}，点开切换`}
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors outline-none hover:bg-sidebar-accent/60 focus-visible:ring-3 focus-visible:ring-ring/50 aria-expanded:bg-sidebar-accent"
           >
+            <AccountAvatar account={current} size={32} />
             <span className="min-w-0 flex-1">
-              <span className="block text-xs text-muted-foreground">闲鱼账号</span>
-              <span className="flex items-center gap-1.5 text-sm">
-                <span className="font-mono" translate="no">
-                  {maskId(account)}
-                </span>
+              <span className="block truncate text-sm font-medium">{name}</span>
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <LoginDot state={state} />
-                <span className="text-xs text-muted-foreground">登录{LOGIN_LABEL[state]}</span>
+                <span className="truncate">
+                  登录{LOGIN_LABEL[state]}
+                  {current.remark && ` · ${current.remark}`}
+                </span>
               </span>
             </span>
             <ChevronsUpDownIcon className="size-4 shrink-0 text-muted-foreground" />
           </button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={compact ? "end" : "start"} className="w-64">
-        <DropdownMenuLabel>闲鱼账号</DropdownMenuLabel>
+      <DropdownMenuContent align={compact ? "end" : "start"} className="w-72">
+        <DropdownMenuLabel>切换账号</DropdownMenuLabel>
         {accounts.map((a) => (
-          <DropdownMenuItem key={a.id} onSelect={() => setAccount(a.id)}>
-            <div className="flex min-w-0 flex-col">
-              <span className="flex items-center gap-1.5">
-                <span className="font-mono" translate="no">
-                  {a.id}
-                </span>
-                <LoginDot state={a.login.state} />
-                <span className="text-xs text-muted-foreground">{LOGIN_LABEL[a.login.state]}</span>
+          <DropdownMenuItem key={a.id} onSelect={() => setAccount(a.id)} className="gap-2.5">
+            <AccountAvatar account={a} size={28} />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{accountName(a)}</span>
+                {a.remark && (
+                  <span className="shrink-0 text-xs text-muted-foreground">{a.remark}</span>
+                )}
               </span>
-              <span className="text-xs text-muted-foreground">{loginHint(a.login)}</span>
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <LoginDot state={a.login.state} />
+                <span>{LOGIN_LABEL[a.login.state]}</span>
+                {a.profile.nick && (
+                  <span className="font-mono" translate="no">
+                    {maskId(a.id)}
+                  </span>
+                )}
+              </span>
             </div>
             {a.id === account && <CheckIcon className="ml-auto" />}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={check.isPending}
           onSelect={(event) => {
@@ -212,12 +204,15 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
           }}
         >
           <RefreshCwIcon className={cn(check.isPending && "animate-spin")} />
-          重新检查登录态
+          重新检查当前账号的登录态
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onLogin}>
-          <QrCodeIcon />
-          重新登录
+          {state === "expired" ? <QrCodeIcon /> : <PlusIcon />}
+          {state === "expired" ? "重新登录" : "添加账号"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate("/accounts")}>
+          <LayoutGridIcon />
+          管理全部账号
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -341,6 +336,9 @@ function LoginBanner({ login, onLogin }: { login: LoginStatus; onLogin: () => vo
 
 function Content({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, isLoading, error } = useAccount()
+  // 账号矩阵管的是所有账号：没有账号时也能进（在那里加），也不放当前账号的登录、熔断提示
+  const onAccounts = useMatch("/accounts")
+  if (onAccounts) return <Outlet />
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">

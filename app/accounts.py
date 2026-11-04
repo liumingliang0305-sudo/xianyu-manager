@@ -186,6 +186,14 @@ class Accounts:
                 raise AuthRequiredError("登录态对应的账号和 cookie 里的 unb 不一致")
             return client.credential
 
+    def remove(self, account_id: str) -> None:
+        """删掉凭证文件，这个账号就不在 ids() 里了，后台的定时任务、即时消息都不会再碰它。
+
+        即时消息的设备 ID（<unb>.im.json）留着：重新登录回来还用原来那个，不像换了设备。
+        """
+        self.path(account_id).unlink(missing_ok=True)
+        self._status.pop(account_id, None)
+
     def forget_login(self, account_id: str) -> None:
         """忘掉记下的登录态，下次用到时重新确认（比如手动解除熔断以后）。"""
         self._status.pop(account_id, None)

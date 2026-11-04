@@ -70,6 +70,21 @@ account_owners = Table(
     Index("account_owners_user", "user_id"),
 )
 
+# 账号矩阵（app/matrix.py）里每个账号的资料：昵称、头像这些从平台个人主页拉来的，备注是自己写的。
+# 移除账号时一起删
+account_profiles = Table(
+    "account_profiles",
+    metadata,
+    Column("account_id", Text, primary_key=True),
+    Column("nick", Text, nullable=False, server_default=""),
+    Column("avatar", Text, nullable=False, server_default=""),
+    Column("ip_location", Text, nullable=False, server_default=""),
+    Column("seller_credit", Text, nullable=False, server_default=""),  # "卖家信用极好"
+    Column("followers", Integer),
+    Column("fetched_at", Double),  # 上次从平台拉资料的时间，没拉到过是 NULL
+    Column("remark", Text, nullable=False, server_default=""),  # 自己写的备注
+)
+
 items = Table(
     "items",
     metadata,

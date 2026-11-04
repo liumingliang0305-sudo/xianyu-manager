@@ -227,10 +227,23 @@ class Users:
         return self.owner(account_id) == user_id
 
     def account_ids(self, user_id: int) -> set[str]:
+        return set(self.accounts_added(user_id))
+
+    def accounts_added(self, user_id: int) -> dict[str, float]:
+        """名下的账号 → 归到名下的时间，先归来的在前。"""
         rows = self._db.execute(
-            "SELECT account_id FROM account_owners WHERE user_id = %s", (user_id,)
+            "SELECT account_id, created_at FROM account_owners WHERE user_id = %s"
+            " ORDER BY created_at, account_id",
+            (user_id,),
         ).fetchall()
-        return {row["account_id"] for row in rows}
+        return {row["account_id"]: row["created_at"] for row in rows}
+
+    def release(self, account_id: str, user_id: int) -> None:
+        """移除账号：不再归这个用户。之后谁登录这个账号就归谁。"""
+        self._db.execute(
+            "DELETE FROM account_owners WHERE account_id = %s AND user_id = %s",
+            (account_id, user_id),
+        )
 
     def claim(self, account_id: str, user_id: int) -> None:
         """登录了一个闲鱼账号：还没有归属就归这个用户；已经归别人了抛 AccountTakenError。"""

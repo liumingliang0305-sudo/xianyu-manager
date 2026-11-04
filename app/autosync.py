@@ -309,6 +309,8 @@ class AutoSync:
         finally:
             # 先撤掉再跑：跑的时候又来了卡片，要再排一次，不能当成已经排着
             self._delayed.pop((account_id, job), None)
+        if account_id not in self._accounts.ids():
+            return  # 等的时候账号被移除了
         status = self.status(account_id, job)
         if status.enabled and not status.running and not self.paused(account_id):
             self._mark(account_id, job)

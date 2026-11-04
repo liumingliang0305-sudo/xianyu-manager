@@ -732,6 +732,17 @@ class MessageHub:
             raise ValueError(f"找不到账号 {account_id}")
         self._start(account_id)
 
+    async def stop(self, account_id: str) -> None:
+        """移除账号时调：断开这个账号的连接，放开它的 ImLock。凭证文件删了以后不会再连。"""
+        line = self._lines.pop(account_id, None)
+        if line and line.task and not line.task.done():
+            line.task.cancel()
+            await asyncio.gather(line.task, return_exceptions=True)
+        claim = self._claims.pop(account_id, None)
+        if claim:
+            claim.release()
+        self._publish_status(account_id)
+
     def resume(self, account_id: str) -> None:
         """登录、解除熔断以后调：这个账号没在连的话马上连。"""
         if not self.running:

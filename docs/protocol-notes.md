@@ -554,7 +554,7 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 |---|---|
 | `mtop.taobao.idlemessage.pc.login.token` | 即时消息的 accessToken。✅ 见上面"即时消息" |
 | `mtop.taobao.idlemessage.pc.loginuser.get` | 当前登录用户。✅ 只返回 `userId`（等于 cookie 里的 `unb`），没有昵称 |
-| `mtop.idle.web.user.page.head` | 个人主页头部，`{"self": true}` 查自己。✅ 昵称在 `module.base.displayName` |
+| `mtop.idle.web.user.page.head` | 个人主页头部，`{"self": true}` 查自己。✅ 昵称在 `module.base.displayName`，见下面"账号资料" |
 | `mtop.taobao.idlemessage.pc.user.query` | 会话里对方的昵称。✅ v4.0，data `{type: 对方的用户类型, sessionType: 会话的 bizType, sessionId: 会话 ID, isOwner: false}`（不传对方 ID；对方类型看 extUserId 是不是自己，是的话取 ownerUserType，否则取 extUserType）。返回 `userInfo` 里的 `fishNick`（闲鱼昵称）、`nick`（打了码的账号名，"x***0"）、`logo`；网页版显示 `fishNick`，没有才用 `nick` |
 | `mtop.taobao.idlemessage.pc.session.sync` | 同步会话 |
 | `mtop.taobao.idle.pc.detail` | 商品详情。✅ 见上面"商品管理" |
@@ -570,3 +570,19 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 | `mtop.taobao.idle.merchant.rate.list` | 评价列表 |
 | `mtop.taobao.idlemtopsearch.pc.search` | 搜索。✅ 见上面"搜索" |
 | `mtop.idle.web.user.page.nav` | 个人主页导航 |
+
+## 账号资料
+
+账号矩阵（`app/matrix.py`）显示每个账号的昵称、头像这些，用的是个人主页头部 `mtop.idle.web.user.page.head`，
+请求体 `{"self": true}`（查自己，不用传 ID），只读，网页端打开"我的主页"时也调它。解析在 `xianyu_core/profile.py`。
+
+✅ 2026-11-04 用自己的账号实测，`data` 里是 `baseInfo`、`module`、`needDecryptKeys`：
+
+- `module.base`：`displayName` 昵称；`avatar.avatar` 头像地址（`http://img.alicdn.com/bao/uploaded/...jpg`，
+  页面上换成 https，加 `_80x80.jpg` 取小图）；`ipLocation`（"广东省"）；`introduction` 简介；
+  `ylzTags` 信用标签，`code` 是 `cs_seller_level` / `cs_buyer_level`，`text` 是"卖家信用极好"，`attributes.level` 是等级（5）；
+- `module.social`：`followers`、`following`，数字字符串（"3"）；
+- `module.tabs`：`item.number` 主页上的宝贝数（数字），`rate.number` 评价数（字符串）；
+- `baseInfo.kcUserId` 等于 `unb`，`baseInfo.tags` 是一堆认证标记（实名、芝麻）。
+
+本系统一天拉一次（登录有效时），手动"重新检查登录态"时顺带重拉；拉失败了半小时内不再试。

@@ -22,6 +22,9 @@
   .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
 - 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发；
   请求体 {"publish": true} 是抄完直接发；
+- 账号矩阵（app/matrix.py）：GET /api/accounts 每个账号带上昵称头像、备注、
+  在售 / 待发货 / 未读几个数和即时消息状态；PUT .../remark 改备注，
+  DELETE /api/accounts/{id} 移除账号（删凭证和归属，本地数据留着）；
 - 自动同步（app/autosync.py）：`auto_sync=True` 时商品、订单按交易消息、打开页面、定时三条路
   自动同步，.../autosync 看状态、改设置；手动同步（.../items/sync、.../orders/sync）也记在一起。
   同步开始、结束都通过消息的推送流发一条 sync 事件。
@@ -49,7 +52,7 @@ from pydantic import BaseModel
 
 from app import auth, db, keepalive
 from app import images as image_store
-from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, make_guard
+from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, LoginState, make_guard
 from app.auth import (
     MAX_FAILURES_PER_IP,
     AccessTokens,
@@ -69,6 +72,7 @@ from app.login import (
     parse_cookie_header,
     same_login,
 )
+from app.matrix import AccountMatrix, AccountStats
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderRecord, OrderService
 from app.places import PlaceSearch, PlacesUnavailableError
@@ -194,6 +198,10 @@ class VisitIn(BaseModel):
     jobs: list[str]
 
 
+class RemarkIn(BaseModel):
+    remark: str
+
+
 class CookieImportIn(BaseModel):
     cookie: str  # 浏览器开发者工具里复制的 Cookie 请求头
 
@@ -293,6 +301,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         conn = db.connect(database_url)
         app.state.users = Users(conn)
+        app.state.matrix = AccountMatrix(conn, accounts)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
         app.state.drafts = DraftService(
@@ -379,6 +388,9 @@ def create_app(
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
 
+    def matrix(request: Request) -> AccountMatrix:
+        return request.app.state.matrix
+
     def autosync(request: Request) -> AutoSync:
         return request.app.state.autosync
 
@@ -447,19 +459,52 @@ def create_app(
             "user": {"id": user.id, "username": user.username},
         }
 
-    async def account_info(account_id: str, *, recheck: bool = False) -> dict[str, Any]:
-        """账号和它的登录态。记下的登录态还能用就不请求平台。"""
+    async def account_info(
+        request: Request,
+        account_id: str,
+        *,
+        recheck: bool = False,
+        stats: AccountStats | None = None,
+        added_at: float | None = None,
+    ) -> dict[str, Any]:
+        """账号、登录态，和账号矩阵里显示的资料、备注、概况、即时消息状态。
+
+        记下的登录态还能用就不请求平台。登录有效、资料该拉了（见 AccountMatrix.profile_due），
+        或者是手动重新检查（recheck）时，顺带拉一次资料。
+        """
+        book = matrix(request)
         status = None if recheck else accounts.login_status(account_id)
         if status is None:
             async with locks[account_id]:
                 status = None if recheck else accounts.login_status(account_id)
                 status = status or await accounts.check(account_id)
+        if status.state is LoginState.VALID and (recheck or book.profile_due(account_id)):
+            async with locks[account_id]:
+                if recheck or book.profile_due(account_id):
+                    await book.refresh_profile(account_id)
+        if stats is None:
+            stats = book.stats([account_id])[account_id]
+        if added_at is None:
+            added_at = users(request).accounts_added(request.state.user.id).get(account_id)
+        profile = book.profile(account_id)
         guard = accounts.guard
         return {
             "id": account_id,
             "saved_at": accounts.load(account_id).saved_at,
+            "added_at": added_at,
             "login": asdict(status),
             "block": _block(guard.block(account_id)) if guard else None,
+            "profile": {
+                "nick": profile.nick,
+                "avatar": profile.avatar,
+                "ip_location": profile.ip_location,
+                "seller_credit": profile.seller_credit,
+                "followers": profile.followers,
+                "fetched_at": profile.fetched_at,
+            },
+            "remark": profile.remark,
+            "stats": asdict(stats),
+            "im": hub(request).status(account_id),
         }
 
     @app.get("/api/health")
@@ -536,14 +581,44 @@ def create_app(
 
     @authed.get("/api/accounts")
     async def list_accounts(request: Request) -> dict[str, Any]:
-        """当前用户名下的账号。凭证文件不在了的不列。"""
-        owned = users(request).account_ids(request.state.user.id)
-        return {"accounts": [await account_info(a) for a in accounts.ids() if a in owned]}
+        """当前用户名下的账号，先归到名下的在前。凭证文件不在了的不列。"""
+        added = users(request).accounts_added(request.state.user.id)
+        present = set(accounts.ids())
+        ids = [a for a in added if a in present]
+        stats = matrix(request).stats(ids)
+        return {
+            "accounts": [
+                await account_info(request, a, stats=stats[a], added_at=added[a]) for a in ids
+            ]
+        }
 
     @authed.post("/api/accounts/{account_id}/check")
     async def check_account(request: Request, account_id: str) -> dict[str, Any]:
-        """马上确认一次登录态（会话过期时会先试免密续期）。"""
-        return await account_info(account(request, account_id), recheck=True)
+        """马上确认一次登录态（会话过期时会先试免密续期），登录有效时顺带重拉资料。"""
+        return await account_info(request, account(request, account_id), recheck=True)
+
+    @authed.put("/api/accounts/{account_id}/remark")
+    async def set_remark(request: Request, account_id: str, body: RemarkIn) -> dict[str, Any]:
+        """给账号写个备注（最多 20 个字），空字符串是清掉。只存在这里，平台上看不到。"""
+        account_id = account(request, account_id)
+        matrix(request).set_remark(account_id, body.remark)
+        return await account_info(request, account_id)
+
+    @authed.delete("/api/accounts/{account_id}")
+    async def remove_account(request: Request, account_id: str) -> dict[str, Any]:
+        """移除账号：删掉保存的登录凭证，不再归当前用户，断开即时消息，资料和备注一起删。
+
+        本地记下的商品、订单、消息、草稿留着（按账号存的），重新登录这个账号以后还在；
+        熔断状态也留着。闲鱼上的东西一样不动。
+        """
+        account_id = account(request, account_id)
+        # 等这个账号手上的平台请求做完再删，免得请求结束时把凭证写回来
+        async with locks[account_id]:
+            accounts.remove(account_id)
+            users(request).release(account_id, request.state.user.id)
+            matrix(request).forget(account_id)
+        await hub(request).stop(account_id)
+        return {"ok": True}
 
     @authed.delete("/api/accounts/{account_id}/block")
     async def unblock_account(request: Request, account_id: str) -> dict[str, Any]:

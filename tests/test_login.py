@@ -235,7 +235,8 @@ def test_import_same_login_again_does_not_ask_platform(client, platform):
     assert len(platform.calls) == calls + 1
 
 
-def test_import_cookie_of_another_account_is_rejected(client, accounts_dir):
+def test_import_cookie_of_another_account_is_rejected(client, accounts_dir, platform):
+    platform.login_user = UNB  # 平台说登录的是 42，cookie 里写的却是 43
     resp = import_login(client, "unb=43; cookie2=b2")
     assert resp.status_code == 401
     assert not (accounts_dir / "43.json").exists()

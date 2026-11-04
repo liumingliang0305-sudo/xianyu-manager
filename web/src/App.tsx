@@ -4,6 +4,7 @@ import { AppShell } from "@/components/app-shell"
 import { EmptyState } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { AccountsPage } from "@/features/accounts/accounts-page"
 import { LoginPage } from "@/features/auth/login-page"
 import { ItemEditPage } from "@/features/items/item-edit-page"
 import { ItemsPage } from "@/features/items/items-page"
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="orders" element={<OrdersPage />} />
           <Route path="messages" element={<MessagesPage />} />
           <Route path="search" element={<SearchPage />} />
+          <Route path="accounts" element={<AccountsPage />} />
           <Route path="*" element={<Navigate to="/items" replace />} />
         </Route>
       </Routes>

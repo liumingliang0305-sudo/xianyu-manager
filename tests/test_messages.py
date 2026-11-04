@@ -525,6 +525,26 @@ def test_im_lock_one_holder_at_a_time(tmp_path):
     assert path.exists()  # 不删文件
 
 
+def test_removed_account_is_disconnected_and_stays_off(accounts, store):
+    server = FakeIm()
+    server.conversations_more = False
+    hub = make_hub(store, accounts, server)
+
+    async def go():
+        await hub.start()
+        await wait_until(lambda: hub.status(UNB)["state"] == "online")
+        accounts.remove(UNB)
+        await hub.stop(UNB)
+        await asyncio.sleep(0.1)  # 看了几轮账号也不再连
+        status = hub.status(UNB)
+        await hub.aclose()
+        return status
+
+    assert run(go())["state"] == "stopped"
+    assert ImLock(accounts.root / f"{UNB}.im.lock").acquire()  # 锁放开了
+    assert len(server.sockets) == 1
+
+
 def test_second_hub_does_not_connect_while_another_holds_the_account(accounts, store):
     server = FakeIm()
     server.conversations_more = False
