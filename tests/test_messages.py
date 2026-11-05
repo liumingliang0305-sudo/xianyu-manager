@@ -7,7 +7,15 @@ from collections import defaultdict
 
 import httpx
 import pytest
-from fake_im import FakeIm, chat_message, conversation, entry, history_message, trade_card
+from fake_im import (
+    FakeIm,
+    chat_message,
+    conversation,
+    entry,
+    history_message,
+    read_receipt,
+    trade_card,
+)
 from fakes import UNB, add_user, sign_in
 from fastapi.testclient import TestClient
 
@@ -57,10 +65,15 @@ def conv(cid: str, peer: str, *, unread: int = 0, modified_ms: int = T) -> Conve
     return parsed
 
 
-def chat(n: int, *, cid: str = "777", sender: str = "200") -> dict:
-    """第 n 条历史消息，时间 T + n 秒。"""
+def chat(n: int, *, cid: str = "777", sender: str = "200", unread: int | None = None) -> dict:
+    """第 n 条历史消息，时间 T + n 秒。`unread` 是平台的 unreadCount。"""
     return history_message(
-        cid=cid, sender=sender, text=f"第{n}条", message_id=f"m{n}", sent_ms=T + n * 1000
+        cid=cid,
+        sender=sender,
+        text=f"第{n}条",
+        message_id=f"m{n}",
+        sent_ms=T + n * 1000,
+        unread=unread,
     )
 
 
@@ -246,6 +259,25 @@ def test_fetch_newest_joins_local_and_older_fills_gaps(accounts, monkeypatch, st
     run(go())
     assert ids() == [f"m{n}" for n in range(26)]
     assert not store.conversation(UNB, "777").stale
+
+
+def test_store_read_by_peer_only_goes_forward(store):
+    """自己发的消息：unreadCount 是 0 就是对方读了；只往读了改，晚到的旧数据不改回去。"""
+    mine = ChatMessage.from_history(chat(2, sender=UNB, unread=1))
+    theirs = ChatMessage.from_history(chat(1, unread=0))
+    unknown = ChatMessage.from_history(chat(3, sender=UNB))
+    store.save_messages(UNB, [theirs, mine, unknown])
+
+    def reads():
+        return [r.read for r in store.messages(UNB, "777")[0]]
+
+    assert reads() == [None, False, None]  # 对方发的、平台没说的都是 None
+    assert store.set_unread_counts(UNB, {"m2": 0, "m9": 0}) == {"777"}  # 本地没有的跳过
+    assert reads() == [None, True, None]
+    assert store.set_unread_counts(UNB, {"m2": 1}) == set()
+    assert store.set_unread_counts(UNB, {"m3": 1}) == {"777"}
+    assert reads() == [None, True, False]
+    assert store.message(UNB, "m2").read is True
 
 
 def card(n: int, order_id: str, role: str = "seller", *, cid: str = "777") -> dict:
@@ -648,6 +680,66 @@ async def start_synced(hub: MessageHub) -> None:
             and not any(c.stale for c in hub.store.conversations(UNB))
         )
     )
+
+
+def test_hub_shows_whether_the_peer_read_my_messages(accounts, store):
+    """对方读了推已读回执，收到就改、通知页面；断线时漏掉的回执，再拉消息时按平台给的补上。"""
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [conversation("777", UNB, "200", modified_ms=T + 3000)]
+    server.chats = {
+        "777": [chat(1, unread=0), chat(2, sender=UNB, unread=1), chat(3, sender=UNB, unread=1)]
+    }
+    hub = make_hub(store, accounts, server)
+    store = hub.store
+    events = []
+
+    def reads():
+        return [r.read for r in store.messages(UNB, "777")[0]]
+
+    async def go():
+        await start_synced(hub)
+        assert reads() == [None, False, False]
+        with hub.subscribe(UNB) as queue:
+            server.last.push_entries(
+                [read_receipt("m2", cid="777"), read_receipt("m404", cid="777")]
+            )
+            await wait_until(lambda: reads() == [None, True, False])
+            # 第 3 条的回执漏了，平台上已经是读了；第 2 条平台给的数据旧了，不改回没读
+            server.chats["777"][2]["message"]["unreadCount"] = 0
+            server.chats["777"][1]["message"]["unreadCount"] = 1
+            assert (await hub.fetch(UNB, "777"))["added"] == 0
+            assert reads() == [None, True, True]
+            while not queue.empty():
+                events.append(queue.get_nowait())
+        await hub.aclose()
+
+    run(go())
+    assert events == [{"type": "messages", "cid": "777"}] * 2
+
+
+def test_hub_refreshes_last_messages_read_status_on_connect(accounts, store):
+    """连上时会话列表里每个会话的最后一条带着读没读，本地有这条就更新，不用点开会话。"""
+    server = FakeIm()
+    server.conversations_more = False
+    row = conversation("777", UNB, "200", modified_ms=T + 2000, last_from="me", last_unread=0)
+    server.conversations = [row]
+    hub = make_hub(store, accounts, server)
+    store = hub.store
+    store.save_conversations(UNB, [Conversation.parse(row, UNB)])
+    store.mark_fetched(UNB, "777")  # 本地跟上了，连上时不会补拉这个会话的消息
+    last_id = row["singleChatUserConversation"]["lastMessage"]["message"]["messageId"]
+    sent = history_message(sender=UNB, message_id=last_id, sent_ms=T + 2000)  # 以前没存读没读
+    store.save_messages(UNB, [ChatMessage.from_history(sent)])
+    assert store.message(UNB, last_id).read is None
+
+    async def go():
+        await start_synced(hub)
+        await wait_until(lambda: store.message(UNB, last_id).read is True)
+        await hub.aclose()
+
+    run(go())
+    assert server.chats == {} and not server.last.requests("/r/MessageManager/listUserMessages")
 
 
 @pytest.mark.parametrize("echo", ["after", "before", None])

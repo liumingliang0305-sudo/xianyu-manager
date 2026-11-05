@@ -10,10 +10,17 @@ import websockets
 PUSH_HEADERS = {"app-key": "k", "ua": "server", "sid": "s1"}
 
 
-def entry(data, *, packer: str = "json") -> dict:
+def entry(data, *, packer: str = "json", object_type: int = 40000) -> dict:
     """推送里的一个条目：data 按 JSON 或 MessagePack 打包再 base64。"""
     raw = msgpack.packb(data) if packer == "msgpack" else json.dumps(data).encode()
-    return {"data": base64.b64encode(raw).decode(), "objectType": 40000}
+    return {"data": base64.b64encode(raw).decode(), "objectType": object_type}
+
+
+def read_receipt(message_id: str, *, cid: str = "777", unread: int = 0, read_ms: int = 0) -> dict:
+    """已读回执的推送条目（类型 40103）：自己发的这条消息还有几个接收方没读，字段照网页版的
+    MsgReadToSenderEventModel。"""
+    data = {1: message_id, 2: 2, 3: unread, 4: f"{cid}@goofish", 5: 1, 6: read_ms}
+    return entry(data, packer="msgpack", object_type=40103)
 
 
 def chat_message(
@@ -26,6 +33,7 @@ def chat_message(
     sent_ms: int = 1793378126437,
     session_type: str = "1",
     notice: str = "发来一条新消息",
+    unread: int | None = None,
 ) -> dict:
     """照实测的格式造一条聊天消息（MessagePack 解出来的那种，键是整数）。
 
@@ -33,7 +41,7 @@ def chat_message(
     """
     inner = json.dumps({"contentType": 1, "text": {"text": text}, "atUsers": []})
     ext = {"messageId": message_id, "umidToken": "secret", "utdid": "secret", "tag": "u"}
-    return {
+    body = {
         1: {
             1: {1: f"{sender}@goofish"},
             2: f"{cid}@goofish",
@@ -60,6 +68,9 @@ def chat_message(
         },
         3: {"needPush": "false"},
     }
+    if unread is not None:
+        body[1].update({7: 2, 8: unread})  # 接收方个数、还有几个没读
+    return body
 
 
 def history_message(
@@ -72,8 +83,10 @@ def history_message(
     sent_ms: int = 1793378126437,
     session_type: str = "1",
     notice: str = "发来一条新消息",
+    unread: int | None = None,
 ) -> dict:
-    """照实测的格式造一条历史消息（listUserMessages 的 userMessageModels 里的一条）。"""
+    """照实测的格式造一条历史消息（listUserMessages 的 userMessageModels 里的一条）。
+    `unread` 是平台的 unreadCount（还有几个接收方没读），None 时不带。"""
     data = json.dumps({"contentType": 1, "text": {"text": text}, "atUsers": []})
     reminder = chat_message(
         cid=cid,
@@ -84,7 +97,7 @@ def history_message(
         session_type=session_type,
         notice=notice,
     )[1][10]
-    return {
+    model = {
         "readStatus": 2,
         "message": {
             "messageId": message_id,
@@ -102,6 +115,9 @@ def history_message(
             "extension": reminder,
         },
     }
+    if unread is not None:
+        model["message"].update(receiverCount=2, unreadCount=unread)
+    return model
 
 
 def trade_card(
@@ -162,6 +178,7 @@ def conversation(
     modified_ms: int = 1793378003908,
     biz_type: str = "1",
     last_from: str | None = "peer",
+    last_unread: int | None = None,
 ) -> dict:
     """照实测的格式造会话列表里的一个会话。squadName 是商品的简称，不是昵称；对方昵称只能从
     最后一条消息看出来。`last_from`："peer" 最后一条是对方发的文本，"me" 是自己发的，
@@ -192,7 +209,9 @@ def conversation(
     }
     if last_from:
         sender = peer if last_from == "peer" else me
-        last = history_message(cid=cid, sender=sender, session_type=biz_type, sent_ms=modified_ms)
+        last = history_message(
+            cid=cid, sender=sender, session_type=biz_type, sent_ms=modified_ms, unread=last_unread
+        )
         row["singleChatUserConversation"]["lastMessage"] = last
     return row
 
@@ -370,6 +389,7 @@ class FakeIm:
             "uuid": model["uuid"],
             "createAt": created,
             "receiverCount": 2,
+            "unreadCount": 1,
             "extension": {"senderUserId": me, "reminderContent": inner["text"]["text"]},
         }
         sock.respond(frame, 200, body)

@@ -491,6 +491,20 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
      之后重连、重新拉会话列表，`redPoint` 都是 0，平台上确实清掉了；
    - 已读回执（对方看到"已读"）：`/r/MessageStatus/read`，body `[[messageId]]`（Ydisks 说一次一条，只认 `.PNM` 结尾的 ID）。
      网页版是消息滚到眼前时发，一部分走这个，一部分走一个 mtop 接口（带 `sessionId`、`msgId`、`peerUid`），还没做；
+
+   **对方读没读自己发的消息**（2026-11-04 读网页版 JS `idle-pc/xy-site/0.0.179/js/p_im-index.js`）：
+   - 每条消息带 `receiverCount`（接收方个数）和 `unreadCount`（还有几个没读）。历史消息、会话列表的 `lastMessage`
+     在 `message` 下，推送在 `1.7`、`1.8`，发消息的响应 body 里也有。网页版在自己发的、发送成功的消息旁边
+     显示 `unreadCount === 0 ? "已读" : "未读"`，只有群聊（会话类型 47）不显示；
+   - 对方读了以后，平台给发消息的人推一个条目，`objectType` 是 **40103**（网页版的 `MsgReadToSenderEventModel`），
+     MessagePack 解出来是 `{1: messageId, 2: receiverCount, 3: unreadCount, 4: "<cid>@goofish", 5: 会话类型,
+     6: 时间（毫秒）}`。网页版收到后把那条消息的 `unreadCount` 换成它。Ydisks 也是按 40103 认已读回执，
+     但把第 2 项当成了"状态（2 是已读）"，其实是接收方个数，单聊里一直是 2；
+   - 40102（`MsgReadToReaderEventModel`，`{1: [messageId…], 2: 2, 3: cid}`）是推给读的人自己的：
+     在别的设备上读了对方的消息。本系统没用；
+   - 历史消息外层的 `readStatus`（2 已读、0 未读）说的是**当前账号**读没读这条，对方发来还没看的是 0；
+   - ✅ 本地存的 97 条自己发的消息里 79 条 `unreadCount` 是 0、14 条是 1，另外 4 条是以前自己发的时候没存这个数。
+     还没实测过 40103 推下来的样子，格式照网页版 JS 和 Ydisks；
 10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
 
 `did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，
@@ -516,6 +530,7 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 | `1.6.3.4` | 内层内容类型，1 是文本 |
 | `1.6.3.5` | 内层内容，是 JSON 字符串，不是 base64：`{"contentType": 1, "text": {"text": …}, "atUsers": []}` |
 | `1.6.3.2` | 摘要，文本消息就是正文 |
+| `1.7`、`1.8` | 接收方个数、还有几个接收方没读（`receiverCount`、`unreadCount`）。自己发的消息上 `1.8` 是 0 就是对方读了，见上面第 9 条 |
 | `1.10` | 提醒信息：`senderUserId`、`reminderTitle`（人发的消息是发送人昵称，交易卡片、自动回复是"交易消息"、"你有一条新消息"这样的标题，用 `reminderNotice` 分，见上面第 8 条）、`reminderContent`（正文）、`sessionType`、`extJson`、`bizTag`（都有 `messageId`）。`reminderUrl` 形如 `fleamarket://message_chat?itemId=…&peerUserId=…&sid=…&messageId=…`，商品 ID 从这里取。✅ `peerUserId` 是**发送人**，不是会话里的对方：这个链接是给收消息的人点的，自己发的消息里它就是自己。对方是谁看会话列表 |
 | `3.needPush` | 要不要给手机推通知，这次是 `"false"` |
 

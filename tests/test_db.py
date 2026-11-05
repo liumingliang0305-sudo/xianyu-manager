@@ -1,3 +1,5 @@
+import json
+
 import psycopg
 import pytest
 from alembic import command
@@ -23,6 +25,29 @@ def test_connect_refuses_outdated_schema_then_works_after_upgrade(migrations, da
     finally:
         command.upgrade(migrations, "head")
     db.connect(database_url).close()
+
+
+def test_message_unread_count_filled_from_raw(migrations, database_url):
+    """加 unread_count 的迁移：已经存下的消息从原始数据里取（历史消息、推送两种格式）。"""
+    command.downgrade(migrations, "8f3a1d6c9b27")
+    try:
+        with psycopg.connect(database_url, autocommit=True) as conn:
+            for message_id, raw in [
+                ("history", {"readStatus": 2, "message": {"messageId": "h", "unreadCount": 0}}),
+                ("push", {"1": {"3": "p", "7": 2, "8": 1}, "3": {"needPush": "false"}}),
+                ("sent", {"message": {"messageId": "s", "unreadCount": None}}),
+                ("bare", {}),
+            ]:
+                conn.execute(
+                    "INSERT INTO messages (account_id, message_id, cid, raw, received_at)"
+                    " VALUES ('42', %s, '777', %s, 0)",
+                    (message_id, json.dumps(raw)),
+                )
+    finally:
+        command.upgrade(migrations, "head")
+    with psycopg.connect(database_url) as conn:
+        rows = conn.execute("SELECT message_id, unread_count FROM messages").fetchall()
+    assert dict(rows) == {"history": 0, "push": 1, "sent": None, "bare": None}
 
 
 def test_reconnects_after_connection_is_lost(database):

@@ -348,6 +348,8 @@ export interface ChatMessage {
   mine: boolean
   /** 图片消息里的图，别的类型是空数组 */
   images: ChatImage[]
+  /** 自己发的消息对方读了没有；对方发的、或者平台没说的是 null */
+  read: boolean | null
 }
 
 /** 聊天里的一张图：阿里 CDN 的地址和原图宽高（像素） */

@@ -235,6 +235,8 @@ messages = Table(
     # 原始数据（JSON），去掉了发送端的设备信息
     Column("raw", Text, nullable=False, server_default="{}"),
     Column("received_at", Double, nullable=False),
+    # 平台的 unreadCount：还有几个接收方没读。自己发的消息上 0 就是对方读了；平台没给是 NULL
+    Column("unread_count", Integer),
     Index("messages_conv", "account_id", "cid", "sent_at"),
 )
 

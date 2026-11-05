@@ -13,6 +13,7 @@ from fake_im import (
     conversation,
     entry,
     history_message,
+    read_receipt,
     session_activation,
     trade_card,
 )
@@ -34,6 +35,7 @@ from xianyu_core.im import (
     ImClient,
     ImConnection,
     ImPush,
+    MessageRead,
     decode_entry,
     fetch_access_token,
     new_device_id,
@@ -309,6 +311,26 @@ def test_order_link_typed_by_a_person_is_not_an_order():
     assert ChatMessage.from_history(history_message(text=text)).order_id == ""
 
 
+@pytest.mark.parametrize("unread", [0, 1, None])
+def test_unread_count_from_history_and_push(unread):
+    """平台的 unreadCount：推送里是 1.8，历史消息里是 message.unreadCount。没带是 None。"""
+    pushed = ChatMessage.parse(
+        decode_entry(entry(chat_message(sender="42", unread=unread), packer="msgpack")["data"])
+    )
+    history = ChatMessage.from_history(history_message(sender="42", unread=unread))
+    assert pushed is not None and history is not None
+    assert pushed.unread_count == history.unread_count == unread
+
+
+def test_read_receipt_parse():
+    data = decode_entry(read_receipt("1793378200001.PNM", cid="777", read_ms=1793378300500)["data"])
+    assert MessageRead.parse(data) == MessageRead(
+        message_id="1793378200001.PNM", cid="777", unread_count=0, read_at=1793378300.5
+    )
+    assert MessageRead.parse({"1": "x.PNM"}) is None  # 没说还有几个没读
+    assert MessageRead.parse(["x"]) is None
+
+
 def test_chat_message_parse_ignores_other_entries():
     assert ChatMessage.parse(session_activation()) is None
     assert ChatMessage.parse({"1": "x"}) is None
@@ -463,6 +485,26 @@ def test_events_yield_pushes_and_chat_messages():
     assert isinstance(second, ChatMessage) and second.text == "还在吗"
     assert isinstance(third, ChatMessage) and third.text == "多少钱"
     assert len(server.last.acks) == 3  # 一帧两条也只回一次 ACK
+
+
+def test_events_yield_read_receipts():
+    """条目类型 40103 是已读回执；解不出来的照样给出来，带着条目类型。"""
+    server = FakeIm()
+    broken = entry({1: "x.PNM"}, packer="msgpack", object_type=im.READ_RECEIPT_OBJECT_TYPE)
+
+    async def go():
+        conn = await open_conn(server)
+        events = conn.events()
+        await next_event(conn, events)  # /s/vulcan
+        server.last.push_entries([read_receipt("m2", cid="777", unread=0), broken])
+        receipt = await next_event(conn, events)
+        other = await next_event(conn, events)
+        await conn.close()
+        return receipt, other
+
+    receipt, other = run(go())
+    assert receipt == MessageRead(message_id="m2", cid="777", unread_count=0, read_at=0.0)
+    assert isinstance(other, ImPush) and other.object_type == im.READ_RECEIPT_OBJECT_TYPE
 
 
 def test_reg_invalid_token_is_rejected():
@@ -635,6 +677,7 @@ def test_send_text_uses_web_format_and_returns_the_message():
         1,
         1793378201.0,
     )
+    assert message.unread_count == 1  # 刚发出去，对方还没读
 
 
 def test_clear_red_point_like_the_web_page():

@@ -10,7 +10,9 @@
   `USER_SESSION_TYPES`；
 - 发文本消息：`ImConnection.send_text()`，格式照网页版；
 - 交易卡片（"[我已付款，等待你发货]"之类）里的订单号和当前账号的角色解析进 `ChatMessage.order_id`、
-  `order_role`，见 `_order_ref`。
+  `order_role`，见 `_order_ref`；
+- 对方读没读自己发的消息：每条消息带平台的 unreadCount（`ChatMessage.unread_count`，0 是读了），
+  对方读了以后平台推一条已读回执（推送条目类型 40103），解析成 `MessageRead`。
 
 2026-10-30 实测过取 token、注册、收推送、会话列表、历史消息、心跳，2026-10-31 实测发过一条文本消息。
 2026-10-31 也实测过清会话红点（`clear_red_point`）。给对方发已读回执还没有做。
@@ -101,6 +103,10 @@ _SEND_REFUSALS = (
     ("USER_NEED_REALNAME_VERIFY", "平台要求先完成实名认证，在闲鱼 App 里发一条消息，按提示操作"),
     ("USER_NEED_VERIFY", "平台要求先完成身份验证，在闲鱼 App 里发一条消息，按提示操作"),
 )
+
+# 推送条目的 objectType：聊天消息是 40000；40103 是"自己发的消息被读了"，推给发消息的人
+# （网页版的 MsgReadToSenderEventModel）
+READ_RECEIPT_OBJECT_TYPE = 40103
 
 # 交易卡片点进去是订单详情：fleamarket://order_detail?id=<订单号>&role=seller，role 是当前账号
 # 在这笔订单里的角色，大小写不定（见过 seller、Buyer、buyer）。退款、评价、物流卡片的链接里是
@@ -236,6 +242,9 @@ class ChatMessage:
     images: list[ChatImage] = field(default_factory=list)  # 图片消息（内容类型 2）里的图
     order_id: str = ""  # 交易卡片之类带的订单号，见 _order_ref
     order_role: str = ""  # 当前账号在这笔订单里是 seller 还是 buyer，看不出来是空字符串
+    # 平台的 unreadCount：还有几个接收方没读这条消息。自己发的消息上它是 0 就是对方读了
+    # （网页版据此显示"已读"、"未读"）；平台没给是 None
+    unread_count: int | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)  # 去掉了发送端设备信息
 
     @classmethod
@@ -256,6 +265,7 @@ class ChatMessage:
             summary=inner.get("2"),
             inner_type=inner.get("4"),
             reminder=body["10"],
+            unread_count=body.get("8"),
             raw={**data, "1": {**body, "10": _scrub_reminder(body["10"])}},
         )
 
@@ -279,6 +289,7 @@ class ChatMessage:
             summary=custom.get("summary"),
             inner_type=custom.get("type"),
             reminder=reminder,
+            unread_count=message.get("unreadCount"),
             raw={**model, "message": scrubbed},
         )
 
@@ -294,6 +305,7 @@ class ChatMessage:
         summary: Any,
         inner_type: Any,
         reminder: dict[str, Any],
+        unread_count: Any,
         raw: dict[str, Any],
     ) -> ChatMessage | None:
         cid = strip_goofish(cid)
@@ -323,6 +335,7 @@ class ChatMessage:
             images=_images(content),
             order_id=order_id,
             order_role=order_role,
+            unread_count=_int_or_none(unread_count),
             raw=raw,
         )
 
@@ -391,14 +404,45 @@ class MessagePage:
 
 
 @dataclass
+class MessageRead:
+    """已读回执：自己发的一条消息被对方读了（推送条目类型 40103）。
+
+    解出来是 `{1: 消息 ID, 2: 接收方个数, 3: 还有几个没读, 4: 会话 ID@goofish, 5: 会话类型,
+    6: 读的时间（毫秒）}`，字段照网页版 JS 里的 MsgReadToSenderEventModel。
+    """
+
+    message_id: str
+    cid: str  # 不带 @goofish
+    unread_count: int  # 还有几个接收方没读，单聊里对方读了是 0
+    read_at: float | None  # 秒级时间戳
+
+    @classmethod
+    def parse(cls, data: Any) -> MessageRead | None:
+        if not isinstance(data, dict):
+            return None
+        message_id = str(data.get("1") or "")
+        unread = _int_or_none(data.get("3"))
+        if not message_id or unread is None:
+            return None
+        at = data.get("6")
+        return cls(
+            message_id=message_id,
+            cid=strip_goofish(data.get("4")),
+            unread_count=unread,
+            read_at=at / 1000 if isinstance(at, int | float) else None,
+        )
+
+
+@dataclass
 class ImPush:
-    """推送里不是聊天消息的条目：会话激活、已读回执之类，原样给出解码后的内容。"""
+    """推送里别的条目：会话激活之类，原样给出解码后的内容。"""
 
     lwp: str
     data: Any
+    object_type: int | None = None  # 条目的 objectType，没带是 None
 
 
-ImEvent = ChatMessage | ImPush
+ImEvent = ChatMessage | MessageRead | ImPush
 
 
 @dataclass
@@ -420,6 +464,8 @@ class Conversation:
     # 网页版只显示 visible 的会话（在 App 里删掉的会话不显示），未读数也只算这些
     visible: bool = True
     muted: bool = False  # 开了消息免打扰；网页版的未读在这种会话上只显示一个点
+    # 会话里最后一条消息（和历史消息同一个格式），带着它读没读（unread_count）；没有是 None
+    last_message: ChatMessage | None = field(default=None, repr=False)
 
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
@@ -444,11 +490,13 @@ class Conversation:
         # 会话两边一个是 owner、一个是 ext，extUserId 是自己的话对方就是 owner
         own_ext = str(ext.get("extUserId") or "") == unb
         peer_type = ext.get("ownerUserType") if own_ext else ext.get("extUserType")
+        last = user_conv.get("lastMessage")
+        last_message = ChatMessage.from_history(last) if isinstance(last, dict) else None
         # 注意 squadName_<userId> 不是昵称，是商品的简称（"取暖器"之类）
         return cls(
             cid=cid,
             peer_id=peer,
-            peer_name=_last_message_nick(user_conv.get("lastMessage"), peer),
+            peer_name=_last_message_nick(last_message, peer),
             peer_type="" if peer_type is None else str(peer_type),
             biz_type=str(conv.get("bizType") or ""),
             item_id=str(ext.get("itemId") or ""),
@@ -459,13 +507,13 @@ class Conversation:
             updated_at=modified / 1000 if isinstance(modified, int | float) else None,
             visible=_int_or_none(user_conv.get("visible", 1)) == 1,
             muted=_int_or_none(user_conv.get("muteNotification")) == 1,
+            last_message=last_message,
             raw=row,
         )
 
 
-def _last_message_nick(last_message: Any, peer: str) -> str:
+def _last_message_nick(message: ChatMessage | None, peer: str) -> str:
     """会话最后一条消息是对方本人发的，就能看出对方昵称（见 ChatMessage.sender_name）。"""
-    message = ChatMessage.from_history(last_message) if isinstance(last_message, dict) else None
     if message and peer and message.sender_id == peer:
         return message.sender_name
     return ""
@@ -773,6 +821,8 @@ class ImConnection:
                     "sender": {"uid": f"{me}@goofish"},
                     "content": {**content, "custom": {**content["custom"], "summary": text}},
                     "extension": extension if isinstance(extension, dict) else {},
+                    "receiverCount": body.get("receiverCount"),
+                    "unreadCount": body.get("unreadCount"),
                 }
             }
         )
@@ -848,8 +898,13 @@ class ImConnection:
             except Exception:
                 log.warning("%s 第 %d 条解不出来", lwp, index, exc_info=True)
                 continue
-            message = ChatMessage.parse(decoded)
-            self._events.put_nowait(message or ImPush(lwp, decoded))
+            object_type = _int_or_none(entry.get("objectType"))
+            event: ImEvent | None
+            if object_type == READ_RECEIPT_OBJECT_TYPE:
+                event = MessageRead.parse(decoded)
+            else:
+                event = ChatMessage.parse(decoded)
+            self._events.put_nowait(event or ImPush(lwp, decoded, object_type))
         if lwp == "/s/vulcan":
             self._ready.set()
 

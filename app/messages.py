@@ -16,6 +16,10 @@ USER_SESSION_TYPES）列会话时跳过，推下来的消息也不存；以前�
 
 标已读：页面上点开有未读的会话时清掉会话的红点（mark_read），和网页版一样；不给对方发已读回执。
 
+对方读没读：每条消息存平台的 unreadCount（自己发的消息上 0 就是对方读了，网页版也按这个显示
+"已读"、"未读"）。对方读了平台实时推已读回执，收到就改；拉消息时平台给的也会改。只往"读了"改，
+读过的不会变回没读。
+
 订单：新存进来的消息里带订单号的（交易卡片之类，见 xianyu_core/im.py 的 `_order_ref`），
 交给 `on_order`，`xym serve` 里是 app/orders.py 的 `OrderFeed`，在后台把订单记进本地库。
 """
@@ -64,6 +68,7 @@ from xianyu_core.im import (
     ImConnection,
     ImEvent,
     ImStatus,
+    MessageRead,
     fetch_access_token,
     fetch_peer_nick,
 )
@@ -203,13 +208,18 @@ class MessageRecord:
     received_at: float
     mine: bool  # 是不是这个账号自己发的
     images: list[ChatImage]  # 图片消息里的图，别的类型是空的
+    # 自己发的消息对方读了没有；对方发的、或者平台没说的是 None
+    read: bool | None
 
     @classmethod
     def from_row(cls, row: Row) -> MessageRecord:
         data = dict(row)
         raw = data.pop("raw")
+        unread_count = data.pop("unread_count")
+        mine = data["sender_id"] == data["account_id"]
         images = _stored_images(raw) if data["content_type"] == IMAGE_CONTENT_TYPE else []
-        return cls(**data, mine=data["sender_id"] == data["account_id"], images=images)
+        read = unread_count == 0 if mine and unread_count is not None else None
+        return cls(**data, mine=mine, images=images, read=read)
 
 
 def _stored_images(raw: str) -> list[ChatImage]:
@@ -249,7 +259,8 @@ class MessageStore:
         """一个会话最新的 `limit` 条消息（按时间正序），和本地还有没有更早的。"""
         rows = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
-            " text, item_id, received_at, raw FROM messages WHERE account_id = %s AND cid = %s"
+            " text, item_id, received_at, raw, unread_count FROM messages"
+            " WHERE account_id = %s AND cid = %s"
             " ORDER BY sent_at DESC NULLS LAST, message_id DESC LIMIT %s",
             (account_id, cid, limit + 1),
         ).fetchall()
@@ -259,7 +270,7 @@ class MessageStore:
     def message(self, account_id: str, message_id: str) -> MessageRecord | None:
         row = self._db.execute(
             "SELECT account_id, message_id, cid, sender_id, sender_name, sent_at, content_type,"
-            " text, item_id, received_at, raw FROM messages"
+            " text, item_id, received_at, raw, unread_count FROM messages"
             " WHERE account_id = %s AND message_id = %s",
             (account_id, message_id),
         ).fetchone()
@@ -462,6 +473,24 @@ class MessageStore:
             )
         return True
 
+    def set_unread_counts(self, account_id: str, counts: Mapping[str, int]) -> set[str]:
+        """记下平台说的每条消息还有几个接收方没读（消息 ID → 个数）。本地没有的消息跳过。
+
+        只往小了改：读了就不会变回没读，晚到的旧数据不覆盖新的。返回有消息变了的会话。
+        """
+        changed: set[str] = set()
+        with self._db.transaction():
+            for message_id, count in counts.items():
+                row = self._db.execute(
+                    "UPDATE messages SET unread_count = %s"
+                    " WHERE account_id = %s AND message_id = %s"
+                    " AND (unread_count IS NULL OR unread_count > %s) RETURNING cid",
+                    (count, account_id, message_id, count),
+                ).fetchone()
+                if row:
+                    changed.add(row["cid"])
+        return changed
+
     def mark_fetched(self, account_id: str, cid: str, now: float | None = None) -> None:
         """最新消息补拉完了：本地跟上了平台。"""
         now = time.time() if now is None else now
@@ -538,8 +567,8 @@ class MessageStore:
     def _insert(self, account_id: str, m: ChatMessage, now: float) -> bool:
         cursor = self._db.execute(
             "INSERT INTO messages (account_id, message_id, cid, sender_id, sender_name,"
-            " sent_at, content_type, text, item_id, raw, received_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            " sent_at, content_type, text, item_id, raw, received_at, unread_count)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
             (
                 account_id,
                 m.message_id,
@@ -552,6 +581,7 @@ class MessageStore:
                 m.item_id,
                 json.dumps(m.raw, ensure_ascii=False, default=str),
                 now,
+                m.unread_count,
             ),
         )
         return cursor.rowcount > 0
@@ -853,6 +883,15 @@ class MessageHub:
                 self._publish_status(account_id)
 
     async def _on_event(self, account_id: str, event: ImEvent) -> None:
+        if isinstance(event, MessageRead):
+            changed = self.store.set_unread_counts(
+                account_id, {event.message_id: event.unread_count}
+            )
+            for cid in sorted(changed):
+                self._publish(account_id, {"type": "messages", "cid": cid})
+            if not changed:
+                log.debug("已读回执里的消息 %s 本地没有，或者已经是读过的", event.message_id)
+            return
         if not isinstance(event, ChatMessage):
             return
         if event.session_type and event.session_type not in USER_SESSION_TYPES:
@@ -867,6 +906,14 @@ class MessageHub:
             self._saved(account_id, [event])
         else:
             log.debug("消息 %s 已经存过了（自己发的推回来、或者重复推送）", event.message_id)
+
+    def _store_page(self, account_id: str, messages: list[ChatMessage]) -> tuple[int, bool]:
+        """从平台拉到的一页消息：新的存下来，本地已经有的更新对方读没读。
+        返回 (新存了几条, 有没有消息的读没读变了)。"""
+        new = self.store.save_messages(account_id, messages)
+        self._saved(account_id, new)
+        counts = {m.message_id: m.unread_count for m in messages if m.unread_count is not None}
+        return len(new), bool(self.store.set_unread_counts(account_id, counts))
 
     def _saved(self, account_id: str, messages: list[ChatMessage]) -> None:
         """新存进本地库的消息里有订单号的，交给 on_order。"""
@@ -904,7 +951,8 @@ class MessageHub:
         """连上以后补拉：会话列表，和最近的会话里本地没跟上的消息。返回补拉了的会话。
 
         会话列表整个翻一遍（最多 MAX_CONVERSATION_PAGES 页，一页一个即时消息请求），顺便更新
-        每个会话的未读数和对方昵称。最近的会话里还不知道昵称的，在后台向平台查（见 lookup_names）。
+        每个会话的未读数、对方昵称，和最后一条消息对方读没读。最近的会话里还不知道昵称的，
+        在后台向平台查（见 lookup_names）。
         """
         listed: dict[str, Conversation] = {}
         cursor = NEWEST_CURSOR
@@ -918,6 +966,11 @@ class MessageHub:
             cursor = page.next_cursor
         self.store.save_conversations(account_id, list(listed.values()))
         self._publish(account_id, {"type": "conversations"})
+        # 每个会话的最后一条带着读没读：断线时漏掉的已读回执，最近的那条不用点开会话就能补上
+        lasts = [c.last_message for c in listed.values() if c.last_message]
+        counts = {m.message_id: m.unread_count for m in lasts if m.unread_count is not None}
+        for cid in sorted(self.store.set_unread_counts(account_id, counts)):
+            self._publish(account_id, {"type": "messages", "cid": cid})
 
         shown = [cid for cid, c in listed.items() if c.visible]  # 删掉的会话不补拉、不查昵称
         stale = self.store.stale(account_id, shown[:BACKFILL_CONVERSATIONS])
@@ -1005,15 +1058,15 @@ class MessageHub:
         async with self._fetch_locks[account_id, cid]:
             _, older_more = self.store.older(account_id, cid)
             pages = MAX_NEWEST_PAGES if self.store.oldest_sent_at(account_id, cid) else 1
-            cursor, added, joined = NEWEST_CURSOR, 0, False
+            cursor, added, joined, read_changed = NEWEST_CURSOR, 0, False, False
             for n in range(pages):
                 if n:
                     await asyncio.sleep(self._interval)
                 page = await conn.list_messages(cid, cursor, MESSAGE_PAGE)
-                new = self.store.save_messages(account_id, page.messages)
-                self._saved(account_id, new)
-                added += len(new)
-                joined = len(new) < len(page.messages)
+                new, changed = self._store_page(account_id, page.messages)
+                added += new
+                read_changed |= changed
+                joined = new < len(page.messages)
                 more = page.has_more and page.next_cursor is not None
                 if joined or not more:
                     break
@@ -1021,7 +1074,7 @@ class MessageHub:
             if older_more is None or not joined:
                 self.store.set_older(account_id, cid, page.next_cursor if more else None, more)
             self.store.mark_fetched(account_id, cid)
-        if added:
+        if added or read_changed:
             self._publish(account_id, {"type": "messages", "cid": cid})
         return added
 
@@ -1035,12 +1088,10 @@ class MessageHub:
                 oldest = self.store.oldest_sent_at(account_id, cid)
                 cursor = round(oldest * 1000) if oldest else NEWEST_CURSOR
             page = await conn.list_messages(cid, cursor, MESSAGE_PAGE)
-            new = self.store.save_messages(account_id, page.messages)
-            self._saved(account_id, new)
-            added = len(new)
+            added, read_changed = self._store_page(account_id, page.messages)
             more = page.has_more and page.next_cursor is not None
             self.store.set_older(account_id, cid, page.next_cursor if more else None, more)
-        if added:
+        if added or read_changed:
             self._publish(account_id, {"type": "messages", "cid": cid})
         return added
 

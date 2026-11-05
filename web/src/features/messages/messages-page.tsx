@@ -211,28 +211,38 @@ function ChatImageView({ image }: { image: ChatImage }) {
   )
 }
 
-function Bubble({ message: m }: { message: ChatMessage }) {
-  if (m.images.length > 0) {
-    return (
-      <div className={cn("flex flex-col gap-1", m.mine ? "items-end" : "items-start")}>
-        {m.images.map((image) => (
-          <ChatImageView key={image.url} image={image} />
-        ))}
-      </div>
-    )
-  }
+/** 自己发的消息旁边标对方读没读，和网页版一样。没读是在等对方，用琥珀色 */
+function ReadMark({ read }: { read: boolean | null }) {
+  if (read === null) return null
   return (
-    <div className={cn("flex", m.mine ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
-          m.mine ? "rounded-br-md bg-brand text-brand-foreground" : "rounded-bl-md bg-muted",
-          m.content_type !== 1 && "text-muted-foreground italic",
-          m.mine && m.content_type !== 1 && "text-brand-foreground/70",
-        )}
-      >
-        {m.text || "（没有文字内容）"}
-      </div>
+    <span className={cn("shrink-0 pb-0.5 text-xs", read ? "text-muted-foreground" : "text-warning-ink")}>
+      {read ? "已读" : "未读"}
+    </span>
+  )
+}
+
+function Bubble({ message: m }: { message: ChatMessage }) {
+  return (
+    <div className={cn("flex items-end gap-1.5", m.mine ? "justify-end" : "justify-start")}>
+      {m.mine && <ReadMark read={m.read} />}
+      {m.images.length > 0 ? (
+        <div className={cn("flex flex-col gap-1", m.mine ? "items-end" : "items-start")}>
+          {m.images.map((image) => (
+            <ChatImageView key={image.url} image={image} />
+          ))}
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "max-w-[75%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
+            m.mine ? "rounded-br-md bg-brand text-brand-foreground" : "rounded-bl-md bg-muted",
+            m.content_type !== 1 && "text-muted-foreground italic",
+            m.mine && m.content_type !== 1 && "text-brand-foreground/70",
+          )}
+        >
+          {m.text || "（没有文字内容）"}
+        </div>
+      )}
     </div>
   )
 }
@@ -367,15 +377,19 @@ function Thread({
     markRead(cid, { onError: (e) => toast.error(`标已读失败：${errorMessage(e)}`) })
   }, [readKey, online, pageVisible, cid, markRead])
 
-  // 打开时本地没跟上平台、或者还不知道对方昵称，就补拉一次（后台顺便查昵称）；没连上时先看本地的
-  const needsFetch = conversation.stale || !conversation.peer_name
+  const messages = thread.data?.messages ?? []
+
+  // 打开时本地没跟上平台、或者还不知道对方昵称，就补拉一次（后台顺便查昵称）；没连上时先看本地的。
+  // 自己发的消息还有对方没读（或者还不知道读没读）的也拉一次：平台给的是现在读没读，
+  // 断线时漏掉的已读回执靠这个补上
+  const awaitingRead = messages.some((m) => m.mine && m.read !== true)
+  const needsFetch = conversation.stale || !conversation.peer_name || awaitingRead
   useEffect(() => {
     if (!needsFetch || !online || tried.current) return
     tried.current = true
     fetchMessages({ cid, older: false }, { onError: (e) => toast.error(errorMessage(e)) })
   }, [needsFetch, online, cid, fetchMessages])
 
-  const messages = thread.data?.messages ?? []
   const fresh = thread.data?.conversation ?? conversation
   const firstId = messages[0]?.message_id
   const lastId = messages.at(-1)?.message_id
