@@ -658,15 +658,19 @@ def create_app(
         账号已经归别人的直接拒绝（409），不请求平台。
         和已保存的是同一份登录就直接返回（changed=false），不请求平台；
         不一样时先向平台确认能用再保存。过期的不续期、直接拒绝，不会拿失效的 cookie 盖掉现有凭证。
+        cookie 里没有 unb 时先找出是哪个账号（Accounts.identify），已保存的登录里找不到才问平台。
         """
         credential = parse_cookie_header(body.cookie)
+        verified = False
+        if not credential.unb:
+            credential, verified = await accounts.identify(credential)
         user_id = request.state.user.id
         path = accounts.path(credential.unb)
         async with locks[credential.unb]:
             if users(request).owner(credential.unb) not in (None, user_id):
                 raise AccountTakenError(credential.unb)
             changed = not (path.exists() and same_login(credential, Credential.load(path)))
-            if changed:
+            if changed and not verified:
                 credential = await accounts.verify(credential)
             users(request).claim(credential.unb, user_id)
             if changed:

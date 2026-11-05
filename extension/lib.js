@@ -40,8 +40,12 @@ export function loginKey(cookies) {
   return LOGIN_COOKIES.map((name) => cookies[name] ?? "").join("\n")
 }
 
+/**
+ * 有会话（cookie2）就算登录着。unb（账号 ID）浏览器里有时没有，网页照样能用，后台会自己找出是哪个账号；
+ * 会话其实过期了的，后台确认时会说（401）
+ */
 export function isLoggedIn(cookies) {
-  return Boolean(cookies.unb && cookies.cookie2)
+  return Boolean(cookies.cookie2)
 }
 
 const LOCAL_HOSTS = ["127.0.0.1", "localhost"]

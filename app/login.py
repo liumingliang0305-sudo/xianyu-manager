@@ -49,8 +49,9 @@ FINISHED = frozenset(
     {LoginPhase.DONE, LoginPhase.EXPIRED, LoginPhase.CANCELED, LoginPhase.VERIFY, LoginPhase.FAILED}
 )
 
-# 导入浏览器的登录至少要有的 cookie：unb 是账号 ID，cookie2 是会话
-IMPORT_REQUIRED_COOKIES = ("unb", "cookie2")
+# 导入浏览器的登录至少要有的 cookie：cookie2 是会话。unb（账号 ID）浏览器里有时没有，
+# 网页照样能用，没有时后台自己找出是哪个账号（Accounts.identify）
+IMPORT_REQUIRED_COOKIES = ("cookie2",)
 # 这几个 cookie 都一样就是同一份登录，浏览器插件重复推过来时不用再问平台
 SAME_LOGIN_COOKIES = ("unb", "cookie2", *KEEP_LOGIN_COOKIES)
 
@@ -187,7 +188,7 @@ def parse_cookie_header(text: str) -> Credential:
     missing = [name for name in IMPORT_REQUIRED_COOKIES if not credential.cookies.get(name)]
     if missing:
         raise ValueError(f"cookie 里没有 {'、'.join(missing)}，要复制整个 Cookie 请求头")
-    if not credential.unb.isdigit():
+    if credential.unb and not credential.unb.isdigit():
         raise ValueError("cookie 里的 unb 不是账号 ID，复制的可能不是闲鱼的 cookie")
     return credential
 

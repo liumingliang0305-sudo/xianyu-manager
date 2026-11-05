@@ -195,7 +195,6 @@ def test_import_without_keep_login_says_so(client):
     ("cookie", "hint"),
     [
         (f"unb={UNB}; _m_h5_tk=tk_1", "cookie2"),
-        ("cookie2=b2", "unb"),
         ("unb=abc; cookie2=b2", "unb"),
     ],
 )
@@ -233,6 +232,32 @@ def test_import_same_login_again_does_not_ask_platform(client, platform):
     changed = import_login(client, BROWSER_COOKIE.replace("cookie2=b2", "cookie2=b3"))
     assert changed.json()["changed"] is True
     assert len(platform.calls) == calls + 1
+
+
+def test_import_without_unb_asks_platform_which_account(client, accounts_dir, platform):
+    """浏览器里有时没有 unb，网页照样能用：问平台这是哪个账号，补上 unb 再保存。"""
+    resp = import_login(client, BROWSER_COOKIE.replace(f"unb={UNB}; ", ""))
+    assert resp.status_code == 200
+    assert (resp.json()["account_id"], resp.json()["changed"]) == (UNB, True)
+    assert [api for api, _ in platform.calls] == ["mtop.taobao.idlemessage.pc.loginuser.get"]
+    assert Credential.load(accounts_dir / f"{UNB}.json").unb == UNB
+
+
+def test_import_without_unb_matches_saved_login_without_asking(client, platform):
+    """已保存的登录里有同一个会话的，就是那个账号，不请求平台。"""
+    assert import_login(client, BROWSER_COOKIE).json()["changed"] is True
+    calls = len(platform.calls)
+    again = import_login(client, BROWSER_COOKIE.replace(f"unb={UNB}; ", ""))
+    assert (again.json()["account_id"], again.json()["changed"]) == (UNB, False)
+    assert len(platform.calls) == calls
+
+
+def test_import_without_unb_expired_is_rejected(client, accounts_dir, platform):
+    platform.session_expired = True
+    resp = import_login(client, "cookie2=b9; havana_lgc_exp=4102444800000")
+    assert resp.status_code == 401
+    assert platform.renews == 0
+    assert not accounts_dir.exists() or not list(accounts_dir.glob("*.json"))
 
 
 def test_import_cookie_of_another_account_is_rejected(client, accounts_dir, platform):

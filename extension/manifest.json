@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "闲鱼管理 · 登录同步",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "把浏览器里闲鱼（goofish.com）的登录同步给闲鱼管理后台，浏览器续期后也会跟着同步。",
   "icons": {
     "16": "icons/frog-16.png",

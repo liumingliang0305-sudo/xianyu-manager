@@ -352,8 +352,13 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 - 从哪复制：开发者工具"网络"里 `www.goofish.com` 那条文档请求的 `Cookie` 请求头。续期插件在 `www.goofish.com` 上读
   `havana_lgc_exp` / `cookie3_bak_exp`，所以这两个 cookie 对 www 可见，会出现在这个请求头里；`cookie2` 是 HttpOnly，
   `document.cookie` 拿不到，请求头里有；
-- 后台只要求有 `unb` 和 `cookie2`（`_m_h5_tk` 没有也行，第一次请求平台会发），先调 `loginuser.get` 确认登录态有效、
+- 后台只要求有 `cookie2`（`_m_h5_tk` 没有也行，第一次请求平台会发），先调 `loginuser.get` 确认登录态有效、
   `userId` 等于 `unb` 才保存，失效的 cookie 不会盖掉现有凭证；
+- ✅ 2026-11-05 浏览器里**没有 `unb`**，网页照样能用（"我买到的"订单列表能打开）：Chrome 的 cookie 库里 `.goofish.com`
+  有 `cookie2`（10-29 种下的）、`sgcookie`、`tracknick`、`havana_lgc_exp` 等，就是没有 `unb`，什么时候、被谁删的不知道。
+  所以插件只看有没有 `cookie2`，后台缺 `unb` 时自己找账号：已保存的凭证里 `cookie2` 一样的就是那个账号，不请求平台；
+  找不到再调 `loginuser.get`，拿 `userId` 补上 `unb`（这次调用顺带确认了登录态，不再确认第二次）。
+  这时还不知道是哪个账号，这一个请求不过账号的限流和熔断；
 - 确认时**不续期**：插件会反复推同一份 cookie，浏览器那份过期了还替它续，就是每推一次续一次，绕开了 `sdkSilent` 限频。
   过期的直接拒绝（401），后台留着自己那份，自己的会话过期时照常续；浏览器那份等网页端自己续上、cookie 变了再推；
 - `unb`、`cookie2`、`havana_lgc_exp`、`cookie3_bak_exp` 都和已保存的一样就算同一份登录，不请求平台，直接返回 `changed: false`；

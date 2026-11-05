@@ -170,6 +170,30 @@ class Accounts:
             )
         return self._status[account_id]
 
+    async def identify(self, credential: Credential) -> tuple[Credential, bool]:
+        """cookie 里没有 unb 时，找出这份登录是哪个账号，补上 unb。
+
+        浏览器里有时没有 unb，网页照样能用（2026-11-05 碰到过，见协议笔记"导入浏览器的登录"）。
+        已保存的凭证里有同一个会话（cookie2 一样）的，就是那个账号，不请求平台；没有的问平台
+        （loginuser.get，不续期，会话过期抛 AuthRequiredError）。
+        返回 (补上了 unb 的凭证, 有没有向平台确认过)。
+        """
+        session = credential.cookies.get("cookie2")
+        for account_id in self.ids():
+            try:
+                saved = self.load(account_id)
+            except (OSError, ValueError):
+                continue
+            if session and saved.cookies.get("cookie2") == session:
+                return Credential(cookies={**credential.cookies, "unb": account_id}), False
+        # 还不知道是哪个账号，没法按账号限流、熔断；只发这一个只读请求
+        async with MtopClient(credential, transport=self._transport, auto_renew=False) as client:
+            user = await client.call(LOGIN_USER_API)
+            user_id = str(user.get("userId") or "")
+            if not user_id.isdigit():
+                raise AuthRequiredError("平台没说这份登录是哪个账号")
+            return Credential(cookies={**client.credential.cookies, "unb": user_id}), True
+
     async def verify(self, credential: Credential) -> Credential:
         """确认一份还没保存的凭证（比如从浏览器导入的）登录态有效、属于 cookie 里的账号。
 
