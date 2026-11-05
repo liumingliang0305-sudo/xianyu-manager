@@ -1,0 +1,215 @@
+{
+ "goods": {
+  "goodsID": 909497970646,
+  "goodsName": "中国扬子集团洗衣机全自动家用波轮洗烘一体小型宿舍出租屋大容量",
+  "topGallery": [
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-08-05/02cf72b4-74b9-48cb-93fb-b84e9d24d256.jpeg?imageMogr2/quality/90/thumbnail/1300x9999%3E",
+    "id": 1511684487114,
+    "aspectRatio": 1
+   },
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-03-15/68b6013b-0c9e-47b4-b925-69708590954d.jpeg?imageMogr2/quality/90/thumbnail/1300x9999%3E",
+    "id": 1511684487115,
+    "aspectRatio": 1
+   },
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-03-15/fcf92ff3-3d76-4057-867a-eaea740a5f4b.jpeg?imageMogr2/quality/90/thumbnail/1300x9999%3E",
+    "id": 1511684487116,
+    "aspectRatio": 1
+   }
+  ],
+  "detailGallery": [
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-08-05/02cf72b4-74b9-48cb-93fb-b84e9d24d256.jpeg",
+    "width": 800,
+    "height": 800
+   },
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-03-15/6a81602f-bdeb-4bbb-8364-f81cc963ff42.jpeg",
+    "width": 780,
+    "height": 1200
+   },
+   {
+    "url": "https://img.pddpic.com/mms-goods-image/2026-03-15/3ebfe925-532a-4ada-b786-d19452fdac9a.jpeg",
+    "width": 790,
+    "height": 1054
+   }
+  ],
+  "videoGallery": [
+   {
+    "url": "https://video5.pddpic.com/i3/2026-04-22/a9da07b821d1afba37515386afeda574.mp4",
+    "width": 1920,
+    "height": 1080,
+    "videoUrl": "https://video5.pddpic.com/i3/2026-04-22/a9da07b821d1afba37515386afeda574.mp4"
+   }
+  ],
+  "descVideoGallery": [
+   {
+    "url": "https://img.pddpic.com/mms-material-img/i3/2026-04-22/a9da07b821d1afba37515386afeda574.mp4.pdd.000001.jpeg",
+    "videoUrl": "https://video5.pddpic.com/i3/2026-04-22/a9da07b821d1afba37515386afeda574.mp4.f30.mp4",
+    "width": 1920,
+    "height": 1080
+   }
+  ],
+  "skus": [
+   {
+    "skuId": 1869535634868,
+    "goodsId": 909497970646,
+    "thumbUrl": "https://img.pddpic.com/mms-goods-image/2026-08-05/048bcec2-c91a-4575-b225-5ec640a0daf5.jpeg",
+    "initQuantity": 0,
+    "quantity": 1000,
+    "limitQuantity": 999999,
+    "soldQuantity": 0,
+    "hotSale": 1,
+    "defaultQuantity": 100,
+    "isOnsale": 1,
+    "spec": "29537853487",
+    "specs": [
+     {
+      "spec_key": "款式",
+      "spec_value": "10KG升级强劲新蓝光洗护【强动力桶自洁+加厚款】",
+      "spec_key_id": 1218,
+      "spec_value_id": 29537853487,
+      "custom": false
+     }
+    ],
+    "price": 0,
+    "normalPrice": "498",
+    "groupPrice": "298",
+    "oldGroupPrice": 39800,
+    "marketPrice": 0,
+    "weight": 0,
+    "previewPriority": 0,
+    "startTime": 0,
+    "endTime": 0,
+    "staticLimitQuantity": 20382,
+    "attribute": "{\"skuPreSaleTime\":0}",
+    "normalSavePrice": "200",
+    "skuID": 1869535634868,
+    "skuExpansionPrice": "0"
+   },
+   {
+    "skuId": 1869535634870,
+    "goodsId": 909497970646,
+    "thumbUrl": "https://img.pddpic.com/mms-goods-image/2026-08-05/f96a26c1-ddbd-4ea7-b944-8a9ce3baf70b.jpeg",
+    "initQuantity": 0,
+    "quantity": 1000,
+    "limitQuantity": 999999,
+    "soldQuantity": 0,
+    "defaultQuantity": 100,
+    "isOnsale": 1,
+    "spec": "29537843765",
+    "specs": [
+     {
+      "spec_key": "款式",
+      "spec_value": "12KG升级强劲新蓝光洗护【强动力桶自洁+加厚款】",
+      "spec_key_id": 1218,
+      "spec_value_id": 29537843765,
+      "custom": false
+     }
+    ],
+    "price": 0,
+    "normalPrice": "518",
+    "groupPrice": "318",
+    "oldGroupPrice": 41800,
+    "marketPrice": 0,
+    "weight": 0,
+    "previewPriority": 1,
+    "startTime": 0,
+    "endTime": 0,
+    "staticLimitQuantity": 20382,
+    "attribute": "{\"skuPreSaleTime\":0}",
+    "normalSavePrice": "200",
+    "skuID": 1869535634870,
+    "skuExpansionPrice": "0"
+   },
+   {
+    "skuId": 1943208266473,
+    "goodsId": 909497970646,
+    "thumbUrl": "https://img.pddpic.com/mms-goods-image/2026-08-05/fe9a41db-d2e8-4578-8307-fb67ff440c55.jpeg",
+    "initQuantity": 0,
+    "quantity": 499,
+    "limitQuantity": 999999,
+    "soldQuantity": 0,
+    "defaultQuantity": 100,
+    "isOnsale": 1,
+    "spec": "30882362371",
+    "specs": [
+     {
+      "spec_key": "款式",
+      "spec_value": "12KG升级强劲新蓝光洗护【强动力桶自洁+加厚玻璃款】",
+      "spec_key_id": 1218,
+      "spec_value_id": 30882362371,
+      "custom": false
+     }
+    ],
+    "price": 0,
+    "normalPrice": "548",
+    "groupPrice": "348",
+    "oldGroupPrice": 44800,
+    "marketPrice": 0,
+    "weight": 0,
+    "previewPriority": 2,
+    "startTime": 0,
+    "endTime": 0,
+    "staticLimitQuantity": 20382,
+    "attribute": "{\"skuPreSaleTime\":0}",
+    "normalSavePrice": "200",
+    "skuID": 1943208266473,
+    "skuExpansionPrice": "0"
+   }
+  ],
+  "goodsProperty": [
+   {
+    "key": "品牌",
+    "values": [
+     "YANGZI/扬子"
+    ],
+    "ref_pid": 310,
+    "reference_id": 4875
+   },
+   {
+    "key": "型号",
+    "values": [
+     "XQB100-8588"
+    ],
+    "ref_pid": 311,
+    "reference_id": 0
+   },
+   {
+    "key": "能效等级",
+    "values": [
+     "三级"
+    ],
+    "ref_pid": 411,
+    "reference_id": 0
+   },
+   {
+    "key": "工作方式",
+    "values": [
+     "定频"
+    ],
+    "ref_pid": 408,
+    "reference_id": 0
+   },
+   {
+    "key": "排水方式",
+    "values": [
+     "下排式"
+    ],
+    "ref_pid": 560,
+    "reference_id": 0
+   }
+  ],
+  "minGroupPrice": "298",
+  "maxGroupPrice": "668",
+  "minNormalPrice": "498",
+  "maxNormalPrice": "868",
+  "sideSalesTip": "热卖12.4万+件"
+ },
+ "mall": {
+  "mallId": "371109834",
+  "mallName": "YANGZI咖麦菲专卖店"
+ }
+}

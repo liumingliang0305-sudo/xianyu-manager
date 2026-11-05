@@ -1,4 +1,4 @@
-// 登录同步插件的纯函数。background.js 和 popup.js 共用，不碰 chrome.* 接口，方便直接用 node 测。
+// 插件的纯函数。background.js 和 popup.js 共用，不碰 chrome.* 接口，方便直接用 node 测。
 
 export const DEFAULT_SERVER = "http://127.0.0.1:8000"
 
@@ -90,4 +90,25 @@ export function normalizeToken(text) {
  */
 export function isFinalFailure(status) {
   return status >= 400 && status < 500 && status !== 429
+}
+
+const PDD_HOST = "mobile.yangkeduo.com"
+
+/** 拼多多的手机网页版（商品页、登录页都在这个域名上） */
+export function isPddPage(url) {
+  try {
+    return new URL(url).hostname === PDD_HOST
+  } catch {
+    return false
+  }
+}
+
+/** 拼多多商品页：goods.html、goods1.html、goods2.html…（App 里分享出来的短链打开以后也是这个） */
+export function isPddGoodsPage(url) {
+  try {
+    const { protocol, hostname, pathname } = new URL(url)
+    return protocol === "https:" && hostname === PDD_HOST && /^\/goods\d*\.html$/.test(pathname)
+  } catch {
+    return false
+  }
 }

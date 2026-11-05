@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "闲鱼管理 · 登录同步",
-  "version": "0.2.2",
-  "description": "把浏览器里闲鱼（goofish.com）的登录同步给闲鱼管理后台，浏览器续期后也会跟着同步。",
+  "name": "闲鱼管理 · 浏览器插件",
+  "version": "0.3.0",
+  "description": "把浏览器里闲鱼（goofish.com）的登录同步给闲鱼管理后台，浏览器续期后也会跟着同步；在拼多多商品页上一键把商品导入管理后台的货源。",
   "icons": {
     "16": "icons/frog-16.png",
     "32": "icons/frog-32.png",
@@ -12,7 +12,9 @@
   "permissions": [
     "cookies",
     "alarms",
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "https://*.goofish.com/*",
@@ -27,7 +29,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "闲鱼登录同步",
+    "default_title": "闲鱼管理",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/frog-16.png",

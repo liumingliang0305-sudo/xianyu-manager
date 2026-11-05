@@ -146,6 +146,8 @@ drafts = Table(
     Column("origin", Text),
     # 重新上架的草稿：照哪个商品抄的（origin 是那个商品的 editDetail），发布出去是个新商品
     Column("relist_item_id", Text),
+    # 照拼多多货源建的草稿：哪个拼多多商品（pdd_goods.goods_id），别的是 NULL
+    Column("pdd_goods_id", Text),
     Column("created_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),
     Column("published_at", Double),
@@ -255,4 +257,22 @@ sync_jobs = Table(
     Column("last_error", Text),  # 上次失败的原因，成功了清掉
     Column("last_result", Text, nullable=False, server_default="{}"),  # JSON：上次成功时各项几个
     Column("next_run_at", Double),  # 下次定时同步的时间，NULL 是到期了（从没跑过）
+)
+
+# 拼多多货源（app/pdd.py）：浏览器插件从拼多多商品页导入的商品，按管理后台的用户存，不跟闲鱼账号走
+pdd_goods = Table(
+    "pdd_goods",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("goods_id", Text, primary_key=True),  # 拼多多的商品 ID
+    Column("title", Text, nullable=False),
+    Column("mall_name", Text, nullable=False, server_default=""),  # 店铺名
+    Column("min_price_cent", BigInteger),  # 拼单价的区间，页面上没有是 NULL
+    Column("max_price_cent", BigInteger),
+    # JSON：主图、详情图、视频、规格、商品参数这些（见 PddGoods.to_data），
+    # 图片下载下来以后带 sha，文件在 data/images/<sha>.jpg
+    Column("data", Text, nullable=False, server_default="{}"),
+    Column("imported_at", Double, nullable=False),  # 第一次导入
+    Column("updated_at", Double, nullable=False),  # 最近一次导入
+    Index("pdd_goods_user", "user_id", "updated_at"),
 )

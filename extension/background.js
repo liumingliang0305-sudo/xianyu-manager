@@ -1,6 +1,8 @@
-// 登录同步插件的后台：闲鱼的登录 cookie 变了（登录、退出、网页端续期）就推给管理后台，
-// 另外每 10 分钟看一次，补上后台没开时漏掉的。推之前比一下登录指纹，没变就不推。
-// 推的时候带上插件令牌（管理后台用户菜单里生成），推过来的账号归到令牌的主人名下。
+// 插件的后台，做两件事，都带上插件令牌（管理后台用户菜单里生成），推到令牌的主人名下：
+// 1. 登录同步：闲鱼的登录 cookie 变了（登录、退出、网页端续期）就推给管理后台，
+//    另外每 10 分钟看一次，补上后台没开时漏掉的。推之前比一下登录指纹，没变就不推。
+// 2. 导入拼多多商品：弹窗在拼多多商品页上读出商品数据（pdd.js）交给这里，发到管理后台。
+//    放在这里发是因为后台要下载图片、要等几秒，弹窗可能先关掉了。
 
 import {
   DEFAULT_SERVER,
@@ -104,10 +106,75 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM) void sync()
 })
 
+async function setPddStatus(status) {
+  await chrome.storage.local.set({ pddStatus: { ...status, at: Date.now() } })
+}
+
+/** 把弹窗读出来的拼多多商品（{ goods, mall }）发给管理后台，结果记在 pddStatus 里给弹窗看 */
+async function importPdd(data) {
+  const { server = DEFAULT_SERVER, token } = await chrome.storage.local.get(["server", "token"])
+  const title = data?.goods?.goodsName ?? ""
+  if (!token) {
+    await setPddStatus({
+      ok: false,
+      title,
+      message: "还没填插件令牌：在管理后台左下角的用户菜单里生成，填到下面",
+    })
+    return
+  }
+  if (!isLocalServer(server) && !(await chrome.permissions.contains(serverPermission(server)))) {
+    await setPddStatus({
+      ok: false,
+      title,
+      message: `还没允许插件访问 ${server}：再点一次「导入这个商品」，在弹出的提示里点允许`,
+    })
+    return
+  }
+  await setPddStatus({ pending: true, title, message: "管理后台正在下载图片，要几秒钟…" })
+  let resp
+  try {
+    resp = await fetch(`${server}/api/pdd/goods`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
+  } catch {
+    const hint = isLocalServer(server) ? "确认 uv run xym serve 在运行" : "确认服务器开着、地址没填错"
+    await setPddStatus({ ok: false, title, message: `连不上管理后台（${server}），${hint}` })
+    return
+  }
+  const body = await resp.json().catch(() => null)
+  if (!resp.ok) {
+    let message = body?.message ?? `管理后台返回 HTTP ${resp.status}`
+    if (body?.code === "unauthenticated") {
+      message = "插件令牌不对或者已经作废，到管理后台用户菜单里重新生成，填到下面"
+    }
+    await setPddStatus({ ok: false, title, message })
+    return
+  }
+  const goods = body.goods
+  const missing = body.total - body.saved
+  await setPddStatus({
+    ok: true,
+    added: body.added,
+    title: goods.title,
+    goodsId: goods.goods_id,
+    message:
+      `主图 ${goods.image_count} 张、详情图 ${goods.detail_count} 张、规格 ${goods.sku_count} 个` +
+      (missing > 0 ? `；${missing} 张图没下载下来，可以到管理后台重新下载` : ""),
+  })
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
-  if (message?.type !== "sync") return false
-  sync({ force: true }).finally(() => reply(true))
-  return true // 异步回复
+  if (message?.type === "sync") {
+    sync({ force: true }).finally(() => reply(true))
+    return true // 异步回复
+  }
+  if (message?.type === "import-pdd") {
+    importPdd(message.data).finally(() => reply(true))
+    return true
+  }
+  return false
 })
 
 chrome.runtime.onInstalled.addListener(() => void sync({ force: true }))

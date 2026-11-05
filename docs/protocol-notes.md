@@ -606,3 +606,31 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 - `baseInfo.kcUserId` 等于 `unb`，`baseInfo.tags` 是一堆认证标记（实名、芝麻）。
 
 本系统一天拉一次（登录有效时），手动"重新检查登录态"时顺带重拉；拉失败了半小时内不再试。
+
+## 拼多多商品页
+
+拼多多货源（`app/pdd.py`）的数据从拼多多手机网页版的商品页上读，浏览器插件（`extension/pdd.js`）在用户点按钮时
+注入到页面里读，不另外请求拼多多，也不自己拼接口请求（接口要 `anti_content` 签名，那等于模拟设备指纹，不做）。
+
+✅ 2026-11-05 在一个真实商品页上实测：
+
+- 商品页是 `https://mobile.yangkeduo.com/goods.html?goods_id=…`，也有 `goods1.html`、`goods2.html`；
+  App 里分享出来的链接（`goods2.html?ps=…`）打开以后跳到带 `goods_id` 的地址。
+- **要登录**：没登录直接跳到 `login.html`（手机号验证码或扫码）。登录以后页面是服务端渲染的，
+  一个内联 `<script>` 里写着 `window.rawData`（这个商品约 28 万字符）。
+- 商品数据在 `window.rawData.store.initDataObj.goods`：
+  - `goodsID`（数字）、`goodsName` 标题、`sideSalesTip`（"热卖12.4万+件"）；
+  - `topGallery[]`：主图，`{url, id, aspectRatio}`，`url` 带 `?imageMogr2/quality/90/thumbnail/1300x9999>`，去掉就是原图；
+  - `detailGallery[]`：详情图，`{url, width, height}`，本来就是原图（这个商品 22 张，宽 669–800、高到 1500）。
+    **商品详情全是图片，没有文字介绍**；第一张和主图第一张常常是同一个地址；
+  - `videoGallery[]`（主图视频，`url` 就是 mp4）、`descVideoGallery[]`（详情视频，`url` 是封面图、`videoUrl` 是 mp4）；
+  - `skus[]`：`skuId`、`specs[]{spec_key, spec_value}`（"款式"："10KG升级…"）、`groupPrice` 拼单价和
+    `normalPrice` 单买价（元的字符串，"298"）、`quantity` 库存、`isOnsale`、`thumbUrl` 规格图；
+    `oldGroupPrice` 是分（活动前的价）；
+  - `goodsProperty[]`：商品参数，`{key: "品牌", values: ["YANGZI/扬子"]}`；
+  - `minGroupPrice` / `maxGroupPrice`、`minNormalPrice` / `maxNormalPrice`：价格区间（元的字符串）。
+- 店铺在 `initDataObj.mall`：`mallId`、`mallName`。
+- 同一个对象里还有登录用户的 `uin`、带 `pxq_secret_key` 的分享链接这些，插件不带走。
+- 在页面里点到别的商品时可能不刷新整页，`rawData` 还是原来那个商品的；插件比一下网址里的 `goods_id`，对不上就让刷新。
+- 图片（`img.pddpic.com`）和视频（`video5.pddpic.com`）不带 cookie、不带 Referer 也能下载。
+  缩略图在原图地址后面加 `?imageMogr2/thumbnail/96x96`（130 KB 的原图变 10 KB）；`thumbnail/960x` 会把小图放大，别用。

@@ -21,7 +21,7 @@ import { dateTime } from "@/lib/format"
 const KEY = ["plugin-token"]
 
 /**
- * 浏览器插件令牌：登录同步插件推登录时带上，证明是这个用户推的。只能用来推登录，推过来的账号归这个用户。
+ * 浏览器插件令牌：插件推登录、导入拼多多商品时带上，证明是这个用户推的。只能做这两件事，推过来的归这个用户。
  * 令牌只在生成时显示一次，库里只存哈希；忘了就重新生成，旧的作废。
  */
 export function PluginTokenDialog({ onClose }: { onClose: () => void }) {
@@ -109,7 +109,7 @@ export function PluginTokenDialog({ onClose }: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>浏览器插件令牌</DialogTitle>
           <DialogDescription>
-            登录同步插件把浏览器里的闲鱼登录推过来时用它。只能用来推登录，推过来的账号归到你名下。
+            浏览器插件把闲鱼登录推过来、导入拼多多商品时用它。只能做这两件事，推过来的账号和商品归到你名下。
           </DialogDescription>
         </DialogHeader>
         {status}

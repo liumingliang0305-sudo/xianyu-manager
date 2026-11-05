@@ -10,6 +10,7 @@ import { ItemEditPage } from "@/features/items/item-edit-page"
 import { ItemsPage } from "@/features/items/items-page"
 import { MessagesPage } from "@/features/messages/messages-page"
 import { OrdersPage } from "@/features/orders/orders-page"
+import { PddPage } from "@/features/pdd/pdd-page"
 import { PublishPage } from "@/features/publish/publish-page"
 import { SearchPage } from "@/features/search/search-page"
 import { AccountProvider } from "@/hooks/use-account"
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="messages" element={<MessagesPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="accounts" element={<AccountsPage />} />
+          <Route path="pdd" element={<PddPage />} />
           <Route path="*" element={<Navigate to="/items" replace />} />
         </Route>
       </Routes>

@@ -472,6 +472,8 @@ export interface Draft {
   edit_item_id: string | null
   /** 重新上架的草稿：照哪个商品抄的，发布出去是一个新商品。别的是 null */
   relist_item_id: string | null
+  /** 照拼多多货源建的草稿：哪个拼多多商品 */
+  pdd_goods_id: string | null
   /** 上次发布（提交）失败的原因 */
   error: string | null
   created_at: number
@@ -490,6 +492,73 @@ export interface DraftForm {
   /** 图片的顺序（sha） */
   images: string[]
   address: Address | null
+}
+
+/** 拼多多货源列表里的一行。价格是拼单价，单位分；页面上没有时是 null */
+export interface PddGoodsSummary {
+  goods_id: string
+  title: string
+  mall_name: string
+  /** 页面上的"热卖12.4万+件"，没有是空串 */
+  sales_tip: string
+  /** 拼多多商品页（不带分享参数） */
+  url: string
+  min_price_cent: number | null
+  max_price_cent: number | null
+  /** 第一张主图，拼多多 CDN 上的原图地址；没有是空串 */
+  cover: string
+  image_count: number
+  detail_count: number
+  sku_count: number
+  video_count: number
+  /** 还没下载到后台的图片（主图、详情图、规格图，同一个地址算一张） */
+  missing_images: number
+  imported_at: number
+  updated_at: number
+}
+
+export interface PddImage {
+  url: string
+  width: number | null
+  height: number | null
+  /** 已经下载到后台（建草稿用的是下载下来的） */
+  saved: boolean
+}
+
+export interface PddSku {
+  sku_id: string
+  /** 各规格的值连起来，"10KG… / 白色" */
+  name: string
+  specs: { key: string; value: string }[]
+  /** 拼单价 */
+  price_cent: number | null
+  /** 单独购买价 */
+  normal_price_cent: number | null
+  /** 库存 */
+  quantity: number | null
+  on_sale: boolean
+  /** 规格图，没有是空串 */
+  thumb: string
+}
+
+export interface PddGoods extends PddGoodsSummary {
+  min_normal_price_cent: number | null
+  max_normal_price_cent: number | null
+  /** 主图（轮播图） */
+  images: PddImage[]
+  /** 详情图：拼多多的商品详情全是图片，没有文字 */
+  detail_images: PddImage[]
+  videos: { url: string; cover: string }[]
+  skus: PddSku[]
+  /** 商品参数：品牌、型号这些 */
+  properties: { key: string; value: string }[]
+}
+
+/** 重新下载图片的结果：saved / total 张 */
+export interface PddImagesResult {
+  goods: PddGoods
+  saved: number
+  total: number
 }
 
 export class ApiError extends Error {
@@ -890,6 +959,29 @@ export const api = {
     request<{ places: AddressOption[] }>(
       `/publish/places?q=${encodeURIComponent(keyword)}`,
     ).then((r) => r.places),
+
+  /** 拼多多货源（按用户存，不跟闲鱼账号走），最近导入的在前 */
+  pddGoods: () => request<{ goods: PddGoodsSummary[] }>("/pdd/goods").then((r) => r.goods),
+
+  pddGoodsDetail: (goodsId: string) =>
+    request<PddGoods>(`/pdd/goods/${encodeURIComponent(goodsId)}`),
+
+  /** 把上次没下载下来的图片再下一次 */
+  fetchPddImages: (goodsId: string) =>
+    request<PddImagesResult>(`/pdd/goods/${encodeURIComponent(goodsId)}/images`, {
+      method: "POST",
+    }),
+
+  /** 删货源和只有它用的图片；照它建的草稿不受影响 */
+  deletePddGoods: (goodsId: string) =>
+    request<{ ok: true }>(`/pdd/goods/${encodeURIComponent(goodsId)}`, { method: "DELETE" }),
+
+  /** 照拼多多货源在这个账号建一个发布草稿（描述、主图），价格这些在发布页填。不请求闲鱼 */
+  draftFromPdd: (account: string, goodsId: string) =>
+    request<Draft>(
+      `/accounts/${encodeURIComponent(account)}/pdd/${encodeURIComponent(goodsId)}/draft`,
+      { method: "POST" },
+    ),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

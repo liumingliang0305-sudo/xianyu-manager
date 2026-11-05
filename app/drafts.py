@@ -27,7 +27,7 @@ from typing import Any
 
 from app.accounts import Accounts
 from app.db import Database, Row
-from app.images import ImageStore
+from app.images import ImageStore, drop_unused
 from app.items import ONLINE, ItemService
 from xianyu_core.item import (
     ItemApi,
@@ -105,6 +105,7 @@ class Draft:
     edit_item_id: str | None  # 编辑已有商品的草稿：改的是哪个商品
     origin: dict[str, Any] | None = field(repr=False)  # 建草稿时的 editDetail
     relist_item_id: str | None  # 重新上架的草稿：照哪个商品抄的
+    pdd_goods_id: str | None  # 照拼多多货源建的草稿：哪个拼多多商品
 
     @classmethod
     def from_row(cls, row: Row) -> Draft:
@@ -203,8 +204,22 @@ class DraftService:
             raise DraftNotFoundError(f"找不到草稿 {draft_id}")
         return Draft.from_row(row)
 
-    def create(self, account_id: str, description: str = "") -> Draft:
-        """新建一个空草稿。发货地沿用这个账号最近一个选过发货地的草稿。"""
+    def create(
+        self,
+        account_id: str,
+        description: str = "",
+        *,
+        images: list[DraftImage] | None = None,
+        pdd_goods_id: str | None = None,
+    ) -> Draft:
+        """新建一个草稿，默认是空的。发货地沿用这个账号最近一个选过发货地的草稿。
+
+        `images` 是已经存在本机的图（照拼多多货源建草稿时用货源下载下来的图），
+        `pdd_goods_id` 记下照哪个货源建的。
+        """
+        images = images or []
+        if len(images) > MAX_IMAGES:
+            raise ValueError(f"最多 {MAX_IMAGES} 张图片")
         last = self._db.execute(
             "SELECT address FROM drafts WHERE account_id = %s AND address IS NOT NULL"
             " AND edit_item_id IS NULL ORDER BY updated_at DESC LIMIT 1",
@@ -212,9 +227,17 @@ class DraftService:
         ).fetchone()
         now = time.time()
         row = self._db.execute(
-            "INSERT INTO drafts (account_id, description, address, created_at, updated_at)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING *",
-            (account_id, description, last["address"] if last else None, now, now),
+            "INSERT INTO drafts (account_id, description, images, address, pdd_goods_id,"
+            " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (
+                account_id,
+                description,
+                _images_json(images),
+                last["address"] if last else None,
+                pdd_goods_id,
+                now,
+                now,
+            ),
         ).fetchone()
         return Draft.from_row(row)
 
@@ -651,13 +674,8 @@ class DraftService:
         )
 
     def _drop_unused(self, shas: list[str]) -> None:
-        """别的草稿都没用到的图片文件删掉。"""
-        for sha in shas:
-            used = self._db.execute(
-                "SELECT 1 FROM drafts WHERE images LIKE %s LIMIT 1", (f'%"{sha}"%',)
-            ).fetchone()
-            if not used:
-                self._images.delete(sha)
+        """别的草稿、拼多多货源都没用到的图片文件删掉。"""
+        drop_unused(self._db, self._images, shas)
 
 
 def address_option(poi: dict[str, Any]) -> dict[str, Any]:

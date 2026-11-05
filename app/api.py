@@ -7,7 +7,8 @@
   默认要登录：接口挂在 `authed` 上，只有登录本身、插件推登录和 /api/health 挂在 app 上；
 - 数据隔离：每个用户只看得到自己名下的闲鱼账号，/api/accounts/{id}/... 碰到别人的账号
   和不存在的一样，404；
-- 浏览器插件推登录（/api/login/import）用插件令牌，只能推登录、推到自己名下。
+- 浏览器插件推登录（/api/login/import）、导入拼多多商品（POST /api/pdd/goods）用插件令牌，
+  只能做这两件事、推到自己名下。
 
 约定：
 - 金额：响应里一律是分（`*_cent`，整数）；请求里的价格是元的字符串（"49"、"12.5"），服务端校验换算；
@@ -28,6 +29,9 @@
 - 自动同步（app/autosync.py）：`auto_sync=True` 时商品、订单按交易消息、打开页面、定时三条路
   自动同步，.../autosync 看状态、改设置；手动同步（.../items/sync、.../orders/sync）也记在一起。
   同步开始、结束都通过消息的推送流发一条 sync 事件。
+- 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
+  按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
+  照它在这个账号建一个发布草稿。
 """
 
 from __future__ import annotations
@@ -63,7 +67,7 @@ from app.auth import (
     client_ip,
 )
 from app.autosync import INTERVAL_CHOICES, ITEMS, JOBS, MANUAL, AutoSync
-from app.drafts import Draft, DraftNotFoundError, DraftService, address_option
+from app.drafts import Draft, DraftImage, DraftNotFoundError, DraftService, address_option
 from app.items import ItemService, PriceGuardError
 from app.login import (
     LoginNotFoundError,
@@ -75,6 +79,7 @@ from app.login import (
 from app.matrix import AccountMatrix, AccountStats
 from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderRecord, OrderService
+from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft_text
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.search import SearchService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
@@ -139,6 +144,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (PriceGuardError, 409, "price_guard"),
     (AccountNotFoundError, 404, "account_not_found"),
     (DraftNotFoundError, 404, "draft_not_found"),
+    (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
     (LoginNotFoundError, 404, "login_not_found"),
     (ImOfflineError, 503, "im_offline"),
     (AuthRequiredError, 401, "auth_required"),
@@ -204,6 +210,12 @@ class RemarkIn(BaseModel):
 
 class CookieImportIn(BaseModel):
     cookie: str  # 浏览器开发者工具里复制的 Cookie 请求头
+
+
+class PddImportIn(BaseModel):
+    # 拼多多商品页 window.rawData.store.initDataObj 里插件挑出来的字段（见 extension/pdd.js）
+    goods: dict[str, Any]
+    mall: dict[str, Any] | None = None
 
 
 class OrderPriceIn(BaseModel):
@@ -304,9 +316,9 @@ def create_app(
         app.state.matrix = AccountMatrix(conn, accounts)
         app.state.items = ItemService(conn, accounts, interval=interval)
         app.state.orders = OrderService(conn, accounts, interval=interval)
-        app.state.drafts = DraftService(
-            conn, accounts, app.state.items, image_store.ImageStore(images_dir)
-        )
+        images = image_store.ImageStore(images_dir)
+        app.state.drafts = DraftService(conn, accounts, app.state.items, images)
+        app.state.pdd = PddService(conn, images, transport=transport)
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
             conn,
@@ -384,6 +396,9 @@ def create_app(
 
     def drafts(request: Request) -> DraftService:
         return request.app.state.drafts
+
+    def pdd(request: Request) -> PddService:
+        return request.app.state.pdd
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
@@ -685,6 +700,52 @@ def create_app(
             "keep_login_until": credential.keep_login_until,
             "message": imported_text(credential),
         }
+
+    @app.post("/api/pdd/goods", dependencies=[Depends(importing_user)])
+    async def import_pdd_goods(request: Request, body: PddImportIn) -> dict[str, Any]:
+        """导入一个拼多多商品（浏览器插件推的），下载图片。已经导入过的是更新。
+
+        返回商品、是不是新加的（added），和图片下载了几张（saved / total，同一个地址算一张）。
+        """
+        goods, added = await pdd(request).ingest(request.state.user.id, body.model_dump())
+        return {"goods": _pdd_goods(goods, detail=True), "added": added, **_pdd_images(goods)}
+
+    @authed.get("/api/pdd/goods")
+    async def list_pdd_goods(request: Request) -> dict[str, Any]:
+        return {"goods": [_pdd_goods(g) for g in pdd(request).list(request.state.user.id)]}
+
+    @authed.get("/api/pdd/goods/{goods_id}")
+    async def pdd_goods_detail(request: Request, goods_id: str) -> dict[str, Any]:
+        return _pdd_goods(pdd(request).get(request.state.user.id, goods_id), detail=True)
+
+    @authed.post("/api/pdd/goods/{goods_id}/images")
+    async def fetch_pdd_images(request: Request, goods_id: str) -> dict[str, Any]:
+        """把上次没下载下来的图再下一次。"""
+        goods = await pdd(request).fetch_images(request.state.user.id, goods_id)
+        return {"goods": _pdd_goods(goods, detail=True), **_pdd_images(goods)}
+
+    @authed.delete("/api/pdd/goods/{goods_id}")
+    async def delete_pdd_goods(request: Request, goods_id: str) -> dict[str, Any]:
+        pdd(request).delete(request.state.user.id, goods_id)
+        return {"ok": True}
+
+    @authed.post("/api/accounts/{account_id}/pdd/{goods_id}/draft")
+    async def draft_from_pdd(request: Request, account_id: str, goods_id: str) -> dict[str, Any]:
+        """照拼多多货源在这个账号建一个发布草稿：描述是标题、商品参数和可选的规格，
+        图片是下载下来的主图（最多 9 张），价格、邮费、分类在发布页填。不请求闲鱼。"""
+        account_id = account(request, account_id)
+        service = pdd(request)
+        goods = service.get(request.state.user.id, goods_id)
+        images = service.draft_images(goods)
+        if not images:
+            raise ValueError("主图还没下载下来，先在货源里点「重新下载图片」")
+        draft = drafts(request).create(
+            account_id,
+            draft_text(goods),
+            images=[DraftImage(img.sha, img.width or 0, img.height or 0) for img in images],
+            pdd_goods_id=goods.goods_id,
+        )
+        return _draft(draft)
 
     @authed.get("/api/accounts/{account_id}/items")
     async def list_items(
@@ -1182,11 +1243,69 @@ def _draft(draft: Draft) -> dict[str, Any]:
         "item_id": draft.item_id,
         "edit_item_id": draft.edit_item_id,
         "relist_item_id": draft.relist_item_id,
+        "pdd_goods_id": draft.pdd_goods_id,
         "error": draft.error,
         "created_at": draft.created_at,
         "updated_at": draft.updated_at,
         "published_at": draft.published_at,
     }
+
+
+def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
+    """拼多多货源给页面的样子。
+
+    图片给拼多多 CDN 上的地址（页面直接显示），`saved` 是下载到本机没有。
+    """
+    body: dict[str, Any] = {
+        "goods_id": goods.goods_id,
+        "title": goods.title,
+        "mall_name": goods.mall_name,
+        "sales_tip": goods.sales_tip,
+        "url": goods.url,
+        "min_price_cent": goods.min_price_cent,
+        "max_price_cent": goods.max_price_cent,
+        "cover": goods.images[0].url if goods.images else "",
+        "image_count": len(goods.images),
+        "detail_count": len(goods.detail_images),
+        "sku_count": len(goods.skus),
+        "video_count": len(goods.videos),
+        "missing_images": goods.missing(),
+        "imported_at": goods.imported_at,
+        "updated_at": goods.updated_at,
+    }
+    if not detail:
+        return body
+
+    def image(img: PddImage) -> dict[str, Any]:
+        return {"url": img.url, "width": img.width, "height": img.height, "saved": bool(img.sha)}
+
+    return {
+        **body,
+        "min_normal_price_cent": goods.min_normal_price_cent,
+        "max_normal_price_cent": goods.max_normal_price_cent,
+        "images": [image(img) for img in goods.images],
+        "detail_images": [image(img) for img in goods.detail_images],
+        "videos": [asdict(video) for video in goods.videos],
+        "skus": [
+            {
+                "sku_id": sku.sku_id,
+                "name": sku.name,
+                "specs": sku.specs,
+                "price_cent": sku.price_cent,
+                "normal_price_cent": sku.normal_price_cent,
+                "quantity": sku.quantity,
+                "on_sale": sku.on_sale,
+                "thumb": sku.thumb.url if sku.thumb else "",
+            }
+            for sku in goods.skus
+        ],
+        "properties": goods.properties,
+    }
+
+
+def _pdd_images(goods: PddGoods) -> dict[str, int]:
+    total = len({img.url for img in goods.all_images()})
+    return {"saved": total - goods.missing(), "total": total}
 
 
 def _yuan_or_none(value: str | None) -> int | None:

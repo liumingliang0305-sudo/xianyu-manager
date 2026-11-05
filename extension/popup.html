@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>闲鱼登录同步</title>
+    <title>闲鱼管理</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -34,6 +34,18 @@
       h1 {
         margin: 0 0 8px;
         font-size: 14px;
+      }
+      hr {
+        margin: 4px 0 12px;
+        border: 0;
+        border-top: 1px solid var(--border);
+      }
+      a {
+        color: inherit;
+      }
+      #pdd-open:not([hidden]) {
+        display: block;
+        margin: 0 0 6px;
       }
       p {
         margin: 0 0 6px;
@@ -84,6 +96,13 @@
     </style>
   </head>
   <body>
+    <h1>拼多多商品</h1>
+    <p id="pdd-hint" class="muted"></p>
+    <button id="pdd-import" type="button" hidden>导入这个商品</button>
+    <p id="pdd-status" aria-live="polite" hidden></p>
+    <p id="pdd-detail" class="muted" hidden></p>
+    <a id="pdd-open" href="#" hidden>到管理后台查看</a>
+    <hr />
     <h1>闲鱼登录同步</h1>
     <p id="status" aria-live="polite">还没同步过</p>
     <p id="detail"></p>
