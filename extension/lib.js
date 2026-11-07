@@ -76,6 +76,26 @@ export function serverPermission(server) {
   return { origins: [`${url.protocol}//${url.hostname}/*`] }
 }
 
+/**
+ * 往哪些页面注入传话脚本（bridge.js）：插件里填的管理后台的主机，任何端口都算（开发时页面在 5173、接口在 8000）。
+ * 本机的 127.0.0.1 和 localhost 两个写法都算
+ */
+export function bridgeMatches(server) {
+  const url = new URL(server)
+  if (LOCAL_HOSTS.includes(url.hostname)) return LOCAL_HOSTS.map((host) => `http://${host}/*`)
+  return [`${url.protocol}//${url.hostname}/*`]
+}
+
+/** 闲鱼商品 ID：一串数字 */
+export function isItemId(text) {
+  return typeof text === "string" && /^\d{1,32}$/.test(text)
+}
+
+/** 闲鱼网页版的商品页 */
+export function goofishItemUrl(itemId) {
+  return `https://www.goofish.com/item?id=${itemId}`
+}
+
 /** 插件令牌：管理后台用户菜单里生成的，xymp_ 开头。不像令牌时返回 null */
 export function normalizeToken(text) {
   const token = text.trim()

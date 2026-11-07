@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCurrentAccount } from "@/hooks/use-account"
 import { useUrlParam } from "@/hooks/use-url-param"
+import { useExtension } from "@/lib/extension"
 import {
   errorMessage,
   type SearchConditions,
@@ -21,7 +22,13 @@ import {
 import { count, parseYuan, timeAgo } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-import { useSearch, useStash, useStashItem, useUnstashItem } from "./queries"
+import {
+  useFetchStashDetail,
+  useSearch,
+  useStash,
+  useStashItem,
+  useUnstashItem,
+} from "./queries"
 import { ResultsTable } from "./results-table"
 import { StashPanel } from "./stash-panel"
 
@@ -305,10 +312,17 @@ function merge(pages: { items: SearchItem[] }[] | undefined): SearchItem[] {
 type View = "results" | "stash"
 const VIEWS: readonly View[] = ["results", "stash"]
 
-/** 结果里的「暂存」开关：没存的存下（记上这次的搜索词），存了的移出 */
+/**
+ * 结果里的「暂存」开关：没存的存下（记上这次的搜索词），存了的移出。
+ * 装了浏览器插件的，存好以后接着请插件从 Chrome 里拿详情（完整描述、全部图片）
+ */
 function useStashToggle(keyword: string) {
   const stash = useStash()
-  const save = useStashItem()
+  const extension = useExtension()
+  const fetchDetail = useFetchStashDetail()
+  const save = useStashItem((saved) => {
+    if (extension) fetchDetail.mutate({ itemId: saved.item_id, title: saved.title })
+  })
   const unstash = useUnstashItem()
   const stashed = useMemo(
     () => (stash.data ? new Set(stash.data.map((it) => it.item_id)) : null),
@@ -321,10 +335,7 @@ function useStashToggle(keyword: string) {
         onError: (error) => toast.error(`移出暂存失败：${errorMessage(error)}`),
       })
     else
-      save.mutate(
-        { item, keyword },
-        { onError: (error) => toast.error(`暂存失败：${errorMessage(error)}`) },
-      )
+      save.mutate({ item, keyword })
   }
   return { stash, stashed, toggle }
 }
@@ -347,7 +358,8 @@ export function SearchPage() {
   else if (!conditions)
     body = (
       <EmptyState title="输入要搜的词">
-        搜的是闲鱼上所有卖家的在售商品，每翻一页用当前账号请求一次闲鱼。想留着以后用的点「暂存」
+        搜的是闲鱼上所有卖家的在售商品，每翻一页用当前账号请求一次闲鱼。想留着以后用的点「暂存」，
+        装了浏览器插件会顺带从你的 Chrome 里拿完整描述和全部图片
       </EmptyState>
     )
   else if (search.isPending) body = <RowsSkeleton rows={6} height="h-14" />

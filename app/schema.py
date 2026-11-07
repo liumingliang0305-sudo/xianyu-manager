@@ -296,6 +296,15 @@ search_stash = Table(
     Column("tags", Text, nullable=False, server_default="[]"),  # JSON：成色、品牌、降价这些
     Column("seller_tags", Text, nullable=False, server_default="[]"),  # JSON："卖家信用极好"这些
     Column("keyword", Text, nullable=False, server_default=""),  # 用哪个词搜到的
+    # 商品详情（pc.detail 的 itemDO）：后台调不了（一调就要滑块），由浏览器插件在用户自己的
+    # Chrome 里打开商品页拿到，管理后台页面转存过来。没拿到过是 detail_at 为 NULL
+    Column("description", Text, nullable=False, server_default=""),  # 卖家写的完整描述
+    Column("images", Text, nullable=False, server_default="[]"),  # JSON：全部图片的地址
+    Column("browse_count", Integer),
+    Column("collect_count", Integer),
+    Column("status", Integer),  # 平台的 itemStatus：0 在售，1 已卖出
+    Column("status_text", Text, nullable=False, server_default=""),  # 平台给的文字
+    Column("detail_at", Double),  # 上次拿到详情的时间
     Column("saved_at", Double, nullable=False),  # 第一次暂存
     Column("updated_at", Double, nullable=False),  # 最近一次暂存（同一件再存一次是更新）
     Index("search_stash_user", "user_id", "saved_at"),

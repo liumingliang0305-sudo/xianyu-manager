@@ -285,6 +285,33 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
 - 网页端代码里还有另一种结构：`resultInfo.trackParams` 是空对象时，每条直接是 `data.id`、`data.title`、`data.price`……
   实测没碰到过，本系统先不认（`SearchCard.parse` 跳过认不出的行）。
 
+## 看别人的商品详情
+
+> 2026-11-07 实测（搜索暂存想顺带拉别人商品的完整描述和全部图片）。
+
+- **后台不能调**：后台直接签名调 `mtop.taobao.idle.pc.detail`（`{itemId}`，`spm_cnt=a21ybx.item.0.0`）看别人的商品，
+  第一次就返回 `FAIL_SYS_USER_VALIDATE | RGV587_ERROR::SM::哎哟喂,被挤爆啦`（要过滑块）。14:44 第一次暂存时调，触发；
+  在闲鱼过了滑块、提前解除熔断，15:08 暂存另一件再调，又触发。两次都是一次一件，不是频率问题；
+- **真浏览器里没事**：同一件商品在内置浏览器里（没登录）打开商品页 `goofish.com/item?id=…`，页面自己调同一个接口，
+  URL 参数和我们的一模一样（`jsv=2.7.2`、`appKey`、`spm_cnt=a21ybx.item.0.0`、`sessionOption=AutoLoginOnly`……），
+  正常返回，页面上有完整描述；
+- **差别不在参数**：页面上 baxia 的 `checkApiPath` 只给搜索接口（`/mtop.taobao.idlemtopsearch.pc.search/`）
+  加 `uab`、`umid`、`et` 参数，详情接口不加。差别在请求从哪来：页面里跑着阿里的安全脚本（AWSC 的 fireyejs、et），
+  一直往 `ynuf.aliapp.org`、`*.tdum.alibaba.com` 报设备信息，`tfstk` 这些 cookie 也是它们种的；后台只有一份从浏览器
+  同步来的 cookie，没有这些。看别人的商品详情是防爬的重点，这样的请求直接要滑块；
+- **结论**：别人商品的详情不从后台拉。无头浏览器加伪造的手机 UA（xianyu-auto-reply-fix 的做法）是造设备指纹，不做。
+  改由浏览器插件在用户自己的 Chrome 里拿（[extension/goofish.js](../extension/goofish.js)）：后台标签页打开商品页，
+  用页面上的 `window.lib.mtop.request`（lib-mtop 2.7.3）调，参数照页面自己那次：
+  `{api: "mtop.taobao.idle.pc.detail", v: "1.0", appKey: "34839810", data: {itemId}, type: "POST", dataType: "json",
+  accountSite: "xianyu", sessionOption: "AutoLoginOnly", spm_cnt: "a21ybx.item.0.0"}`。`appKey` 要写明，
+  lib-mtop 默认的是 12574478（淘宝的），页面自己那次是 34839810。出错时 Promise 拒绝，`ret` 里是平台的错误码，
+  比如删掉的商品是 `FAIL_BIZ_ITEM_DEL_NOT_FOUND::您要看的宝贝不存在或已被删除啦!`；
+- **返回**：`data.itemDO` 里 `desc`（完整描述，带换行）、`imageInfos[]`（`url` 是 `http://img.alicdn.com/…` 原图，
+  `widthSize`、`heightSize`）、`soldPrice` / `originalPrice`（元的字符串，没填原价是 `"0"`）、`wantCnt`、`browseCnt`、
+  `collectCnt`、`itemStatus` / `itemStatusStr`（0 / "在线"）、`gmtCreate`（毫秒）；`data` 下还有 `sellerDO`、
+  `logisticsDO` 这些，暂存用不到；
+- 自己商品的详情（商品页的详情抽屉）也调这个接口，到现在只有 2026-11-03 改价后几秒那次碰到过风控。
+
 ## 登录态续期
 
 > 来源：2026-10-29 读网页端的续期插件 `o.alicdn.com/vip/goofish-auto-login/plugin.js`（SHA-256 `b946a6db…`，和 Ydisks

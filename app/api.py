@@ -32,8 +32,9 @@
 - 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
   按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
   照它在这个账号建一个发布草稿。
-- 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash，
-  不请求闲鱼），按用户存、名下账号共用，留给以后的操作用。
+- 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
+  按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
+  自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ from app.orders import OrderFeed, OrderRecord, OrderService
 from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft_text
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.search import SearchService
-from app.stash import StashedItem, StashService
+from app.stash import StashedItem, StashNotFoundError, StashService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -148,6 +149,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountNotFoundError, 404, "account_not_found"),
     (DraftNotFoundError, 404, "draft_not_found"),
     (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
+    (StashNotFoundError, 404, "stash_not_found"),
     (LoginNotFoundError, 404, "login_not_found"),
     (ImOfflineError, 503, "im_offline"),
     (AuthRequiredError, 401, "auth_required"),
@@ -259,6 +261,11 @@ class StashIn(BaseModel):
     tags: list[str] = []
     seller_tags: list[str] = []
     keyword: str = ""
+
+
+class StashDetailIn(BaseModel):
+    # 浏览器插件从商品页拿到的 pc.detail 的 itemDO（只挑了要用的字段，见 extension/goofish.js）
+    item: dict[str, Any]
 
 
 class DraftIn(BaseModel):
@@ -891,6 +898,13 @@ def create_app(
             request.state.user.id, StashedItem.clean(body.model_dump())
         )
         return {"item": _stashed(item), "added": added}
+
+    @authed.post("/api/search/stash/{item_id}/detail")
+    async def save_stash_detail(
+        request: Request, item_id: str, body: StashDetailIn
+    ) -> dict[str, Any]:
+        """存浏览器插件拿到的商品详情，不请求闲鱼。返回更新后的这一件。"""
+        return _stashed(stash(request).save_detail(request.state.user.id, item_id, body.item))
 
     @authed.delete("/api/search/stash/{item_id}")
     async def remove_stash(request: Request, item_id: str) -> dict[str, Any]:

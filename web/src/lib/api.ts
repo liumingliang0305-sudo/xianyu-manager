@@ -405,9 +405,25 @@ export interface SearchResult {
   total: number | null
 }
 
-/** 暂存的一件：搜到时搜索结果里的样子，加上用哪个词搜到的。按用户存，名下账号共用 */
+/**
+ * 暂存的一件：搜到时搜索结果里的样子，加上用哪个词搜到的，和浏览器插件拿来的商品详情。按用户存，名下账号共用。
+ * 详情由插件在用户自己的 Chrome 里打开商品页拿（后台调别人商品的详情一调就要滑块）。
+ * 还没拿到时 detail_at 是 null，description、images 是空的
+ */
 export interface StashItem extends SearchItem {
   keyword: string
+  /** 卖家写的完整描述 */
+  description: string
+  /** 全部图片的地址（阿里 CDN） */
+  images: string[]
+  browse_count: number | null
+  collect_count: number | null
+  /** 0 在售，1 已卖出 */
+  status: number | null
+  /** 平台给的状态文字 */
+  status_text: string
+  /** 上次拿到详情的时间 */
+  detail_at: number | null
   /** 第一次暂存的时间 */
   saved_at: number
   /** 最近一次暂存（同一件再存一次是更新成那次搜到的样子） */
@@ -920,6 +936,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...item, keyword }),
     }).then((r) => r.item),
+
+  /** 存浏览器插件拿到的商品详情（pc.detail 的 itemDO，原样转交），不请求闲鱼。返回更新后的这一件 */
+  saveStashDetail: (itemId: string, item: Record<string, unknown>) =>
+    request<StashItem>(`/search/stash/${encodeURIComponent(itemId)}/detail`, {
+      method: "POST",
+      body: JSON.stringify({ item }),
+    }),
 
   /** 移出暂存，本来就不在的也算成功 */
   unstashItem: (itemId: string) =>

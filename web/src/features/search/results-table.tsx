@@ -14,7 +14,7 @@ function published(seconds: number | null): string {
 }
 
 /** 商品名格子：缩略图、标题，下面一行是包邮、成色、品牌、降价这些标签。点开在闲鱼看 */
-export function ItemCell({ item }: { item: SearchItem }) {
+function ItemCell({ item }: { item: SearchItem }) {
   const meta = [item.free_ship ? "包邮" : "", ...item.tags].filter(Boolean).join(" · ")
   return (
     <a
