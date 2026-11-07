@@ -1,19 +1,29 @@
 import { CheckIcon, Loader2Icon, SearchIcon } from "lucide-react"
 import { useMemo, useState, type ComponentProps } from "react"
 import { useSearchParams } from "react-router"
+import { toast } from "sonner"
 
 import { PageHeader } from "@/components/page-header"
 import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCurrentAccount } from "@/hooks/use-account"
-import type { SearchConditions, SearchFilter, SearchItem, SearchSort } from "@/lib/api"
-import { count, parseYuan } from "@/lib/format"
+import { useUrlParam } from "@/hooks/use-url-param"
+import {
+  errorMessage,
+  type SearchConditions,
+  type SearchFilter,
+  type SearchItem,
+  type SearchSort,
+} from "@/lib/api"
+import { count, parseYuan, timeAgo } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-import { useSearch } from "./queries"
+import { useSearch, useStash, useStashItem, useUnstashItem } from "./queries"
 import { ResultsTable } from "./results-table"
+import { StashPanel } from "./stash-panel"
 
 const SORTS: { value: SearchSort; label: string }[] = [
   { value: "", label: "综合" },
@@ -292,19 +302,52 @@ function merge(pages: { items: SearchItem[] }[] | undefined): SearchItem[] {
   return items
 }
 
+type View = "results" | "stash"
+const VIEWS: readonly View[] = ["results", "stash"]
+
+/** 结果里的「暂存」开关：没存的存下（记上这次的搜索词），存了的移出 */
+function useStashToggle(keyword: string) {
+  const stash = useStash()
+  const save = useStashItem()
+  const unstash = useUnstashItem()
+  const stashed = useMemo(
+    () => (stash.data ? new Set(stash.data.map((it) => it.item_id)) : null),
+    [stash.data],
+  )
+  const toggle = (item: SearchItem) => {
+    const saved = stash.data?.find((it) => it.item_id === item.item_id)
+    if (saved)
+      unstash.mutate(saved, {
+        onError: (error) => toast.error(`移出暂存失败：${errorMessage(error)}`),
+      })
+    else
+      save.mutate(
+        { item, keyword },
+        { onError: (error) => toast.error(`暂存失败：${errorMessage(error)}`) },
+      )
+  }
+  return { stash, stashed, toggle }
+}
+
 export function SearchPage() {
   const account = useCurrentAccount()
   const [params, setParams] = useSearchParams()
+  const [view, setView] = useUrlParam<View>("view", "results", VIEWS)
   const conditions = useMemo(() => readConditions(params), [params])
-  const search = useSearch(account, conditions)
+  // 看暂存的时候不搜：直接打开 ?q=…&view=stash 不该请求闲鱼
+  const search = useSearch(account, view === "results" ? conditions : null)
   const items = useMemo(() => merge(search.data?.pages), [search.data])
   const total = search.data?.pages[0]?.total
+  const { stash, stashed, toggle } = useStashToggle(conditions?.keyword ?? "")
+  const stashCount = stash.data?.length
 
   let body
-  if (!conditions)
+  if (view === "stash")
+    body = <StashPanel onSearch={(keyword) => setParams(writeConditions({ ...BLANK, keyword }))} />
+  else if (!conditions)
     body = (
       <EmptyState title="输入要搜的词">
-        搜的是闲鱼上所有卖家的在售商品，结果不存本地。每翻一页用当前账号请求一次闲鱼
+        搜的是闲鱼上所有卖家的在售商品，每翻一页用当前账号请求一次闲鱼。想留着以后用的点「暂存」
       </EmptyState>
     )
   else if (search.isPending) body = <RowsSkeleton rows={6} height="h-14" />
@@ -320,7 +363,7 @@ export function SearchPage() {
   } else
     body = (
       <>
-        <ResultsTable items={items} />
+        <ResultsTable items={items} stashed={stashed} onToggleStash={toggle} />
         {search.isFetchNextPageError && (
           <LoadError
             what="加载下一页"
@@ -350,25 +393,51 @@ export function SearchPage() {
       </>
     )
 
+  let description
+  if (view === "stash")
+    description = stash.data?.length
+      ? `暂存了 ${count(stash.data.length)} 件 · 最近暂存 ${timeAgo(stash.data[0].saved_at)}`
+      : "搜索时点「暂存」留下的商品，名下所有闲鱼账号共用"
+  else
+    description = conditions
+      ? `「${conditions.keyword}」${totalText(total)}`
+      : "闲鱼上所有卖家的在售商品"
+
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="搜索"
-        description={
-          conditions
-            ? `「${conditions.keyword}」${totalText(total)}`
-            : "闲鱼上所有卖家的在售商品"
-        }
-      />
-      <Card className="gap-0 py-0">
-        <SearchForm
-          key={params.toString()}
-          initial={conditions}
-          pending={search.isFetching && !search.isFetchingNextPage}
-          onSearch={(next) => setParams(writeConditions(next))}
-        />
-        {body}
-      </Card>
+      <PageHeader title="搜索" description={description} />
+      <div className="flex flex-col gap-3">
+        <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+          <TabsList variant="line" aria-label="搜索结果还是暂存" className="h-9 gap-6 p-0">
+            <TabsTrigger
+              value="results"
+              className="flex-none px-0 group-data-horizontal/tabs:after:bottom-0"
+            >
+              搜索结果
+            </TabsTrigger>
+            <TabsTrigger
+              value="stash"
+              className="flex-none px-0 group-data-horizontal/tabs:after:bottom-0"
+            >
+              暂存
+              {stashCount != null && (
+                <span className="text-muted-foreground tabular-nums">{count(stashCount)}</span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <Card className="gap-0 py-0">
+          {view === "results" && (
+            <SearchForm
+              key={params.toString()}
+              initial={conditions}
+              pending={search.isFetching && !search.isFetchingNextPage}
+              onSearch={(next) => setParams(writeConditions(next))}
+            />
+          )}
+          {body}
+        </Card>
+      </div>
     </div>
   )
 }

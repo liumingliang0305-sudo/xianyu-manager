@@ -405,6 +405,15 @@ export interface SearchResult {
   total: number | null
 }
 
+/** 暂存的一件：搜到时搜索结果里的样子，加上用哪个词搜到的。按用户存，名下账号共用 */
+export interface StashItem extends SearchItem {
+  keyword: string
+  /** 第一次暂存的时间 */
+  saved_at: number
+  /** 最近一次暂存（同一件再存一次是更新成那次搜到的样子） */
+  updated_at: number
+}
+
 /** 邮费：包邮、按距离计费、一口价、无需邮寄；keep 是编辑的商品沿用原来的（App 里设的运费模板之类） */
 export type PostMode = "free" | "distance" | "fixed" | "none" | "keep"
 
@@ -900,6 +909,22 @@ export const api = {
     request<SearchResult>(`/accounts/${encodeURIComponent(account)}/search`, {
       method: "POST",
       body: JSON.stringify({ ...conditions, page }),
+    }),
+
+  /** 暂存的商品，最近暂存的在前 */
+  stash: () => request<{ items: StashItem[] }>("/search/stash").then((r) => r.items),
+
+  /** 暂存搜索结果里的一条，不请求闲鱼。已经暂存过的更新成这次的样子 */
+  stashItem: (item: SearchItem, keyword: string) =>
+    request<{ item: StashItem; added: boolean }>("/search/stash", {
+      method: "POST",
+      body: JSON.stringify({ ...item, keyword }),
+    }).then((r) => r.item),
+
+  /** 移出暂存，本来就不在的也算成功 */
+  unstashItem: (itemId: string) =>
+    request<{ removed: boolean }>(`/search/stash/${encodeURIComponent(itemId)}`, {
+      method: "DELETE",
     }),
 
   drafts: (account: string) => request<{ drafts: Draft[] }>(draftsPath(account)).then((r) => r.drafts),

@@ -1,3 +1,6 @@
+import { BookmarkCheckIcon, BookmarkPlusIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ItemThumb } from "@/features/items/item-bits"
 import type { SearchItem } from "@/lib/api"
@@ -11,7 +14,7 @@ function published(seconds: number | null): string {
 }
 
 /** 商品名格子：缩略图、标题，下面一行是包邮、成色、品牌、降价这些标签。点开在闲鱼看 */
-function ItemCell({ item }: { item: SearchItem }) {
+export function ItemCell({ item }: { item: SearchItem }) {
   const meta = [item.free_ship ? "包邮" : "", ...item.tags].filter(Boolean).join(" · ")
   return (
     <a
@@ -30,7 +33,45 @@ function ItemCell({ item }: { item: SearchItem }) {
   )
 }
 
-export function ResultsTable({ items }: { items: SearchItem[] }) {
+/**
+ * 暂存开关：没存时是"暂存"，存了是"已暂存"，再点一下移出。宽度固定，切换时这一列不跳。
+ * 暂存列表还没拉下来时（stashed 是 null）点不了，免得把已经存过的又存一遍
+ */
+function StashButton({
+  on,
+  disabled,
+  onClick,
+}: {
+  on: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={disabled}
+      onClick={onClick}
+      title={on ? "再点一下移出暂存" : "存到暂存里，以后接着用"}
+      data-on={on || undefined}
+      className="w-[5.25rem] data-on:bg-secondary data-on:text-foreground"
+    >
+      {on ? <BookmarkCheckIcon /> : <BookmarkPlusIcon />}
+      {on ? "已暂存" : "暂存"}
+    </Button>
+  )
+}
+
+export function ResultsTable({
+  items,
+  stashed,
+  onToggleStash,
+}: {
+  items: SearchItem[]
+  /** 暂存了的商品 ID，还不知道时是 null */
+  stashed: ReadonlySet<string> | null
+  onToggleStash: (item: SearchItem) => void
+}) {
   return (
     <Table>
       <TableHeader>
@@ -40,6 +81,9 @@ export function ResultsTable({ items }: { items: SearchItem[] }) {
           <TableHead className="text-right">想要</TableHead>
           <TableHead>卖家</TableHead>
           <TableHead className="text-right">发布</TableHead>
+          <TableHead>
+            <span className="sr-only">暂存</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -72,6 +116,13 @@ export function ResultsTable({ items }: { items: SearchItem[] }) {
                 title={item.published_at ? dateTime(item.published_at) : undefined}
               >
                 {published(item.published_at)}
+              </TableCell>
+              <TableCell className="text-right">
+                <StashButton
+                  on={stashed?.has(item.item_id) ?? false}
+                  disabled={stashed == null}
+                  onClick={() => onToggleStash(item)}
+                />
               </TableCell>
             </TableRow>
           )

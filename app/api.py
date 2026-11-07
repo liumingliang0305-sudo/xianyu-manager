@@ -32,6 +32,8 @@
 - 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
   按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
   照它在这个账号建一个发布草稿。
+- 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash，
+  不请求闲鱼），按用户存、名下账号共用，留给以后的操作用。
 """
 
 from __future__ import annotations
@@ -82,6 +84,7 @@ from app.orders import OrderFeed, OrderRecord, OrderService
 from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft_text
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.search import SearchService
+from app.stash import StashedItem, StashService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
 from xianyu_core.errors import (
@@ -241,6 +244,23 @@ class SearchIn(BaseModel):
     filters: list[str] = []  # 见 QUICK_FILTERS
 
 
+class StashIn(BaseModel):
+    # 搜索接口返回的一条（字段一样，没有 url），加上用哪个词搜到的
+    item_id: str
+    title: str
+    price_cent: int
+    orig_price_cent: int | None = None
+    pic_url: str = ""
+    area: str = ""
+    seller_nick: str = ""
+    want_count: int | None = None
+    published_at: float | None = None
+    free_ship: bool = False
+    tags: list[str] = []
+    seller_tags: list[str] = []
+    keyword: str = ""
+
+
 class DraftIn(BaseModel):
     description: str = ""
     price: str | None = None  # 元，空是还没填
@@ -319,6 +339,7 @@ def create_app(
         images = image_store.ImageStore(images_dir)
         app.state.drafts = DraftService(conn, accounts, app.state.items, images)
         app.state.pdd = PddService(conn, images, transport=transport)
+        app.state.stash = StashService(conn)
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
             conn,
@@ -399,6 +420,9 @@ def create_app(
 
     def pdd(request: Request) -> PddService:
         return request.app.state.pdd
+
+    def stash(request: Request) -> StashService:
+        return request.app.state.stash
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
@@ -855,6 +879,24 @@ def create_app(
             "total": result.total,
         }
 
+    @authed.get("/api/search/stash")
+    async def list_stash(request: Request) -> dict[str, Any]:
+        """暂存的商品，最近暂存的在前。"""
+        return {"items": [_stashed(it) for it in stash(request).list(request.state.user.id)]}
+
+    @authed.post("/api/search/stash")
+    async def save_stash(request: Request, body: StashIn) -> dict[str, Any]:
+        """暂存搜索结果里的一条，不请求闲鱼。已经暂存过的更新成这次的样子。"""
+        item, added = stash(request).save(
+            request.state.user.id, StashedItem.clean(body.model_dump())
+        )
+        return {"item": _stashed(item), "added": added}
+
+    @authed.delete("/api/search/stash/{item_id}")
+    async def remove_stash(request: Request, item_id: str) -> dict[str, Any]:
+        """移出暂存。本来就不在的也算成功（连点两下不报错）。"""
+        return {"removed": stash(request).remove(request.state.user.id, item_id)}
+
     @authed.get("/api/accounts/{account_id}/drafts")
     async def list_drafts(request: Request, account_id: str) -> dict[str, Any]:
         return {"drafts": [_draft(d) for d in drafts(request).list(account(request, account_id))]}
@@ -1301,6 +1343,10 @@ def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
         ],
         "properties": goods.properties,
     }
+
+
+def _stashed(item: StashedItem) -> dict[str, Any]:
+    return {**asdict(item), "url": item.url}
 
 
 def _pdd_images(goods: PddGoods) -> dict[str, int]:

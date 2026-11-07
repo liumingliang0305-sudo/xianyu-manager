@@ -276,3 +276,27 @@ pdd_goods = Table(
     Column("updated_at", Double, nullable=False),  # 最近一次导入
     Index("pdd_goods_user", "user_id", "updated_at"),
 )
+
+# 搜索暂存（app/stash.py）：搜索页上点「暂存」留下的商品（别人的），存的是搜到时搜索结果里的样子。
+# 按管理后台的用户存，不跟闲鱼账号走，名下账号共用
+search_stash = Table(
+    "search_stash",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("item_id", Text, primary_key=True),  # 闲鱼的商品 ID
+    Column("title", Text, nullable=False),
+    Column("price_cent", BigInteger, nullable=False),
+    Column("orig_price_cent", BigInteger),  # 卖家填的原价，没填是 NULL
+    Column("pic_url", Text, nullable=False, server_default=""),
+    Column("area", Text, nullable=False, server_default=""),
+    Column("seller_nick", Text, nullable=False, server_default=""),
+    Column("want_count", Integer),
+    Column("published_at", Double),
+    Column("free_ship", Boolean, nullable=False, server_default=text("false")),
+    Column("tags", Text, nullable=False, server_default="[]"),  # JSON：成色、品牌、降价这些
+    Column("seller_tags", Text, nullable=False, server_default="[]"),  # JSON："卖家信用极好"这些
+    Column("keyword", Text, nullable=False, server_default=""),  # 用哪个词搜到的
+    Column("saved_at", Double, nullable=False),  # 第一次暂存
+    Column("updated_at", Double, nullable=False),  # 最近一次暂存（同一件再存一次是更新）
+    Index("search_stash_user", "user_id", "saved_at"),
+)
