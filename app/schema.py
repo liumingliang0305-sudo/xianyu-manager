@@ -309,3 +309,20 @@ search_stash = Table(
     Column("updated_at", Double, nullable=False),  # 最近一次暂存（同一件再存一次是更新）
     Index("search_stash_user", "user_id", "saved_at"),
 )
+
+# AI 助手的对话（app/agent.py）：带着一个拼多多货源、一件搜索暂存和模型聊。按管理后台的用户存。
+# 带的货源、暂存删掉了这里不跟着删，对话里说一声已经删了
+agent_chats = Table(
+    "agent_chats",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("pdd_goods_id", Text),  # 带的拼多多货源（pdd_goods.goods_id），没带是 NULL
+    Column("stash_item_id", Text),  # 带的暂存（search_stash.item_id），没带是 NULL
+    Column("title", Text, nullable=False, server_default=""),  # 第一条消息的开头，还没聊是空串
+    # JSON：PydanticAI 的消息历史原样（ModelMessagesTypeAdapter），下一轮原样带回去
+    Column("messages", Text, nullable=False, server_default="[]"),
+    Column("created_at", Double, nullable=False),
+    Column("updated_at", Double, nullable=False),  # 最后一轮回复完的时间
+    Index("agent_chats_user", "user_id", "updated_at"),
+)

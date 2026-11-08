@@ -9,6 +9,8 @@ uv run xym users disable|enable <用户名>         停用 / 恢复
 
 部署在服务器上时用 deploy/xym.sh 在服务器上跑。
 数据库连接串取环境变量 DATABASE_URL（或 --db），没设时连本机 docker 里的（docker compose up -d）。
+本机的 key 这些写在项目根目录的 .env 里（照 .env.example 抄，不进 git），启动时读进来；
+已经设了的环境变量优先。服务器上没有 .env，用 /etc/xym.env（systemd 读）。
 """
 
 from __future__ import annotations
@@ -23,10 +25,13 @@ from types import FrameType
 from typing import TYPE_CHECKING
 
 import psycopg
+from dotenv import load_dotenv
 
 from app import db
 from app.accounts import DEFAULT_DIR, GUARD_PATH, Accounts, make_guard
 from app.users import Users, normalize_username
+
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -86,7 +91,7 @@ async def run_users(args: argparse.Namespace) -> int:
 
 
 def serve(args: argparse.Namespace) -> int:
-    from app import places
+    from app import agent, places
     from app.api import WEB_DIST, create_app
     from app.keepalive import LOGIN_CHECK_INTERVAL
 
@@ -110,6 +115,7 @@ def serve(args: argparse.Namespace) -> int:
         messages=True,
         auto_sync=True,
         amap_key=places.load_key(),
+        agent_model=agent.model_name(),
     )
     run_server(app, args.host, args.port)
     return 0
@@ -176,5 +182,11 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+def entry() -> int:
+    """`xym` 命令：先读 .env（没有就算了，不覆盖已经设了的），再跑 main。测试直接调 main，不读。"""
+    load_dotenv(ENV_FILE)
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(entry())

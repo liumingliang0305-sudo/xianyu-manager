@@ -84,6 +84,11 @@
   下载失败的在页面上重新下载；视频只记地址。货源按管理后台的用户存，名下哪个闲鱼账号都能用：
   点"建草稿"照它在当前账号建一个发布草稿（描述是标题、参数、可选规格，图是主图，最多 9 张），价格到发布页填。
   同一个商品再导入一次是更新。拼多多的商品详情全是图片，没有文字介绍
+- [x] AI 助手：后台"AI 助手"页开一个对话，带上一个拼多多货源和（或）一件暂存的同行商品，和大模型聊：
+  照同行的写法写闲鱼文案、起标题、商量定价。用 [PydanticAI](https://ai.pydantic.dev) 调魔搭社区上的模型
+  （配置见下面"AI 助手的模型"），回复一段段流式显示，回复能一键复制。模型只看得到货源、暂存的文字资料
+  （标题、参数、规格和价格、同行的标签和描述），看不到图片，也不会动手建草稿。对话按用户存，带的货源、暂存
+  每轮现读，删掉了模型会知道（[app/agent.py](app/agent.py)）
 - [ ] 业务功能：发货、消息、自动回复、自动发货……
 
 以后要做、但还没定下来做的事记在 [docs/todo.md](docs/todo.md)：设备指纹。
@@ -97,6 +102,7 @@ uv sync                                      # 安装依赖
 docker compose up -d                         # 启动本机的 PostgreSQL
 uv run alembic upgrade head                  # 建表；以后拉了新代码也跑一次，把表结构升到最新
 uv run xym users add <用户名>                  # 建管理后台的用户，提示输入密码（第一个用户接手已有的闲鱼账号）
+cp .env.example .env                         # 本机的 key（AI 助手的魔搭令牌等）填在 .env 里，不进 git
 uv run pytest                                # 跑测试（用到数据库的连 docker 里的 xianyu_test 库，没有会自动建）
 ```
 
@@ -185,9 +191,31 @@ pnpm -C web dev
   read -rs "k?高德 key: " && printf '%s\n' "$k" > data/amap.key && chmod 600 data/amap.key && unset k
   ```
 
+  也可以在 `.env` 里写 `AMAP_KEY=<key>`（见 `.env.example`）。
 - 服务器：在 `/etc/xym.env` 里加一行 `AMAP_KEY=<key>`，`systemctl restart xym`。环境变量比文件优先。
 
 高德那边设了 IP 白名单的话，要把应用服务器的公网 IP 和本机出口 IP 都加上。
+
+### AI 助手的模型
+
+"AI 助手"页用 [PydanticAI](https://ai.pydantic.dev) 调 OpenAI 兼容接口上的模型，现在用的是
+[魔搭社区](https://modelscope.cn)的 API-Inference。三个环境变量：
+
+```
+OPENAI_API_KEY=<魔搭的访问令牌>
+OPENAI_BASE_URL=https://api-inference.modelscope.cn/v1
+XYM_AGENT_MODEL=deepseek-ai/DeepSeek-V4.1-Flash-1017
+```
+
+模型名照魔搭模型页上的写，不带 `provider:` 前缀的都按 Chat Completions 调 `OPENAI_BASE_URL`。
+不设 `XYM_AGENT_MODEL` 是直连 OpenAI 的 `openai:gpt-6.1-sol`（Responses API，要 OpenAI 的 key）。
+没配的时候以前的对话照样能看，发不了新消息，页面上会说缺什么。
+
+- 本机：`cp .env.example .env`，在 `.env` 里填好 key，重启 `uv run xym serve`。
+  `xym` 启动时读项目根目录的 `.env`，终端里 `export` 过的优先；
+- 服务器：把上面三行加进 `/etc/xym.env`，`systemctl restart xym`。服务器能直接连魔搭（直连 OpenAI 不通）。
+- 换模型：改 `XYM_AGENT_MODEL`。带前缀的是 PydanticAI 的 `provider:model` 写法（比如 `openai:gpt-6.1-terra`），
+  换别家的（Claude 这些）要先装对应的 pydantic-ai-slim 扩展，key 用那一家自己的环境变量。
 
 ### 用户和登录
 
@@ -379,7 +407,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   users.py         管理后台的用户：密码（argon2id）、刷新令牌、插件令牌、闲鱼账号归属
   auth.py          登录鉴权：访问令牌（JWT）、签名密钥、输错密码限次
   db.py            本地库（PostgreSQL）：连接、启动时确认表结构是最新的
-  schema.py        表结构：用户、刷新令牌、账号归属和资料，商品、订单、它们的改动记录，消息的会话和消息，自动同步，拼多多货源，搜索暂存；Alembic 从这里生成迁移
+  schema.py        表结构：用户、刷新令牌、账号归属和资料，商品、订单、它们的改动记录，消息的会话和消息，自动同步，拼多多货源，搜索暂存，AI 助手的对话；Alembic 从这里生成迁移
   items.py         商品管理：同步、查询、改价（带保护线）、下架、删除、改动记录
   orders.py        订单管理（卖出的、买到的）：按订单号添加、刷新、查询、实时详情、待付款订单改价（同一条保护线）、改动记录
   search.py        搜索闲鱼上的商品（别人的），一次一页，不存库
@@ -389,6 +417,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   autosync.py      自动同步商品和订单：交易消息触发、打开页面时数据旧了、定时兜底，结果记进 sync_jobs
   matrix.py        账号矩阵：每个账号的昵称头像（一天拉一次）、备注，在售 / 待发货 / 未读的概况
   pdd.py           拼多多货源：插件推来的商品整理、存库、下载图片，照它建发布草稿的描述
+  agent.py         AI 助手（PydanticAI）：带着一个拼多多货源、一件暂存和模型对话，流式回复，对话按用户存
   images.py        草稿和拼多多货源的图片（data/images，按内容哈希存一份），两边都不用了才删
   messages.py      消息：每个账号一条即时消息连接，新消息存库、通知页面（SSE），连上先补拉，停下了等条件变了再连；回复
   api.py           管理后台的 HTTP 接口（FastAPI），xym serve 启动，顺带托管 web/dist
@@ -410,6 +439,7 @@ web/             管理后台前端：Vite + React + TypeScript + Tailwind + sha
   src/features/search/ 搜索页：搜闲鱼上的商品，排序、筛选，往后加载；暂存、暂存的列表和详情抽屉
   src/features/accounts/ 账号矩阵页：所有账号一张表，按登录要处理 / 有待发货 / 有未读筛，切换、备注、移除
   src/features/pdd/    拼多多货源页：导入的商品、详情（图、规格、参数、详情图）、建草稿、重新下载图片、删除
+  src/features/agent/  AI 助手页：对话列表、选货源和暂存开新对话、流式回复、复制回复、删除对话
 extension/       Chrome 插件：把浏览器里闲鱼的登录同步给管理后台，导入拼多多商品，给暂存的闲鱼商品拿详情
                  （manifest v3，不用打包，直接加载目录）
   background.js    cookie 变化和每 10 分钟时推给 /api/login/import（带插件令牌），登录没变不推；

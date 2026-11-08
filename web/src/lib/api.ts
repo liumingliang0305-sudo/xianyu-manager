@@ -586,6 +586,61 @@ export interface PddImagesResult {
   total: number
 }
 
+/** AI 助手对话带的拼多多货源（概况） */
+export interface AgentGoods {
+  goods_id: string
+  title: string
+  cover: string
+  min_price_cent: number | null
+  max_price_cent: number | null
+}
+
+/** AI 助手对话带的暂存（同行在闲鱼上卖的商品，概况） */
+export interface AgentStashItem {
+  item_id: string
+  title: string
+  pic_url: string
+  price_cent: number
+}
+
+/** AI 助手的一个对话。带的货源、暂存删掉了：id 还在，对象是 null */
+export interface AgentChatSummary {
+  id: number
+  /** 第一条消息的开头，还没聊是空串 */
+  title: string
+  pdd_goods_id: string | null
+  pdd_goods: AgentGoods | null
+  stash_item_id: string | null
+  stash_item: AgentStashItem | null
+  created_at: number
+  /** 最后一轮回复完的时间 */
+  updated_at: number
+}
+
+export interface AgentMessage {
+  role: "user" | "assistant"
+  text: string
+  at: number
+}
+
+export interface AgentChat extends AgentChatSummary {
+  messages: AgentMessage[]
+}
+
+export interface AgentChatList {
+  chats: AgentChatSummary[]
+  /** 用的模型（"openai:gpt-6.1-sol"），没配好是空串 */
+  model: string
+  /** 模型没配好的原因，配好了是空串 */
+  unavailable: string
+}
+
+/** 回复的推送：一段段的字（delta），完了是 done，调模型出错是 error（这一轮不存） */
+export type AgentEvent =
+  | { type: "delta"; text: string }
+  | { type: "done"; message: AgentMessage | null; title: string; updated_at: number }
+  | { type: "error"; code: string; message: string }
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -720,6 +775,35 @@ async function readEvents(
       end = buffer.indexOf("\n\n")
     }
   }
+}
+
+/**
+ * 在 AI 助手的对话里发一条消息，回复一段段推回来（Server-Sent Events，和消息推送一样用 fetch 读）。
+ * 还没开始推就出错的（模型没配好、消息是空的）抛 ApiError；推完了返回。signal 中止时不再读。
+ */
+export async function streamAgentReply(
+  chatId: number,
+  text: string,
+  signal: AbortSignal,
+  onEvent: (event: AgentEvent) => void,
+) {
+  let resp: Response
+  try {
+    resp = await authorizedFetch(`/api/agent/chats/${chatId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+      headers: { accept: "text/event-stream" },
+      signal,
+    })
+  } catch (error) {
+    if (signal.aborted) throw error
+    throw new ApiError(0, "network", "连不上后台，确认 uv run xym serve 在运行")
+  }
+  if (!resp.ok || !resp.body) {
+    const body = await resp.json().catch(() => null)
+    throw new ApiError(resp.status, body?.code ?? "http_error", body?.message ?? `请求失败（HTTP ${resp.status}）`)
+  }
+  await readEvents(resp.body, (_, data) => onEvent(JSON.parse(data) as AgentEvent))
 }
 
 export const api = {
@@ -1030,6 +1114,18 @@ export const api = {
       `/accounts/${encodeURIComponent(account)}/pdd/${encodeURIComponent(goodsId)}/draft`,
       { method: "POST" },
     ),
+
+  /** AI 助手的对话（按用户存），最近聊过的在前；带上用的模型、没配好的原因 */
+  agentChats: () => request<AgentChatList>("/agent/chats"),
+
+  agentChat: (chatId: number) => request<AgentChat>(`/agent/chats/${chatId}`),
+
+  /** 开一个对话，带上一个拼多多货源、一件暂存（至少一个）。不调模型 */
+  createAgentChat: (body: { pdd_goods_id: string | null; stash_item_id: string | null }) =>
+    request<AgentChat>("/agent/chats", { method: "POST", body: JSON.stringify(body) }),
+
+  deleteAgentChat: (chatId: number) =>
+    request<{ ok: true }>(`/agent/chats/${chatId}`, { method: "DELETE" }),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

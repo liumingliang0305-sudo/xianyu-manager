@@ -12,7 +12,9 @@ dependencies = [
   "msgpack>=1.2.4",
   "pillow>=11",
   "psycopg[binary]>=3.2",
+  "pydantic-ai-slim[openai]>=2.66.0",
   "pyjwt>=2.10",
+  "python-dotenv>=1.1",
   "qrcode>=7.4",
   "sqlalchemy>=2.0",
   "uvicorn>=0.54.0",
@@ -20,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xym = "app.cli:main"
+xym = "app.cli:entry"
 
 [dependency-groups]
 dev = [

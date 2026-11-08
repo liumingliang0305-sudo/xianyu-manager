@@ -1,6 +1,7 @@
 """管理后台的登录鉴权（app/auth.py、app/users.py）和用户之间的数据隔离。"""
 
 import asyncio
+import os
 import re
 import time
 
@@ -294,3 +295,19 @@ class _Stdin:
 
 def run_create(users, name):
     return asyncio.run(users.create(name, PASSWORD))
+
+
+def test_xym_command_reads_dotenv(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("XYM_TEST_FROM_FILE=file\nXYM_TEST_ALREADY_SET=file\n")
+    monkeypatch.setattr(cli, "ENV_FILE", env)
+    monkeypatch.setattr(cli, "main", lambda: 0)
+    monkeypatch.setenv("XYM_TEST_FROM_FILE", "")
+    monkeypatch.delenv("XYM_TEST_FROM_FILE")  # 先没有；测完 monkeypatch 再删掉 .env 设的
+    monkeypatch.setenv("XYM_TEST_ALREADY_SET", "shell")
+    assert cli.entry() == 0
+    assert os.environ["XYM_TEST_FROM_FILE"] == "file"
+    assert os.environ["XYM_TEST_ALREADY_SET"] == "shell"  # 终端里设了的优先
+
+    monkeypatch.setattr(cli, "ENV_FILE", tmp_path / "missing.env")
+    assert cli.entry() == 0  # 没有 .env 也照常跑

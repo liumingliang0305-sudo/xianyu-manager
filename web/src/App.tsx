@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AccountsPage } from "@/features/accounts/accounts-page"
+import { AgentPage } from "@/features/agent/agent-page"
 import { LoginPage } from "@/features/auth/login-page"
 import { ItemEditPage } from "@/features/items/item-edit-page"
 import { ItemsPage } from "@/features/items/items-page"
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="search" element={<SearchPage />} />
           <Route path="accounts" element={<AccountsPage />} />
           <Route path="pdd" element={<PddPage />} />
+          <Route path="agent" element={<AgentPage />} />
           <Route path="*" element={<Navigate to="/items" replace />} />
         </Route>
       </Routes>

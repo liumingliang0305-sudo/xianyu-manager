@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
+  BotIcon,
   CheckIcon,
   ChevronsUpDownIcon,
   KeyRoundIcon,
@@ -68,6 +69,7 @@ const NAV: NavEntry[] = [
 const SHARED_NAV: NavEntry[] = [
   { to: "/accounts", label: "账号矩阵", icon: LayoutGridIcon },
   { to: "/pdd", label: "拼多多货源", icon: WarehouseIcon },
+  { to: "/agent", label: "AI 助手", icon: BotIcon },
 ]
 
 const NAV_ITEM =
@@ -87,7 +89,7 @@ function SideNavLink({ to, label, icon: Icon }: NavEntry) {
   )
 }
 
-/** 宽屏：侧栏里竖着排，带图标。当前账号的几页在上，账号矩阵、拼多多货源隔开放在下面 */
+/** 宽屏：侧栏里竖着排，带图标。当前账号的几页在上，账号矩阵、拼多多货源、AI 助手隔开放在下面 */
 function SideNav() {
   return (
     <nav aria-label="主导航" className="flex flex-col gap-0.5">
@@ -342,10 +344,12 @@ function LoginBanner({ login, onLogin }: { login: LoginStatus; onLogin: () => vo
 
 function Content({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, isLoading, error } = useAccount()
-  // 账号矩阵管的是所有账号、拼多多货源是名下账号共用的：没有账号时也能进，也不放当前账号的登录、熔断提示
+  // 账号矩阵管的是所有账号、拼多多货源和 AI 助手是名下账号共用的：没有账号时也能进，
+  // 也不放当前账号的登录、熔断提示
   const onAccounts = useMatch("/accounts")
   const onPdd = useMatch("/pdd")
-  if (onAccounts || onPdd) return <Outlet />
+  const onAgent = useMatch("/agent")
+  if (onAccounts || onPdd || onAgent) return <Outlet />
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">

@@ -143,6 +143,12 @@ class StashService:
         )
         return [StashedItem.from_row(row) for row in rows]
 
+    def find(self, user_id: int, item_id: str) -> StashedItem | None:
+        row = self._db.execute(
+            "SELECT * FROM search_stash WHERE user_id = %s AND item_id = %s", (user_id, item_id)
+        ).fetchone()
+        return StashedItem.from_row(row) if row else None
+
     def save(self, user_id: int, item: StashedItem) -> tuple[StashedItem, bool]:
         """存一件，返回 (存下的, 是不是新加的)。已经暂存过的更新成这次的样子，暂存时间不变。"""
         now = time.time()

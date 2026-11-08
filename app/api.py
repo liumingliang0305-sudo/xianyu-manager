@@ -35,6 +35,9 @@
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
+- AI 助手（app/agent.py）：/api/agent/chats 开对话时带上一个拼多多货源、一件暂存，
+  POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
+  完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
 """
 
 from __future__ import annotations
@@ -60,6 +63,13 @@ from pydantic import BaseModel
 from app import auth, db, keepalive
 from app import images as image_store
 from app.accounts import DEFAULT_DIR, AccountNotFoundError, Accounts, LoginState, make_guard
+from app.agent import (
+    AgentChat,
+    AgentChatNotFoundError,
+    AgentService,
+    AgentUnavailableError,
+    visible_messages,
+)
 from app.auth import (
     MAX_FAILURES_PER_IP,
     AccessTokens,
@@ -149,6 +159,8 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountNotFoundError, 404, "account_not_found"),
     (DraftNotFoundError, 404, "draft_not_found"),
     (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
+    (AgentChatNotFoundError, 404, "agent_chat_not_found"),
+    (AgentUnavailableError, 503, "agent_unavailable"),
     (StashNotFoundError, 404, "stash_not_found"),
     (LoginNotFoundError, 404, "login_not_found"),
     (ImOfflineError, 503, "im_offline"),
@@ -268,6 +280,15 @@ class StashDetailIn(BaseModel):
     item: dict[str, Any]
 
 
+class AgentChatIn(BaseModel):
+    pdd_goods_id: str | None = None  # 带哪个拼多多货源
+    stash_item_id: str | None = None  # 带哪件暂存，两个至少要有一个
+
+
+class AgentMessageIn(BaseModel):
+    text: str
+
+
 class DraftIn(BaseModel):
     description: str = ""
     price: str | None = None  # 元，空是还没填
@@ -302,6 +323,7 @@ def create_app(
     auth_key: str | Path | None = None,
     auto_sync: bool = False,
     auto_sync_options: dict[str, Any] | None = None,
+    agent_model: Any = None,
 ) -> FastAPI:
     """`database_url`：数据库连接串，不给时用 db.default_url()（环境变量 DATABASE_URL）。
     `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态。
@@ -316,6 +338,9 @@ def create_app(
 
     `auto_sync`：开不开自动同步（app/autosync.py）。不开时手动同步照样记结果。
     `auto_sync_options` 给测试调快节奏（见 AutoSync）。
+
+    `agent_model`：AI 助手用的模型，PydanticAI 的模型名（"openai:gpt-6.1-sol"）或者
+    Model 对象（测试换 FunctionModel）；None 时对话能看、发不了消息（见 app/agent.py）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
     searcher = SearchService(accounts)
@@ -347,6 +372,7 @@ def create_app(
         app.state.drafts = DraftService(conn, accounts, app.state.items, images)
         app.state.pdd = PddService(conn, images, transport=transport)
         app.state.stash = StashService(conn)
+        app.state.agent = AgentService(conn, app.state.pdd, app.state.stash, agent_model)
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
             conn,
@@ -433,6 +459,20 @@ def create_app(
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
+
+    def agent(request: Request) -> AgentService:
+        return request.app.state.agent
+
+    def agent_chat(request: Request, chat: AgentChat) -> dict[str, Any]:
+        """对话给页面的样子：带的货源、暂存的概况（删掉了是 null，id 还在）。"""
+        user_id = request.state.user.id
+        goods = stash_item = None
+        if chat.pdd_goods_id:
+            with contextlib.suppress(PddGoodsNotFoundError):
+                goods = pdd(request).get(user_id, chat.pdd_goods_id)
+        if chat.stash_item_id:
+            stash_item = stash(request).find(user_id, chat.stash_item_id)
+        return _agent_chat(chat, goods, stash_item)
 
     def matrix(request: Request) -> AccountMatrix:
         return request.app.state.matrix
@@ -911,6 +951,60 @@ def create_app(
         """移出暂存。本来就不在的也算成功（连点两下不报错）。"""
         return {"removed": stash(request).remove(request.state.user.id, item_id)}
 
+    @authed.get("/api/agent/chats")
+    async def list_agent_chats(request: Request) -> dict[str, Any]:
+        """AI 助手的对话，最近聊过的在前。
+
+        `model` 是用的模型；没配好时是空串，`unavailable` 说为什么。
+        """
+        service = agent(request)
+        chats = service.list(request.state.user.id)
+        return {
+            "chats": [agent_chat(request, chat) for chat in chats],
+            "model": service.model_label,
+            "unavailable": service.unavailable,
+        }
+
+    @authed.post("/api/agent/chats")
+    async def create_agent_chat(request: Request, body: AgentChatIn) -> dict[str, Any]:
+        """开一个对话，带上一个拼多多货源、一件暂存（至少一个）。不调模型。"""
+        chat = agent(request).create(
+            request.state.user.id, pdd_goods_id=body.pdd_goods_id, stash_item_id=body.stash_item_id
+        )
+        return {**agent_chat(request, chat), "messages": []}
+
+    @authed.get("/api/agent/chats/{chat_id}")
+    async def agent_chat_detail(request: Request, chat_id: int) -> dict[str, Any]:
+        chat = agent(request).get(request.state.user.id, chat_id)
+        messages = [asdict(m) for m in visible_messages(chat.messages)]
+        return {**agent_chat(request, chat), "messages": messages}
+
+    @authed.delete("/api/agent/chats/{chat_id}")
+    async def delete_agent_chat(request: Request, chat_id: int) -> dict[str, Any]:
+        agent(request).delete(request.state.user.id, chat_id)
+        return {"ok": True}
+
+    @authed.post("/api/agent/chats/{chat_id}/messages")
+    async def send_agent_message(
+        request: Request, chat_id: int, body: AgentMessageIn
+    ) -> StreamingResponse:
+        """发一条消息，回复用 Server-Sent Events 推回来：delta（一段字）……，
+        最后是 done（存下的回复）或者 error（调模型出错，这一轮不存）。
+
+        模型没配好、对话不存在、消息是空的直接返回错误，不开始推。
+        """
+        events = agent(request).reply(request.state.user.id, chat_id, body.text)
+
+        async def stream() -> AsyncIterator[str]:
+            async for event in events:
+                yield _sse(event)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+        )
+
     @authed.get("/api/accounts/{account_id}/drafts")
     async def list_drafts(request: Request, account_id: str) -> dict[str, Any]:
         return {"drafts": [_draft(d) for d in drafts(request).list(account(request, account_id))]}
@@ -1361,6 +1455,37 @@ def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
 
 def _stashed(item: StashedItem) -> dict[str, Any]:
     return {**asdict(item), "url": item.url}
+
+
+def _agent_chat(
+    chat: AgentChat, goods: PddGoods | None, item: StashedItem | None
+) -> dict[str, Any]:
+    pdd_goods = stash_item = None
+    if goods:
+        pdd_goods = {
+            "goods_id": goods.goods_id,
+            "title": goods.title,
+            "cover": goods.images[0].url if goods.images else "",
+            "min_price_cent": goods.min_price_cent,
+            "max_price_cent": goods.max_price_cent,
+        }
+    if item:
+        stash_item = {
+            "item_id": item.item_id,
+            "title": item.title,
+            "pic_url": item.pic_url,
+            "price_cent": item.price_cent,
+        }
+    return {
+        "id": chat.id,
+        "title": chat.title,
+        "pdd_goods_id": chat.pdd_goods_id,
+        "pdd_goods": pdd_goods,
+        "stash_item_id": chat.stash_item_id,
+        "stash_item": stash_item,
+        "created_at": chat.created_at,
+        "updated_at": chat.updated_at,
+    }
 
 
 def _pdd_images(goods: PddGoods) -> dict[str, int]:
