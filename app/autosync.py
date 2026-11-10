@@ -11,9 +11,9 @@
 每次同步（手动的也算）记进 sync_jobs，定时任务从这次往后顺延；跑之前、跑完都推一条
 `{"type": "sync", "job": ..., "running": ...}` 给页面（走消息的推送流）。
 
-不自动做的：
-- 商品的浏览数、收藏数：要逐个调商品详情接口，2026-11-03 改价后调它被 RGV587 风控过，
-  只在手动同步时带；
+不做的：
+- 商品的浏览数、收藏数：只有买家看的商品详情接口（pc.detail）里有，从后台调它会被要滑块
+  （见 app/items.py 开头），自动的、手动的同步都不拉，由浏览器插件在用户的 Chrome 里拿；
 - 买到的、专业卖家卖出的订单列表，自动同步只翻前 `AUTO_PAGES` 页（最新的），更早的都结束了，
   第一次要全量拉就在订单页手动同步。
 
@@ -206,15 +206,12 @@ class AutoSync:
 
     # ---- 跑 ----
 
-    async def run(self, account_id: str, job: str, trigger: str, *, stats: bool = False) -> Any:
-        """同步一次，拿账号的锁。结果记进 sync_jobs、推给页面；出错也记下，照样抛出。
-
-        `stats` 只对商品有用：逐个拉在售商品的详情补上浏览数、收藏数，只有手动同步才带。
-        """
+    async def run(self, account_id: str, job: str, trigger: str) -> Any:
+        """同步一次，拿账号的锁。结果记进 sync_jobs、推给页面；出错也记下，照样抛出。"""
         if job not in JOBS:
             raise ValueError(f"不认识的同步：{job}")
         self._mark(account_id, job)
-        return await self._run_marked(account_id, job, trigger, stats=stats)
+        return await self._run_marked(account_id, job, trigger)
 
     def visit(self, account_id: str, jobs: Iterable[str]) -> None:
         """打开了页面：这几种同步上次跑完超过 stale_after（或者从没跑过）的，在后台跑一次。
@@ -258,11 +255,9 @@ class AutoSync:
 
     # ---- 内部 ----
 
-    async def _sync(
-        self, account_id: str, job: str, trigger: str, *, stats: bool
-    ) -> SyncResult | OrderSyncResult:
+    async def _sync(self, account_id: str, job: str, trigger: str) -> SyncResult | OrderSyncResult:
         if job == ITEMS:
-            return await self._items.sync(account_id, with_stats=stats and trigger == MANUAL)
+            return await self._items.sync(account_id)
         pages = {} if trigger == MANUAL else {"max_pages": AUTO_PAGES}
         return await self._orders.sync(account_id, job, **pages)
 
@@ -271,13 +266,11 @@ class AutoSync:
         self._running[(account_id, job)] += 1
         self._notify(account_id, job)
 
-    async def _run_marked(
-        self, account_id: str, job: str, trigger: str, *, stats: bool = False
-    ) -> Any:
+    async def _run_marked(self, account_id: str, job: str, trigger: str) -> Any:
         key = (account_id, job)
         try:
             async with self._locks[account_id]:
-                result = await self._sync(account_id, job, trigger, stats=stats)
+                result = await self._sync(account_id, job, trigger)
             self._record(account_id, job, trigger, result=counts(result))
             return result
         except Exception as exc:

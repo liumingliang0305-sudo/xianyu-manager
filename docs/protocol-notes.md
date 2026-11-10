@@ -45,7 +45,7 @@ sign  = md5(f"{token}&{t}&{appKey}&{data}")      # data 是 JSON 字符串
 | 接口 | 版本 | 请求体 | 说明 |
 |---|---|---|---|
 | `mtop.idle.web.xyh.item.list` ✅ | 1.0 | `{needGroupInfo, pageNumber, userId, pageSize: 20}` | 个人主页的商品列表。`cardList[].cardData` 里有 `id`、`title`、`priceInfo.price`（元）、`itemStatus`、`categoryId`、`picInfo.picUrl`；"N人想要"在 `itemLabelDataVO` 的标签里。`nextPage` 判断翻页，`totalCount` 实测总是 0，不能用 |
-| `mtop.taobao.idle.pc.detail` ✅ | 1.0 | `{itemId}` | 商品详情，`itemDO` 里有 `soldPrice`、`originalPrice`（元）、`quantity`、`itemStatus`/`itemStatusStr`、`browseCnt`、`wantCnt`、`collectCnt`、`desc`、`gmtCreate` |
+| `mtop.taobao.idle.pc.detail` ✅ | 1.0 | `{itemId}` | 买家看的商品详情，`itemDO` 里有 `soldPrice`、`originalPrice`（元）、`quantity`、`itemStatus`/`itemStatusStr`、`browseCnt`、`wantCnt`、`collectCnt`、`desc`、`gmtCreate`。**后台不调**，会被要滑块，自己的商品也一样，见下面"看别人的商品详情" |
 | `mtop.idle.pc.idleitem.editDetail` ✅ | 1.0 | `{itemId}` | 编辑页的表单初值。价格单位是分（字符串），布尔值都是 `"true"`/`"false"` 字符串 |
 | `mtop.idle.pc.idleitem.edit` ✅ | 1.0 | 见下 | 编辑后整体提交，成功返回 `{itemId}`。2026-10-29 实测改价 49→48→49 元 |
 | `mtop.taobao.idle.item.downshelf` 🔍 | **2.0** | `{itemId}` | 下架 |
@@ -310,7 +310,14 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
   `widthSize`、`heightSize`）、`soldPrice` / `originalPrice`（元的字符串，没填原价是 `"0"`）、`wantCnt`、`browseCnt`、
   `collectCnt`、`itemStatus` / `itemStatusStr`（0 / "在线"）、`gmtCreate`（毫秒）；`data` 下还有 `sellerDO`、
   `logisticsDO` 这些，暂存用不到；
-- 自己商品的详情（商品页的详情抽屉）也调这个接口，到现在只有 2026-11-03 改价后几秒那次碰到过风控。
+- **自己的商品也一样**：商品页的详情抽屉、同步时的「含浏览/收藏」以前也从后台调这个接口。2026-11-03 改价后几秒
+  调它碰到过一次风控；2026-11-10 用户反馈自己上架的商品点开详情就触发风控（没有在线上重新抓包，是按反馈和代码定的：
+  点详情那一下后台只发这一个请求）。和看别人的商品是同一个请求、同一个原因，后台一律不调了：
+  - 详情抽屉要的描述、全部图片、价格、库存，用卖家自己的 `editDetail`（编辑页、改价、重新上架一直在用，到现在的记录里没碰到过风控）。
+    `editDetail` 里没有浏览数、想要数、收藏数、发布时间；
+  - 浏览数、收藏数只有 `pc.detail` 里有，和暂存一样由浏览器插件在用户的 Chrome 里拿，页面转交给后台存
+    （`POST /api/accounts/{id}/items/{item_id}/stats`，只存 `wantCnt`、`browseCnt`、`collectCnt` 三个数）。
+    同步只翻列表，不再逐个拉。
 
 ## 登录态续期
 
@@ -537,6 +544,11 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
    - 历史消息外层的 `readStatus`（2 已读、0 未读）说的是**当前账号**读没读这条，对方发来还没看的是 0；
    - ✅ 本地存的 97 条自己发的消息里 79 条 `unreadCount` 是 0、14 条是 1，另外 4 条是以前自己发的时候没存这个数。
      还没实测过 40103 推下来的样子，格式照网页版 JS 和 Ydisks；
+   - 2026-11-10：线上反馈"已读"有时候不显示。40103 一直没实测过，所以不再只靠它：第 3 项（`unreadCount`）没带时按 0 算
+     （回执本身就是有人读了）；拉消息时平台给的 `unreadCount` 是准的，漏掉的回执靠拉消息补（什么时候拉见
+     `app/messages.py` 开头）。🔍 要确认 40103 到底推不推、长什么样，用 `xym -v serve` 启动看日志（平时只记警告；`-v` 连调试日志一起记，量很大，查完就关）：收到一条记一行
+     "收到已读回执：会话 … 的消息 … 还有 N 个接收方没读"；不认识的推送每种记一次"收到没处理的推送：…，条目类型 …，字段 …"
+     （只记字段名，不记内容）。对方读了以后日志里一直没有回执那一行，就是平台没往这条连接推，或者条目类型不是 40103；
 10. 被踢下线：服务端推 `/push/kickout`（别处登录了，按登录失效处理）或 `/s/session/remove`（连接数超限）。
 
 `did` 在 Ydisks 里是随机 UUID（大写）加 `-<unb>`，goofish-cli 也按账号存下来一直用。按[设备指纹的边界](todo.md#1-设备指纹降低风控)，

@@ -72,7 +72,7 @@ xianyu_core/     底座：只负责和闲鱼通信，不放业务逻辑
   credential.py    账号凭证（cookie）的读写
   renew.py         登录态续期：保持登录开关、免密续期（silentHasLogin）
   auth/qr_login.py 扫码登录，登录后开启保持登录
-  item.py          商品接口：列表、详情、编辑（editDetail → edit）、下架、删除
+  item.py          商品接口：列表、编辑（editDetail → edit）、下架、删除；买家看的商品详情后台不调，只解析插件拿来的
   order.py         订单接口：卖出的订单列表（卖家工作台）、我买到的、订单详情、改价（price render → adjust）
   publish.py       发布商品：传图、推荐分类和属性、发货地、发布限制和违禁词检查、发布
   search.py        搜索接口：网页端搜索页同一个接口，排序和筛选，解析成商品卡片
@@ -89,7 +89,7 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   login.py         登录闲鱼：扫码（后台任务跑 QRLogin，前端轮询进度，每个用户同一时间只有一张码）和导入浏览器的 Cookie
   keepalive.py     定时确认登录态：每 30 分钟查一次，会话过期就免密续期，失效的只在续期有希望时再试
   matrix.py        账号矩阵：每个账号的昵称头像（一天拉一次）、备注，在售 / 待发货 / 未读的概况
-  items.py         商品管理：同步、查询、改价（带保护线）、下架、删除、改动记录
+  items.py         商品管理：同步、查询、详情（editDetail）、存插件拿来的浏览收藏、改价（带保护线）、下架、删除、改动记录
   drafts.py        发布草稿、编辑商品、重新上架
   places.py        发货地按名字搜：用自己的高德 key 调高德的关键字搜索
   images.py        草稿和拼多多货源的图片（data/images，按内容哈希存一份），两边都不用了才删

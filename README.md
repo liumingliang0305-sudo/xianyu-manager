@@ -106,7 +106,7 @@ uv run xym serve                          # 接口和页面都在 8000 端口
 | 文档 | 内容 |
 |---|---|
 | [功能说明](docs/features.md) | 每一页能做什么、怎么做的、有什么限制 |
-| [浏览器插件](docs/extension.md) | 安装、同步闲鱼登录、导入拼多多商品、拿暂存商品的详情 |
+| [浏览器插件](docs/extension.md) | 安装、同步闲鱼登录、导入拼多多商品、拿闲鱼商品的详情 |
 | [配置](docs/configuration.md) | 环境变量、数据库、高德 key、AI 模型、本地数据目录 |
 | [用户和登录](docs/auth.md) | 后台用户和闲鱼账号的归属、用户管理命令、鉴权设计 |
 | [部署](docs/deployment.md) | 服务器安装、发版、HTTPS、日常维护 |

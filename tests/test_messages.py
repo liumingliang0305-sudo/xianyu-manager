@@ -33,6 +33,9 @@ IM_OPTIONS = {
     "client_options": {**FAST, "reconnect_delays": (0.01, 0.02), "stable_after": 0.3},
     "watch_interval": 0.02,
     "request_interval": 0,
+    # 对方有动静以后向平台核对读没读：平时等不到它（用例先结束了），要测的用例自己调快
+    "recheck_delay": 60,
+    "recheck_interval": 60,
 }
 
 
@@ -51,9 +54,13 @@ def store(database) -> MessageStore:
     return MessageStore(database)
 
 
-def make_hub(store: MessageStore, accounts, server: FakeIm) -> MessageHub:
+def make_hub(store: MessageStore, accounts, server: FakeIm, **options) -> MessageHub:
     return MessageHub(
-        store, accounts, defaultdict(asyncio.Lock), connect=server.connect, **IM_OPTIONS
+        store,
+        accounts,
+        defaultdict(asyncio.Lock),
+        connect=server.connect,
+        **{**IM_OPTIONS, **options},
     )
 
 
@@ -673,13 +680,18 @@ def send_server() -> FakeIm:
 
 
 async def start_synced(hub: MessageHub) -> None:
+    """连上，等会话列表存下来、该补拉的都补拉完。"""
     await hub.start()
-    await wait_until(
-        lambda: (
+
+    def synced() -> bool:
+        conversations = hub.store.conversations(UNB)
+        return (
             hub.status(UNB)["state"] == "online"
-            and not any(c.stale for c in hub.store.conversations(UNB))
+            and bool(conversations)  # 刚连上时列表还没存下来
+            and not any(c.stale for c in conversations)
         )
-    )
+
+    await wait_until(synced)
 
 
 def test_hub_shows_whether_the_peer_read_my_messages(accounts, store):
@@ -740,6 +752,168 @@ def test_hub_refreshes_last_messages_read_status_on_connect(accounts, store):
 
     run(go())
     assert server.chats == {} and not server.last.requests("/r/MessageManager/listUserMessages")
+
+
+def message_pages(server: FakeIm) -> int:
+    """向平台拉了几页消息。"""
+    return len(server.last.requests("/r/MessageManager/listUserMessages"))
+
+
+def test_store_awaiting_read_since(store):
+    """自己发的、对方还没读（或者不知道读没读）的最早一条的时间，只看最新的几条。"""
+    models = [
+        chat(1, sender=UNB, unread=1),
+        chat(2, unread=1),  # 对方发的不算
+        chat(3, sender=UNB, unread=0),
+        chat(4, sender=UNB),  # 平台没说读没读
+        chat(5),
+    ]
+    store.save_messages(UNB, [ChatMessage.from_history(m) for m in models])
+    assert store.awaiting_read_since(UNB, "777") == T / 1000 + 1
+    assert store.awaiting_read_since(UNB, "777", window=3) == T / 1000 + 4
+    store.set_unread_counts(UNB, {"m1": 0, "m4": 0})
+    assert store.awaiting_read_since(UNB, "777") is None
+    assert store.awaiting_read_since(UNB, "999") is None
+
+
+def test_fetch_newest_covers_my_unread_messages_beyond_the_first_page(accounts, monkeypatch, store):
+    """接上以后接着翻到盖住自己发的、还没被读的消息：平台现在说读了就改，不只看第一页。"""
+    monkeypatch.setattr(messages, "MESSAGE_PAGE", 5)
+    monkeypatch.setattr(messages, "MAX_NEWEST_PAGES", 3)
+    server = FakeIm()
+    server.chats["777"] = [
+        chat(n, sender=UNB, unread=1) if n in (2, 3) else chat(n) for n in range(12)
+    ]
+    hub = make_hub(store, accounts, server)
+    store = hub.store
+    store.save_conversations(UNB, [conv("777", "200")])
+    store.save_messages(UNB, [ChatMessage.from_history(m) for m in server.chats["777"]])
+
+    def reads():
+        return [store.message(UNB, message_id).read for message_id in ("m2", "m3")]
+
+    async def go():
+        conn = await open_conn(server)
+        # 对方读了第 3 条（回执漏了），第 2 条平台上还是没读
+        server.chats["777"][3]["message"]["unreadCount"] = 0
+        assert await hub.fetch_newest(UNB, "777", conn) == 0
+        assert message_pages(server) == 2  # 第 11 到 7 条、第 6 到 2 条：盖住了第 2 条
+        assert reads() == [False, True]
+        server.chats["777"][2]["message"]["unreadCount"] = 0
+        await hub.fetch_newest(UNB, "777", conn)
+        assert reads() == [True, True]
+        await hub.fetch_newest(UNB, "777", conn)  # 都读了，和以前一样只看第一页
+        assert message_pages(server) == 5
+        await conn.close()
+
+    run(go())
+
+
+def test_hub_rechecks_read_status_when_the_peer_is_active(accounts, store):
+    """回执没推、漏了的时候不干等：对方读了其中一条、或者发来了消息，自己还有没被读的，
+    就向平台核对一次；都读了就不发请求。"""
+    server = FakeIm()
+    server.conversations_more = False
+    server.conversations = [conversation("777", UNB, "200", modified_ms=T + 3000)]
+    server.chats = {
+        "777": [chat(1, unread=0), chat(2, sender=UNB, unread=1), chat(3, sender=UNB, unread=1)]
+    }
+    hub = make_hub(store, accounts, server, recheck_delay=0.01, recheck_interval=0.05)
+    store = hub.store
+
+    def reads():
+        return [r.read for r in store.messages(UNB, "777")[0] if r.mine]
+
+    def reply(n: int) -> dict:
+        """对方发来第 n 条：平台的历史里有了，也推了过来。"""
+        at = {"cid": "777", "sender": "200", "message_id": f"m{n}", "sent_ms": T + n * 1000}
+        server.chats["777"].append(history_message(**at))
+        return entry(chat_message(**at), packer="msgpack")
+
+    async def go():
+        await start_synced(hub)
+        assert reads() == [False, False]
+
+        # 对方两条都读了，只推了第 3 条的回执
+        for model in server.chats["777"][1:]:
+            model["message"]["unreadCount"] = 0
+        server.last.push_entries([read_receipt("m3", cid="777")])
+        await wait_until(lambda: reads() == [True, True])
+
+        # 自己又发了一条，对方读了、回了一句，回执没推
+        sent = await hub.send(UNB, "777", "明天发货")
+        assert sent.read is False
+        server.chats["777"].append(
+            history_message(
+                cid="777",
+                sender=UNB,
+                message_id=sent.message_id,
+                sent_ms=round(sent.sent_at * 1000),
+                unread=0,
+            )
+        )
+        server.last.push_entries([reply(300)])
+        await wait_until(lambda: reads() == [True, True, True])
+
+        # 没有等着被读的了：对方再发消息不用核对
+        pages = message_pages(server)
+        server.last.push_entries([reply(301)])
+        await wait_until(lambda: store.message(UNB, "m301") is not None)
+        await asyncio.sleep(0.15)
+        assert message_pages(server) == pages
+        await hub.aclose()
+
+    run(go())
+
+
+def test_hub_takes_read_status_from_a_repeated_message(accounts, store):
+    """存过的消息又来一遍（自己发的推回来、平台重复推），带着的读没读照样记下。"""
+    server = send_server()
+    hub = make_hub(store, accounts, server)
+    store = hub.store
+    mine = {"cid": "777", "sender": UNB, "message_id": "p1", "sent_ms": T + 5000}
+
+    async def go():
+        await start_synced(hub)
+        server.last.push_entries([entry(chat_message(**mine, unread=1), packer="msgpack")])
+        await wait_until(lambda: store.message(UNB, "p1") is not None)
+        assert store.message(UNB, "p1").read is False
+        with hub.subscribe(UNB) as queue:
+            server.last.push_entries([entry(chat_message(**mine, unread=0), packer="msgpack")])
+            await wait_until(lambda: store.message(UNB, "p1").read is True)
+            assert queue.get_nowait() == {"type": "messages", "cid": "777"}
+        await hub.aclose()
+
+    run(go())
+
+
+def test_hub_rechecks_earlier_messages_when_the_last_one_turned_read_on_connect(accounts, store):
+    """连上时发现会话最后一条的回执漏了：前面几条的也可能漏了，向平台核对一次。"""
+    server = FakeIm()
+    server.conversations_more = False
+    row = conversation("777", UNB, "200", modified_ms=T + 2000, last_from="me", last_unread=0)
+    server.conversations = [row]
+    last_id = row["singleChatUserConversation"]["lastMessage"]["message"]["messageId"]
+
+    def history(unread: int) -> list[dict]:
+        last = history_message(sender=UNB, message_id=last_id, sent_ms=T + 2000, unread=unread)
+        return [chat(1, sender=UNB, unread=unread), last]
+
+    server.chats["777"] = history(0)  # 平台上两条都读了
+    hub = make_hub(store, accounts, server, recheck_delay=0.01)
+    store = hub.store
+    store.save_conversations(UNB, [Conversation.parse(row, UNB)])
+    store.save_messages(UNB, [ChatMessage.from_history(m) for m in history(1)])
+    store.mark_fetched(UNB, "777")  # 本地跟上了，连上时不会补拉这个会话的消息
+
+    async def go():
+        await start_synced(hub)
+        await wait_until(lambda: store.message(UNB, "m1").read is True)
+        await hub.aclose()
+
+    run(go())
+    assert store.message(UNB, last_id).read is True
+    assert message_pages(server) == 1
 
 
 @pytest.mark.parametrize("echo", ["after", "before", None])

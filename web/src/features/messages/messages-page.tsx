@@ -48,6 +48,12 @@ const PAGE = 50
 const TIME_GAP = 5 * 60
 /** 一条消息最多几个字，和后端（app/messages.py 的 MAX_TEXT）一样 */
 const MAX_TEXT = 500
+/**
+ * 最新一条自己发的消息对方还没读时，隔多久（毫秒）向平台再问一次读没读：
+ * 从 15 秒起每次翻倍，最长 5 分钟。平台的已读回执会漏，不能只等它
+ */
+const READ_CHECK_FIRST = 15_000
+const READ_CHECK_MAX = 5 * 60_000
 
 type Tab = "all" | "unread"
 
@@ -358,7 +364,11 @@ function Thread({
   const thread = useThread(account, cid, limit)
   const { mutate: fetchMessages, isPending: fetchingNewest } = useFetchMessages(account)
   const older = useFetchMessages(account)
+  // 核对对方读没读的请求另算：在后台悄悄问，不转圈，出错也不提示
+  const { mutate: recheckRead } = useFetchMessages(account)
   const tried = useRef(false)
+  // 上次向平台拉最新消息的时间（毫秒）
+  const lastFetch = useRef(0)
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   // 往前翻之前记下滚动位置，翻完以后让看到的内容不动
@@ -387,8 +397,33 @@ function Thread({
   useEffect(() => {
     if (!needsFetch || !online || tried.current) return
     tried.current = true
+    lastFetch.current = Date.now()
     fetchMessages({ cid, older: false }, { onError: (e) => toast.error(errorMessage(e)) })
   }, [needsFetch, online, cid, fetchMessages])
+
+  // 最新一条自己发的还没被读：会话开着、页面在前台时隔一阵向平台再问一次，间隔越来越长。
+  // 对方读了平台会推回执，但回执会漏；只在打开会话时问一次的话，页面一直开着就一直是"未读"。
+  // 发了新消息、切回页面时重新从短间隔开始；切回来时离上次问已经过了一阵就马上问
+  const newestMine = messages.findLast((m) => m.mine)
+  const waitingFor = newestMine && newestMine.read !== true ? newestMine.message_id : ""
+  const waitingSince = newestMine?.sent_at ?? 0
+  useEffect(() => {
+    if (!waitingFor || !online || !pageVisible) return
+    let delay = READ_CHECK_FIRST
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = (wait: number) => {
+      timer = setTimeout(() => {
+        lastFetch.current = Date.now()
+        recheckRead({ cid, older: false })
+        delay = Math.min(delay * 2, READ_CHECK_MAX)
+        schedule(delay)
+      }, wait)
+    }
+    // 刚问过、或者消息刚发出去（发的时候平台说了没读）：等满一个间隔
+    const known = Math.max(lastFetch.current, waitingSince * 1000)
+    schedule(Math.min(READ_CHECK_FIRST, Math.max(0, known + READ_CHECK_FIRST - Date.now())))
+    return () => clearTimeout(timer)
+  }, [waitingFor, waitingSince, online, pageVisible, cid, recheckRead])
 
   const fresh = thread.data?.conversation ?? conversation
   const firstId = messages[0]?.message_id

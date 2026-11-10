@@ -4,8 +4,9 @@ import { useEffect, useState } from "react"
  * 和浏览器插件（extension/）说话。插件 0.4.0 起往管理后台页面里注入一段传话脚本（extension/bridge.js），
  * 页面用 postMessage 请它办事，它把结果 postMessage 回来。
  *
- * 现在只有一件事：拿闲鱼商品详情。管理后台的服务端调商品详情接口看别人的商品一调就要滑块，
- * 插件在用户自己的 Chrome 里打开那件商品的闲鱼页面、用页面自己的请求库拿（extension/goofish.js）。
+ * 现在只有一件事：拿闲鱼商品详情。管理后台的服务端调买家看的商品详情接口会被闲鱼要求过滑块
+ * （别人的商品、自己的商品都是），插件在用户自己的 Chrome 里打开那件商品的闲鱼页面、
+ * 用页面自己的请求库拿（extension/goofish.js）。搜索暂存用它拿描述和图片，商品页用它刷新浏览、收藏。
  */
 
 const FROM_PAGE = "xym-admin"
