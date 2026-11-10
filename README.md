@@ -115,6 +115,7 @@ uv run xym serve                          # 接口和页面都在 8000 端口
 | [协议笔记](docs/protocol-notes.md) | 闲鱼网页端接口和即时消息协议 |
 | [前端设计规范](docs/design.md) | 管理后台的颜色、字号、页面结构 |
 | [开源项目调研](docs/open-source-research.md) | 闲鱼相关开源项目的对比和许可证 |
+| [违规词调研](docs/forbidden-words-research.md) | 闲鱼哪些词不能写、依据和后果、本系统怎么查 |
 | [以后要做](docs/todo.md) | 还没定下来做的事 |
 
 ## 原则
