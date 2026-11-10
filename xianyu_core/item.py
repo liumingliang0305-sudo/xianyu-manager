@@ -1,8 +1,13 @@
-"""商品接口：我的商品列表、详情、编辑、下架、删除。
+"""商品接口：我的商品列表、编辑页的表单、编辑、下架、删除。
 
 接口名、版本和请求体照抄网页端（xy-site 0.0.179 的个人主页、商品页和 /publish 编辑页）。
 编辑时网页端先调 editDetail 拿表单初值，改完整体提交给 edit；`build_edit_payload`
 就是把这段前端逻辑搬过来：只改调用方要改的字段，其余原样带回去。
+
+买家看的商品详情接口（pc.detail）这里不调：后台直接调它会被闲鱼要求过滑块，自己的商品也一样
+（见 docs/protocol-notes.md#看别人的商品详情）。看自己商品的描述、图片用 editDetail（`ItemForm`）；
+浏览数、收藏数只有 pc.detail 里有，由浏览器插件在用户自己的 Chrome 里拿（extension/goofish.js），
+拿回来的 itemDO 用 `ItemDetail.parse` 解析。
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from typing import Any
 from xianyu_core.mtop import MtopClient
 
 LIST_API = "mtop.idle.web.xyh.item.list"
+# 买家看的商品详情。后台不调（会被要滑块），只有浏览器插件在闲鱼页面里调
 DETAIL_API = "mtop.taobao.idle.pc.detail"
 EDIT_DETAIL_API = "mtop.idle.pc.idleitem.editDetail"
 EDIT_API = "mtop.idle.pc.idleitem.edit"
@@ -98,8 +104,39 @@ class ItemPage:
 
 
 @dataclass
+class ItemForm:
+    """卖家自己看的商品内容：从编辑页的表单初值（editDetail）里挑出来的描述、图片、价格、库存。
+
+    没有浏览数、想要数、收藏数，那些只在买家看的商品详情（pc.detail）里。
+    """
+
+    item_id: str
+    desc: str
+    price_cent: int  # 多规格商品这里的价格不一定是页面上显示的那个
+    orig_price_cent: int
+    quantity: int
+    image_urls: list[str]
+    multi_sku: bool
+
+    @classmethod
+    def parse(cls, detail: dict[str, Any]) -> ItemForm:
+        price = detail.get("itemPriceDTO") or {}
+        return cls(
+            item_id=str(detail.get("itemId", "")),
+            desc=(detail.get("itemTextDTO") or {}).get("desc") or "",
+            price_cent=_int_or_none(price.get("priceInCent")) or 0,
+            orig_price_cent=_int_or_none(price.get("origPriceInCent")) or 0,
+            quantity=_int_or_none(detail.get("quantity")) or 0,
+            image_urls=[
+                img["url"] for img in detail.get("imageInfoDOList") or [] if img.get("url")
+            ],
+            multi_sku=bool(detail.get("itemSkuList")),
+        )
+
+
+@dataclass
 class ItemDetail:
-    """商品详情页（买家视角，自己的商品也能查）。"""
+    """买家看的商品详情（pc.detail 的 itemDO）。后台不调这个接口，数据是浏览器插件从商品页拿的。"""
 
     item_id: str
     title: str
@@ -177,10 +214,6 @@ class ItemApi:
             if not result.has_next or not result.items:
                 return
             await asyncio.sleep(interval)
-
-    async def detail(self, item_id: str) -> ItemDetail:
-        data = await self._mtop.call(DETAIL_API, {"itemId": item_id}, spm_cnt=SPM_ITEM)
-        return ItemDetail.parse(data)
 
     async def edit_detail(self, item_id: str) -> dict[str, Any]:
         """编辑页的表单初值（卖家视角），原样返回。价格单位是分，布尔值是字符串。"""

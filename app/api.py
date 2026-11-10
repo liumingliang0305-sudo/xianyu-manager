@@ -26,6 +26,9 @@
 - 账号矩阵（app/matrix.py）：GET /api/accounts 每个账号带上昵称头像、备注、
   在售 / 待发货 / 未读几个数和即时消息状态；PUT .../remark 改备注，
   DELETE /api/accounts/{id} 移除账号（删凭证和归属，本地数据留着）；
+- 商品详情：GET .../items/{id}/detail 用卖家自己的 editDetail 拉描述、图片、价格、库存。
+  买家看的商品详情接口（pc.detail）后台不调，自己的商品也会被要滑块；只有它里面有的浏览数、收藏数
+  由浏览器插件在用户自己的 Chrome 里拿到交给页面，页面发到 POST .../items/{id}/stats（不请求闲鱼）；
 - 自动同步（app/autosync.py）：`auto_sync=True` 时商品、订单按交易消息、打开页面、定时三条路
   自动同步，.../autosync 看状态、改设置；手动同步（.../items/sync、.../orders/sync）也记在一起。
   同步开始、结束都通过消息的推送流发一条 sync 事件。
@@ -186,10 +189,6 @@ class PasswordIn(BaseModel):
     new_password: str
 
 
-class SyncIn(BaseModel):
-    stats: bool = False
-
-
 class PriceIn(BaseModel):
     price: str
     orig_price: str | None = None
@@ -277,6 +276,11 @@ class StashIn(BaseModel):
 
 class StashDetailIn(BaseModel):
     # 浏览器插件从商品页拿到的 pc.detail 的 itemDO（只挑了要用的字段，见 extension/goofish.js）
+    item: dict[str, Any]
+
+
+class ItemStatsIn(BaseModel):
+    # 同上，自己的商品：只存里面的想要、浏览、收藏数
     item: dict[str, Any]
 
 
@@ -831,19 +835,31 @@ def create_app(
         }
 
     @authed.post("/api/accounts/{account_id}/items/sync")
-    async def sync_items(request: Request, account_id: str, body: SyncIn) -> dict[str, Any]:
+    async def sync_items(request: Request, account_id: str) -> dict[str, Any]:
+        """把主页上的商品列表同步到本地库。浏览数、收藏数不在列表里，不拉。"""
         account_id = account(request, account_id)
-        result = await autosync(request).run(account_id, ITEMS, MANUAL, stats=body.stats)
+        result = await autosync(request).run(account_id, ITEMS, MANUAL)
         return asdict(result)
 
     @authed.get("/api/accounts/{account_id}/items/{item_id}/detail")
     async def item_detail(request: Request, account_id: str, item_id: str) -> dict[str, Any]:
+        """这个商品现在的描述、图片、价格、库存（请求一次 editDetail）。
+
+        不调买家看的商品详情接口（pc.detail）：从后台调会被要滑块、账号熔断。
+        浏览、想要、收藏看商品列表里本地存的。
+        """
         account_id = account(request, account_id)
         async with locks[account_id]:
-            detail = await items(request).fetch_detail(account_id, item_id)
-        data = asdict(detail)
-        data.pop("raw")
-        return data
+            form = await items(request).fetch_detail(account_id, item_id)
+        return asdict(form)
+
+    @authed.post("/api/accounts/{account_id}/items/{item_id}/stats")
+    async def save_item_stats(
+        request: Request, account_id: str, item_id: str, body: ItemStatsIn
+    ) -> dict[str, Any]:
+        """存浏览器插件拿到的想要、浏览、收藏数，不请求闲鱼。返回更新后的本地记录。"""
+        record = items(request).save_stats(account(request, account_id), item_id, body.item)
+        return asdict(record)
 
     @authed.post("/api/accounts/{account_id}/items/{item_id}/price")
     async def change_price(

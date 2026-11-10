@@ -129,12 +129,12 @@ def test_auto_sync_reads_only_the_newest_pages(database, accounts, platform):
     assert calls(platform, BOUGHT_LIST) == AUTO_PAGES + 4
 
 
-def test_stats_only_for_manual_item_sync(database, accounts, platform):
+def test_item_sync_only_lists_never_fetches_buyer_detail(database, accounts, platform):
+    """同步只翻列表：逐个调买家看的商品详情（pc.detail）会被要滑块，手动的也不调。"""
     service = make(database, accounts)
-    asyncio.run(service.run(UNB, ITEMS, SCHEDULE, stats=True))
-    assert calls(platform, "mtop.taobao.idle.pc.detail") == 0
-    asyncio.run(service.run(UNB, ITEMS, MANUAL, stats=True))
-    assert calls(platform, "mtop.taobao.idle.pc.detail") == 1  # 在售的一个
+    asyncio.run(service.run(UNB, ITEMS, SCHEDULE))
+    asyncio.run(service.run(UNB, ITEMS, MANUAL))
+    assert {name for name, _ in platform.calls} == {"mtop.idle.web.xyh.item.list"}
 
 
 def test_configure_switches_and_intervals(database, accounts, platform):
@@ -312,7 +312,7 @@ def test_api_status_and_settings(client):
 
 
 def test_api_manual_sync_is_recorded(client):
-    client.post(f"/api/accounts/{UNB}/items/sync", json={"stats": False})
+    client.post(f"/api/accounts/{UNB}/items/sync")
     client.post(f"/api/accounts/{UNB}/orders/sync", json={"side": "bought"})
     jobs = {j["job"]: j for j in client.get(URL).json()["jobs"]}
     assert jobs[ITEMS]["last_trigger"] == MANUAL

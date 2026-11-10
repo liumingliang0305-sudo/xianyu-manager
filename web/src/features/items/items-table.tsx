@@ -44,7 +44,7 @@ export type ItemActionKind =
 
 type OnAction = (kind: ItemActionKind, item: Item) => void
 
-/** 只加有数的；全是空的才显示"-"。已卖出的商品不拉浏览、收藏，不能让它们把合计变成空 */
+/** 只加有数的；全是空的才显示"-"。没刷新过浏览、收藏的商品不能把合计变成空 */
 function total(items: Item[], key: "want_count" | "browse_count" | "collect_count"): string {
   const values = items.map((it) => it[key]).filter((v): v is number => v != null)
   return values.length === 0 ? "-" : count(values.reduce((a, b) => a + b, 0))
@@ -139,7 +139,7 @@ export function ItemsTable({
   onAction: OnAction
   relisting?: string | null
 }) {
-  // 在售商品没拉浏览、收藏时提示一句；已卖出的本来就不拉
+  // 在售商品没有浏览、收藏时提示一句从哪来；已卖出的不提示
   const missingStats = items.some((it) => itemState(it) === "online" && it.browse_count == null)
   return (
     <>
@@ -223,7 +223,9 @@ export function ItemsTable({
                 <TableCell className="font-normal whitespace-normal text-muted-foreground">
                   合计 {items.length} 件
                   {missingStats && (
-                    <span className="ml-2 text-xs">浏览、收藏要在同步时打开「含浏览/收藏」才有</span>
+                    <span className="ml-2 text-xs">
+                      浏览、收藏不随同步更新，点开商品「刷新浏览/收藏」才有
+                    </span>
                   )}
                 </TableCell>
                 <TableCell />

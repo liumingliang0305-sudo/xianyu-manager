@@ -96,7 +96,7 @@ items = Table(
     Column("category_id", BigInteger),
     Column("pic_url", Text, nullable=False, server_default=""),
     Column("want_count", Integer),
-    Column("browse_count", Integer),  # 浏览、收藏只有同步时带 --stats 才有
+    Column("browse_count", Integer),  # 浏览、收藏是浏览器插件从商品页拿来的，没拿过是 NULL
     Column("collect_count", Integer),
     # 最近一次同步时还在主页列表里
     Column("on_platform", Boolean, nullable=False, server_default=text("true")),

@@ -107,21 +107,20 @@ export interface Item {
   synced_at: number
 }
 
+/**
+ * 商品现在的描述、图片、价格、库存，后台用卖家自己的编辑页接口（editDetail）拉的。
+ * 想要、浏览、收藏不在这里，看 Item 上本地存的
+ */
 export interface ItemDetail {
   item_id: string
-  title: string
   desc: string
+  /** 没有是 0 */
   price_cent: number
   orig_price_cent: number
   quantity: number
-  status: number
-  status_text: string
-  browse_count: number
-  want_count: number
-  collect_count: number
-  category_id: number | null
   image_urls: string[]
-  created_at: number | null
+  /** 多规格商品：这里的价格不一定是主页上显示的那个，页面显示 Item 上的 */
+  multi_sku: boolean
 }
 
 export interface ItemOp {
@@ -869,14 +868,19 @@ export const api = {
       `${itemsPath(account)}?include_gone=true`,
     ),
 
-  sync: (account: string, stats: boolean) =>
-    request<SyncResult>(`${itemsPath(account)}/sync`, {
-      method: "POST",
-      body: JSON.stringify({ stats }),
-    }),
+  /** 把主页上的商品列表同步到本地库。浏览、收藏不在列表里，不拉 */
+  sync: (account: string) => request<SyncResult>(`${itemsPath(account)}/sync`, { method: "POST" }),
 
+  /** 描述、图片、价格、库存，会请求一次闲鱼（卖家自己的 editDetail，不是买家看的商品详情接口） */
   detail: (account: string, itemId: string) =>
     request<ItemDetail>(`${itemsPath(account)}/${itemId}/detail`),
+
+  /** 存浏览器插件拿到的想要、浏览、收藏（pc.detail 的 itemDO，原样转交），不请求闲鱼。返回更新后的这一件 */
+  saveItemStats: (account: string, itemId: string, item: Record<string, unknown>) =>
+    request<Item>(`${itemsPath(account)}/${itemId}/stats`, {
+      method: "POST",
+      body: JSON.stringify({ item }),
+    }),
 
   changePrice: (
     account: string,

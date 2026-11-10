@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { draftKeys } from "@/features/publish/queries"
-import { api, type Draft } from "@/lib/api"
+import { api, errorMessage, type Draft, type Item } from "@/lib/api"
+import { ExtensionError, fetchItemDetailViaExtension } from "@/lib/extension"
 
 export const itemKeys = {
   list: (account: string) => ["items", account] as const,
@@ -14,7 +15,10 @@ export function useItems(account: string) {
   return useQuery({ queryKey: itemKeys.list(account), queryFn: () => api.items(account) })
 }
 
-/** 实时详情，会请求一次闲鱼；一分钟内重复打开用缓存。 */
+/**
+ * 商品现在的描述、图片、价格、库存，会请求一次闲鱼；一分钟内重复打开用缓存。
+ * 后台调的是卖家自己的编辑页接口。买家看的商品详情接口从后台调会被闲鱼要求验证、账号熔断，不调
+ */
 export function useItemDetail(account: string, itemId: string, enabled = true) {
   return useQuery({
     queryKey: itemKeys.detail(account, itemId),
@@ -44,9 +48,37 @@ function useRefresh(account: string) {
 export function useSyncItems(account: string) {
   const refresh = useRefresh(account)
   return useMutation({
-    mutationFn: (stats: boolean) => api.sync(account, stats),
+    mutationFn: () => api.sync(account),
     onSettled: () => refresh(),
   })
+}
+
+/**
+ * 刷新一件商品的想要、浏览、收藏：请浏览器插件在 Chrome 里打开它的闲鱼页面拿（一件几秒），
+ * 拿到了存到后台，列表里的这一件跟着换。浏览、收藏只有买家看的商品详情里有，后台自己不去拿
+ */
+export function useRefreshItemStats(account: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (itemId: string) =>
+      api.saveItemStats(account, itemId, await fetchItemDetailViaExtension(itemId)),
+    onSuccess: (saved) => {
+      client.setQueryData<{ items: Item[]; last_synced_at: number | null }>(
+        itemKeys.list(account),
+        (old) =>
+          old && { ...old, items: old.items.map((it) => (it.item_id === saved.item_id ? saved : it)) },
+      )
+      void client.invalidateQueries({ queryKey: itemKeys.list(account) })
+    },
+  })
+}
+
+/** 没刷新成的原因。要验证时插件已经把那个闲鱼页面切到前面了 */
+export function statsErrorMessage(error: unknown): string {
+  if (!(error instanceof ExtensionError)) return errorMessage(error)
+  if (error.code === "validate")
+    return "闲鱼要验证：在 Chrome 里那个闲鱼商品页面上过一下滑块，过一分钟再点「刷新浏览/收藏」"
+  return error.message
 }
 
 export function useChangePrice(account: string) {
