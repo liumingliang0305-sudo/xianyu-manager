@@ -55,7 +55,7 @@ class FakePlatform:
 
     def __init__(self, items, orders=None):
         # item_id → {"title", "price": 分, "status", "post": editDetail 的邮费（可选）,
-        #            "sku": 多规格（可选）}
+        #            "sku": 多规格（可选）, "desc": 描述（可选，没有就用标题）}
         self.items = items
         # order_id → {"item_id", "status": 状态文字, "price": 分, "post": 运费分, "created": 毫秒,
         #             "bought": 当前账号是买家（可选）}
@@ -190,19 +190,8 @@ class FakePlatform:
         ]
         return {"cardList": cards, "nextPage": False}
 
-    def mtop_taobao_idle_pc_detail(self, data):
-        it = self.items[data["itemId"]]
-        return {
-            "itemDO": {
-                "itemId": int(data["itemId"]),
-                "title": it["title"],
-                "soldPrice": str(it["price"] / 100),
-                "itemStatus": it["status"],
-                "browseCnt": 100,
-                "wantCnt": 5,
-                "collectCnt": 2,
-            }
-        }
+    # 没有 mtop_taobao_idle_pc_detail：买家看的商品详情接口后台不调（真平台会要滑块），
+    # 哪里又调了它，这里找不到处理函数，测试直接报错
 
     def mtop_idle_pc_idleitem_editDetail(self, data):
         """结构照实测的 editDetail 裁剪（见 test_item.py 的 EDIT_DETAIL），数值是编的。"""
@@ -226,7 +215,7 @@ class FakePlatform:
             "itemTextDTO": {
                 "titleDescSeparate": "false",
                 "title": it["title"],
-                "desc": it["title"],
+                "desc": it.get("desc", it["title"]),
             },
             "itemLabelExtList": [
                 {

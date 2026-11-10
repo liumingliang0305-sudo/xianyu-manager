@@ -10,6 +10,7 @@ from xianyu_core.item import (
     ItemApi,
     ItemCard,
     ItemDetail,
+    ItemForm,
     build_edit_payload,
     cent_to_yuan,
     yuan_to_cent,
@@ -171,6 +172,20 @@ def test_detail_parse():
     assert (detail.browse_count, detail.want_count, detail.collect_count) == (102, 7, 3)
     assert detail.created_at == 1773752155
     assert detail.image_urls == ["http://img.example/a.jpg"]
+
+
+def test_form_parse_reads_what_the_seller_sees():
+    form = ItemForm.parse(EDIT_DETAIL)
+    assert form.item_id == "1001"
+    assert form.desc == "洗衣机 九成新\n自提"
+    assert (form.price_cent, form.orig_price_cent, form.quantity) == (35800, 0, 1)
+    assert form.image_urls == ["http://img.example/a.jpg", "http://img.example/b.heic"]
+    assert form.multi_sku is False
+
+    assert ItemForm.parse({**EDIT_DETAIL, "itemSkuList": [{"priceInCent": "100"}]}).multi_sku
+    # 缺字段不报错，给空的
+    empty = ItemForm.parse({"itemId": 1001})
+    assert (empty.item_id, empty.desc, empty.price_cent, empty.image_urls) == ("1001", "", 0, [])
 
 
 def test_edit_payload_matches_web_form():

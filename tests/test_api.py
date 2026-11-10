@@ -37,21 +37,52 @@ def test_accounts_and_sync_then_list(client):
     assert [a["id"] for a in client.get("/api/accounts").json()["accounts"]] == [UNB]
     assert client.get(items_url()).json() == {"items": [], "last_synced_at": None}
 
-    result = client.post(items_url("/sync"), json={"stats": True}).json()
+    result = client.post(items_url("/sync")).json()
     assert sorted(result["added"]) == ["1001", "1002"]
 
     body = client.get(items_url()).json()
     assert body["last_synced_at"] is not None
     by_id = {it["item_id"]: it for it in body["items"]}
     assert by_id["1001"]["price_cent"] == 35800
-    assert by_id["1001"]["browse_count"] == 100
+    assert by_id["1001"]["browse_count"] is None  # 浏览、收藏同步时不拉
     assert [it["item_id"] for it in client.get(items_url("?status=1")).json()["items"]] == ["1002"]
 
 
-def test_detail_hides_raw_response(client):
+def test_detail_comes_from_the_seller_form(client, platform):
+    """点开详情不能调买家看的 pc.detail（会被要滑块、账号熔断），老页面带着 stats 同步也一样。"""
+    client.post(items_url("/sync"), json={"stats": True})
+    platform.items["1001"]["desc"] = "洗衣机 九成新\n自提"
     detail = client.get(items_url("/1001/detail")).json()
-    assert detail["price_cent"] == 35800
-    assert "raw" not in detail
+    assert detail == {
+        "item_id": "1001",
+        "desc": "洗衣机 九成新\n自提",
+        "price_cent": 35800,
+        "orig_price_cent": 0,
+        "quantity": 1,
+        "image_urls": ["http://img.example/1001.jpg"],
+        "multi_sku": False,
+    }
+    assert "mtop.taobao.idle.pc.detail" not in [api for api, _ in platform.calls]
+    assert client.get("/api/accounts").json()["accounts"][0]["block"] is None
+
+
+def test_item_stats_from_the_extension(client, platform):
+    client.post(items_url("/sync"))
+    sent = len(platform.calls)
+    item = {"itemId": 1001, "wantCnt": 5, "browseCnt": 100, "collectCnt": 2, "desc": "不存"}
+    saved = client.post(items_url("/1001/stats"), json={"item": item}).json()
+    assert (saved["want_count"], saved["browse_count"], saved["collect_count"]) == (5, 100, 2)
+    assert (saved["item_id"], saved["price_cent"]) == ("1001", 35800)
+    [listed] = [it for it in client.get(items_url()).json()["items"] if it["item_id"] == "1001"]
+    assert listed == saved
+    assert len(platform.calls) == sent  # 不请求闲鱼
+
+    resp = client.post(items_url("/1002/stats"), json={"item": item})  # 不是这个商品的
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    resp = client.post(items_url("/7777/stats"), json={"item": {**item, "itemId": 7777}})
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    assert client.post(items_url("/1001/stats"), json={}).status_code == 422
+    assert client.post("/api/accounts/999/items/1001/stats", json={"item": item}).status_code == 404
 
 
 def test_change_price_with_guard_and_force(client, platform):

@@ -8,10 +8,7 @@ import { PageHeader, Section } from "@/components/page-header"
 import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { AutoSyncButton } from "@/features/autosync/auto-sync-dialog"
 import { useAutoSyncVisit, useSyncJob, useSyncStream } from "@/features/autosync/queries"
 import { useCurrentAccount } from "@/hooks/use-account"
@@ -35,7 +32,11 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "all", label: "全部" },
 ]
 
-/** `running`：后台正在同步商品（自动的、或者别的页面点的），按钮先不让点 */
+/**
+ * 同步只翻主页上的商品列表。浏览、收藏不在列表里：以前同步时逐个调买家看的商品详情接口来补，
+ * 那个接口从后台调会被闲鱼要求验证，现在在商品详情里用浏览器插件一件一件刷新。
+ * `running`：后台正在同步商品（自动的、或者别的页面点的），按钮先不让点
+ */
 function SyncControls({
   account,
   hasItems,
@@ -45,12 +46,11 @@ function SyncControls({
   hasItems: boolean
   running: boolean
 }) {
-  const [withStats, setWithStats] = useState(true)
   const sync = useSyncItems(account)
   const busy = sync.isPending || running
 
   const run = () =>
-    sync.mutate(withStats, {
+    sync.mutate(undefined, {
       onSuccess: (r) =>
         toast.success(
           `同步完成：新增 ${r.added.length}，更新 ${r.updated.length}，不在主页 ${r.gone.length}`,
@@ -59,23 +59,10 @@ function SyncControls({
     })
 
   return (
-    <div className="flex items-center gap-3">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="flex items-center gap-2">
-            <Switch id="with-stats" checked={withStats} onCheckedChange={setWithStats} />
-            <Label htmlFor="with-stats" className="font-normal text-muted-foreground">
-              含浏览/收藏
-            </Label>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>逐个拉在售商品的详情，商品多时会慢一些</TooltipContent>
-      </Tooltip>
-      <Button onClick={run} disabled={busy} variant={hasItems ? "outline" : "default"}>
-        {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-        {busy ? "同步中…" : "从闲鱼同步"}
-      </Button>
-    </div>
+    <Button onClick={run} disabled={busy} variant={hasItems ? "outline" : "default"}>
+      {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+      {busy ? "同步中…" : "从闲鱼同步"}
+    </Button>
   )
 }
 
@@ -140,6 +127,11 @@ export function ItemsPage() {
     (it) => !query || it.title.toLowerCase().includes(query) || it.item_id.includes(query),
   )
   const close = () => setAction(null)
+  // 详情抽屉开着的时候列表可能换了（刷新了浏览/收藏、同步完了），给它列表里现在的这一件
+  const opened =
+    action?.kind === "detail"
+      ? (all.find((it) => it.item_id === action.item.item_id) ?? action.item)
+      : null
 
   let body
   if (items.isPending) body = <RowsSkeleton height="h-14" />
@@ -218,9 +210,7 @@ export function ItemsPage() {
         )}
       </Section>
 
-      {action?.kind === "detail" && (
-        <ItemDetailSheet account={account} item={action.item} onClose={close} />
-      )}
+      {opened && <ItemDetailSheet account={account} item={opened} onClose={close} />}
       {action?.kind === "price" && (
         <PriceDialog account={account} item={action.item} onClose={close} />
       )}
