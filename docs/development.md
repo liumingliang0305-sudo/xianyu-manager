@@ -91,6 +91,8 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   matrix.py        账号矩阵：每个账号的昵称头像（一天拉一次）、备注，在售 / 待发货 / 未读的概况
   items.py         商品管理：同步、查询、详情（editDetail）、存插件拿来的浏览收藏、改价（带保护线）、下架、删除、改动记录
   drafts.py        发布草稿、编辑商品、重新上架
+  wordcheck.py     本地违规词检查：按 forbidden_words.toml 的词表查描述，只提醒，不请求闲鱼
+  forbidden_words.toml  违规词表（类别、档位、依据、替换建议），前端不另存一份
   places.py        发货地按名字搜：用自己的高德 key 调高德的关键字搜索
   images.py        草稿和拼多多货源的图片（data/images，按内容哈希存一份），两边都不用了才删
   orders.py        订单管理（卖出的、买到的）：按订单号添加、刷新、查询、实时详情、待付款订单改价、改动记录；从交易消息记订单

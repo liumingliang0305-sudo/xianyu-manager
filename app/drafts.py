@@ -15,6 +15,10 @@ origin 改，表单里没有的（数量、服务……）原样带回。提交�
 请求体照 origin 拼，和编辑的一样（原来的图不重传，属性、服务、App 里设的运费模板原样带上），
 去掉 itemId、数量改成 1 件，调发布接口。发出去的商品 ID 是新的，原来的商品不动。
 记进 item_ops 的 action 是 relist。
+
+违规词（`check_words`）分两种：本地词表（app/wordcheck.py）只提醒，每次给页面草稿时现查；
+平台的违禁词接口编辑时由页面在描述停下以后调一次，结果连同描述的哈希记在草稿上，描述没变不再查。
+账号熔断、登录失效时不查，查失败了只记下原因。发布、提交编辑时照样再查一次，命中就不发。
 """
 
 from __future__ import annotations
@@ -25,10 +29,14 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+import httpx
+
+from app import wordcheck
 from app.accounts import Accounts
 from app.db import Database, Row
 from app.images import ImageStore, drop_unused
 from app.items import ONLINE, ItemService
+from xianyu_core.errors import XianyuError
 from xianyu_core.item import (
     ItemApi,
     ItemCard,
@@ -37,6 +45,7 @@ from xianyu_core.item import (
     post_fee_from_detail,
 )
 from xianyu_core.publish import (
+    BADWORDS_API,
     CATEGORY,
     KEEP_POST,
     MAX_IMAGES,
@@ -44,6 +53,7 @@ from xianyu_core.publish import (
     POST_MODES,
     PublishApi,
     UploadedImage,
+    WordsCheck,
     address_from_poi,
     build_publish_payload,
     check_desc,
@@ -57,6 +67,9 @@ from xianyu_core.publish import (
     unsupported_cards,
 )
 
+# 编辑时顺手查平台违禁词是可有可无的读请求：
+# 这一分钟读接口的名额（30 次）剩不到这么多就不查，留给要紧的
+WORDS_RESERVE = 10
 ADDRESS_KEYS = ("area", "city", "divisionId", "gps", "poiId", "poiName", "prov")
 TITLE_LENGTH = 30  # 发布后先记进商品表的标题取描述的前多少个字，同步时换成平台截的
 # 编辑提交时比较的几块请求体 → 改动记录里的名字
@@ -106,6 +119,9 @@ class Draft:
     origin: dict[str, Any] | None = field(repr=False)  # 建草稿时的 editDetail
     relist_item_id: str | None  # 重新上架的草稿：照哪个商品抄的
     pdd_goods_id: str | None  # 照拼多多货源建的草稿：哪个拼多多商品
+    # 上次查平台违禁词的结果：{hash, checked_at, ok, words, forbid, blocked, msg}，
+    # 查失败了是 {hash, checked_at, ok: false, error}
+    words_check: dict[str, Any] | None = field(repr=False)
 
     @classmethod
     def from_row(cls, row: Row) -> Draft:
@@ -117,8 +133,37 @@ class Draft:
                 "category": json.loads(row["category"]) if row["category"] else None,
                 "address": json.loads(row["address"]) if row["address"] else None,
                 "origin": json.loads(row["origin"]) if row["origin"] else None,
+                "words_check": json.loads(row["words_check"]) if row["words_check"] else None,
             }
         )
+
+    def word_hits(self) -> list[wordcheck.Hit]:
+        """本地词表查描述，不请求平台。"""
+        return wordcheck.check(self.description)
+
+    def words_stale(self) -> bool:
+        """描述有内容、还没按现在的描述查过平台违禁词。
+
+        编辑的商品描述和闲鱼上的一样时不用查：提交时也只在描述改了才查。
+        """
+        if not self.description.strip():
+            return False
+        if self.origin and self.edit_item_id:
+            if self.description == (self.origin.get("itemTextDTO") or {}).get("desc"):
+                return False
+        return (self.words_check or {}).get("hash") != _hash(self.description)
+
+    def platform_words(self) -> dict[str, Any]:
+        """给页面的平台检查情况：`needed` 要不要查，`result` 上次的结果。
+
+        `result.current` 是上次查的是不是现在的描述。
+        """
+        check = self.words_check
+        result = None
+        if check:
+            result = {k: v for k, v in check.items() if k != "hash"}
+            result["current"] = check.get("hash") == _hash(self.description)
+        return {"needed": self.words_stale(), "result": result}
 
     def current_labels(self) -> list[dict[str, str]]:
         """编辑（重新上架）的商品、还没重新推荐时，商品现在的属性（不含分类）：[{name, value}]。"""
@@ -351,6 +396,32 @@ class DraftService:
                 result.append(address_option(poi))
         return result
 
+    async def check_words(
+        self, account_id: str, draft_id: int, *, force: bool = False
+    ) -> tuple[Draft, str | None]:
+        """编辑时查一次平台的违禁词，结果记在草稿上。返回 (草稿, 没查的原因)。
+
+        描述没变（哈希一样）不再查，`force` 是用户点了"再查一次"。账号熔断、登录失效、
+        这一分钟请求快满了都不查，返回原因。查失败了把错误记在草稿上，不抛错：发布时还会再查。
+        """
+        draft = self._editable(account_id, draft_id)
+        if not draft.description.strip():
+            return draft, "描述是空的"
+        if not force and not draft.words_stale():
+            return draft, None
+        reason = self._accounts.unavailable(account_id)
+        guard = self._accounts.guard
+        if not reason and guard and guard.remaining(account_id, BADWORDS_API) < WORDS_RESERVE:
+            reason = "这一分钟请求比较多"
+        if reason:
+            return draft, reason
+        try:
+            async with self._accounts.mtop(account_id) as mtop:
+                await self._check_words(PublishApi(mtop), draft)
+        except (XianyuError, httpx.HTTPError) as exc:
+            self._save_words(draft, {"ok": False, "error": str(exc) or type(exc).__name__})
+        return self.get(account_id, draft_id), None
+
     async def edit_item(self, account_id: str, item_id: str) -> Draft:
         """编辑已经在闲鱼上的商品：拿一次编辑页的表单初值（editDetail）存成草稿。
 
@@ -471,7 +542,7 @@ class DraftService:
             async with self._accounts.mtop(account_id) as mtop:
                 api = PublishApi(mtop)
                 await api.check_limit()
-                await api.check_words(draft.description, account_id)
+                (await self._check_words(api, draft)).raise_if_blocked()
                 await self._upload(api, draft)
                 item_id = await api.publish(await self._publish_payload(api, draft))
         except Exception as exc:
@@ -510,6 +581,19 @@ class DraftService:
             raise ValueError(f"{done}，不能再改")
         return draft
 
+    async def _check_words(self, api: PublishApi, draft: Draft) -> WordsCheck:
+        """查平台违禁词，结果记在草稿上，页面在描述旁边列出来。"""
+        result = await api.check_words(draft.description, draft.account_id)
+        self._save_words(draft, {"ok": True, **asdict(result), "blocked": result.blocked})
+        return result
+
+    def _save_words(self, draft: Draft, check: dict[str, Any]) -> None:
+        check = {"hash": _hash(draft.description), "checked_at": time.time(), **check}
+        self._db.execute(
+            "UPDATE drafts SET words_check = %s WHERE id = %s",
+            (json.dumps(check, ensure_ascii=False), draft.id),
+        )
+
     async def _upload(self, api: PublishApi, draft: Draft) -> None:
         """把还没传过的图传到闲鱼。传一张记一张，失败重试时不用再传。"""
         for img in draft.images:
@@ -539,7 +623,7 @@ class DraftService:
             async with self._accounts.mtop(account_id) as mtop:
                 api = PublishApi(mtop)
                 if "描述" in changed:
-                    await api.check_words(draft.description, account_id)
+                    (await self._check_words(api, draft)).raise_if_blocked()
                 await self._upload(api, draft)
                 payload = self._edit_payload(draft)
                 if "分类" in changed:
@@ -706,6 +790,10 @@ def _comparable(key: str, value: Any) -> Any:
     if key == "itemLabelExtList":
         return sorted(str(label.get("properties")) for label in value or [])
     return json.loads(json.dumps(value), parse_int=str)
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _images_json(images: list[DraftImage]) -> str:

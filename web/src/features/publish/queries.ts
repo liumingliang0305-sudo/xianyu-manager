@@ -148,6 +148,18 @@ export function useChooseLabel(account: string, draftId: number) {
 }
 
 /**
+ * 查平台违禁词。不弹错：没查成的原因页面上自己显示，发布时后台还会再查。
+ * 结果在草稿上，换进缓存；skipped 是没查的原因。
+ */
+export function useCheckWords(account: string, draftId: number) {
+  const put = usePutDraft(account)
+  return useMutation({
+    mutationFn: (force: boolean = false) => api.checkWords(account, draftId, force),
+    onSuccess: ({ draft }) => put(draft),
+  })
+}
+
+/**
  * 发布（编辑草稿是提交改动），成功或失败都刷新：失败原因记在草稿上，商品列表和改动记录也会多一条。
  * 编辑草稿提交成功以后就用完了，从缓存里拿掉，下次编辑重新从闲鱼拉。
  */

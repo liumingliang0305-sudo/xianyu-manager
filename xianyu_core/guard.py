@@ -180,6 +180,13 @@ class Guard:
                 await self._sleep(wait)
                 self._check(account)  # 等的时候可能已经被别的请求熔断了
 
+    def remaining(self, account: str, api: str) -> int:
+        """这一分钟里这类接口还能调几次，不占名额。可有可无的请求先看一眼，快满了就不发。"""
+        kind = api_kind(api)
+        now = self._clock()
+        used = sum(1 for t in self._hits[(account, kind)] if now - t < WINDOW)
+        return max(self._limits[kind] - used, 0)
+
     # ---- 内部 ----
 
     def _check(self, account: str) -> None:

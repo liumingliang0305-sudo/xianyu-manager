@@ -148,6 +148,8 @@ drafts = Table(
     Column("relist_item_id", Text),
     # 照拼多多货源建的草稿：哪个拼多多商品（pdd_goods.goods_id），别的是 NULL
     Column("pdd_goods_id", Text),
+    # JSON：上次查平台违禁词的结果和当时描述的哈希，描述没变不再查（见 app/drafts.py）
+    Column("words_check", Text),
     Column("created_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),
     Column("published_at", Double),

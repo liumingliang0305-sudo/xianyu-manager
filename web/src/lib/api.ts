@@ -469,6 +469,48 @@ export interface DraftProperty {
   selected: string[]
 }
 
+/** 本地词表的档位：strong 强提醒、weak 弱提醒、info 告知。都只提醒，不拦发布 */
+export type WordLevel = "strong" | "weak" | "info"
+/** 词的依据：官方规则、法律、开源项目、卖家经验 */
+export type WordBasis = "official" | "law" | "opensource" | "experience"
+
+/** 本地词表在描述里命中的一处。start、end 是在保存的描述里的位置 */
+export interface WordHit {
+  text: string
+  start: number
+  end: number
+  /** 词表里的词；正则、组合规则是规则名（"手机号"、"加 + 微信 / QQ"） */
+  rule: string
+  category: string
+  category_name: string
+  level: WordLevel
+  basis: WordBasis
+  suggest: string | null
+  /** 这一类为什么要注意 */
+  note: string | null
+}
+
+/** 上次查平台违禁词的结果。ok 为假是没查成（error 是原因），发布时还会再查 */
+export interface PlatformWordsResult {
+  /** 查的是不是现在保存的描述 */
+  current: boolean
+  checked_at: number
+  ok: boolean
+  error?: string
+  words?: string[]
+  /** 平台说不让发（forbidPublish） */
+  forbid?: boolean
+  /** 发布时会不会被拦：命中了词就拦，不看 forbid */
+  blocked?: boolean
+  msg?: string
+}
+
+export interface PlatformWords {
+  /** 描述有内容、还没按现在的描述查过（编辑的商品描述没改时不用查） */
+  needed: boolean
+  result: PlatformWordsResult | null
+}
+
 export interface Draft {
   id: number
   description: string
@@ -489,6 +531,9 @@ export interface Draft {
   labels: { name: string; value: string }[]
   /** 网页端不支持发布的东西（要填 3C 证书编号之类），有就发不了 */
   unsupported: string[]
+  /** 本地词表查保存的描述，按位置排 */
+  word_hits: WordHit[]
+  platform_words: PlatformWords
   address: Address | null
   /** 发布成功后的商品 ID；编辑草稿提交成功后是改的那个商品 */
   item_id: string | null
@@ -1080,6 +1125,16 @@ export const api = {
   /** 发到闲鱼：查发布限制和违禁词、传图、发布。编辑草稿是把改动提交上去，force：改价超过保护线也提交 */
   publish: (account: string, draftId: number, force = false) =>
     request<Draft>(`${draftsPath(account)}/${draftId}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    }),
+
+  /**
+   * 查一次平台违禁词（会请求闲鱼），结果记在草稿上；描述没变不再查，force 是描述没变也查。
+   * skipped 是没查的原因（账号熔断、登录失效、请求太多），查失败了不报错、记在草稿上
+   */
+  checkWords: (account: string, draftId: number, force = false) =>
+    request<{ draft: Draft; skipped: string | null }>(`${draftsPath(account)}/${draftId}/words`, {
       method: "POST",
       body: JSON.stringify({ force }),
     }),

@@ -222,6 +222,21 @@ class Accounts:
         """忘掉记下的登录态，下次用到时重新确认（比如手动解除熔断以后）。"""
         self._status.pop(account_id, None)
 
+    def unavailable(self, account_id: str) -> str | None:
+        """现在不该向平台发请求的原因：熔断中、登录失效、风控。能发是 None。
+
+        给可有可无的请求（比如编辑描述时顺手查违禁词）用，不发就不会碰到这些错误。
+        """
+        block = self.guard.block(account_id) if self.guard else None
+        if block:
+            return "账号触发风控后暂停了请求"
+        status = self.login_status(account_id)
+        if status and status.state == LoginState.EXPIRED:
+            return "闲鱼登录已失效"
+        if status and status.state == LoginState.RISK:
+            return "账号触发了风控"
+        return None
+
     def login_status(
         self, account_id: str, *, max_age: float = CHECK_INTERVAL
     ) -> LoginStatus | None:

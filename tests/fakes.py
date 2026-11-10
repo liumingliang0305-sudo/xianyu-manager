@@ -75,6 +75,7 @@ class FakePlatform:
         self.edited: list[dict] = []  # edit 收到的请求体
         self.publish_limited = False
         self.bad_words: list[str] = []
+        self.bad_words_forbid = True  # 命中时 forbidPublish 是什么
         self.amap_queries: list[dict] = []  # 高德关键字搜索收到的参数
         self.amap_info = "OK"  # 不是 OK 时高德返回出错（key 不对、额度用完）
         # 账号矩阵：unb → 个人主页的昵称（没有的回"鱼友<unb>"）
@@ -302,7 +303,12 @@ class FakePlatform:
         if not self.bad_words:
             return {"result": False, "forbidPublish": False}
         words = {"items": [{"words": self.bad_words}]}
-        return {"result": True, "forbidPublish": True, "msg": "含违禁词", "badWordAlertInfo": words}
+        return {
+            "result": True,
+            "forbidPublish": self.bad_words_forbid,
+            "msg": "含违禁词",
+            "badWordAlertInfo": words,
+        }
 
     def mtop_taobao_idle_local_poi_get(self, data):
         return {"selectedPoi": POI_HOME, "commonAddresses": [POI_HOME, POI_SHOP]}

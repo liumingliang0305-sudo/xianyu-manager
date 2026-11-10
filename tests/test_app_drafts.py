@@ -1,13 +1,17 @@
 import asyncio
 import io
+import time
 
+import httpx
 import pytest
 from fakes import POI_HOME, UNB, png
 from PIL import Image
 
+from app.accounts import Accounts, LoginState, LoginStatus
 from app.drafts import DraftNotFoundError, DraftService
 from app.images import ImageStore, normalize
 from app.items import ItemService, PriceGuardError
+from xianyu_core.guard import Guard
 from xianyu_core.publish import PublishBlockedError
 
 
@@ -283,6 +287,131 @@ def test_platform_blocks_before_uploading(service, platform, setup, message):
         run(service.publish(UNB, draft.id))
     assert platform.uploads == []
     assert message.split("：")[0] in service.get(UNB, draft.id).error
+
+
+# ---- 违规词 ----
+
+BADWORDS = "mtop.taobao.idleitem.badwords.prepubcheck"
+
+
+def badword_calls(platform):
+    return sum(1 for api, _ in platform.calls if api == BADWORDS)
+
+
+def test_draft_checks_local_words_without_platform(service, platform):
+    draft = service.create(UNB, "全新，加我微信，全网最低")
+    assert [(h.text, h.level) for h in draft.word_hits()] == [
+        ("加我微信", "strong"),
+        ("全网最低", "weak"),
+    ]
+    assert platform.calls == []
+
+
+def test_platform_words_checked_once_per_description(service, platform):
+    draft = service.create(UNB, "宜家落地灯")
+    assert draft.platform_words() == {"needed": True, "result": None}
+
+    draft, skipped = run(service.check_words(UNB, draft.id))
+    assert skipped is None
+    result = draft.platform_words()["result"]
+    assert (result["ok"], result["current"], result["words"], result["blocked"]) == (
+        True,
+        True,
+        [],
+        False,
+    )
+    assert draft.platform_words()["needed"] is False
+
+    run(service.check_words(UNB, draft.id))  # 描述没变，不再查
+    assert badword_calls(platform) == 1
+    run(service.check_words(UNB, draft.id, force=True))  # 点了"再查一次"
+    assert badword_calls(platform) == 2
+
+    platform.bad_words.append("代购")
+    draft = fill(service, draft, description="代购 宜家落地灯")
+    assert draft.platform_words()["needed"] is True
+    assert draft.platform_words()["result"]["current"] is False
+    draft, _ = run(service.check_words(UNB, draft.id))
+    result = draft.platform_words()["result"]
+    assert (result["words"], result["forbid"], result["blocked"], result["msg"]) == (
+        ["代购"],
+        True,
+        True,
+        "含违禁词",
+    )
+    assert badword_calls(platform) == 3
+
+
+def test_platform_hint_without_forbid_still_blocks_publish(service, platform):
+    # 平台返回了命中的词、但 forbidPublish 为假：页面上分得出来，发布照样拦（没线上证据前不放宽）
+    draft = ready(service)
+    platform.bad_words.append("代购")
+    platform.bad_words_forbid = False
+    draft, _ = run(service.check_words(UNB, draft.id))
+    result = draft.platform_words()["result"]
+    assert (result["forbid"], result["blocked"]) == (False, True)
+    with pytest.raises(PublishBlockedError, match="代购"):
+        run(service.publish(UNB, draft.id))
+    assert platform.uploads == []
+
+
+def test_publish_records_platform_words_on_draft(service, platform):
+    draft = ready(service)
+    platform.bad_words.append("代购")
+    with pytest.raises(PublishBlockedError):
+        run(service.publish(UNB, draft.id))
+    draft = service.get(UNB, draft.id)
+    assert draft.platform_words()["result"]["words"] == ["代购"]
+    assert draft.platform_words()["needed"] is False
+
+
+def test_platform_words_skipped_when_account_cannot_request(
+    tmp_path, database, items, store, platform
+):
+    guard = Guard()
+    accounts = Accounts(tmp_path, transport=httpx.MockTransport(platform), guard=guard)
+    service = DraftService(database, accounts, items, store)
+    draft = service.create(UNB, "宜家落地灯")
+
+    guard.trip(UNB, "FAIL_SYS_USER_VALIDATE")
+    draft, skipped = run(service.check_words(UNB, draft.id))
+    assert "暂停" in skipped
+    guard.unblock(UNB)
+
+    accounts._status[UNB] = LoginStatus(state=LoginState.EXPIRED, checked_at=time.time() + 1)
+    draft, skipped = run(service.check_words(UNB, draft.id))
+    assert skipped == "闲鱼登录已失效"
+    del accounts._status[UNB]
+
+    for _ in range(21):  # 读接口这一分钟只剩 9 次，留给要紧的
+        run(guard.acquire(UNB, "mtop.some.read"))
+    draft, skipped = run(service.check_words(UNB, draft.id))
+    assert "请求比较多" in skipped
+
+    assert badword_calls(platform) == 0
+    assert draft.platform_words() == {"needed": True, "result": None}
+
+
+def test_platform_words_failure_recorded_quietly(service, platform):
+    platform.fail[BADWORDS] = "FAIL_BIZ_X::系统繁忙"
+    draft = service.create(UNB, "宜家落地灯")
+    draft, skipped = run(service.check_words(UNB, draft.id))
+    assert skipped is None
+    result = draft.platform_words()["result"]
+    assert result["ok"] is False and "系统繁忙" in result["error"]
+    # 同一段描述不自动再查，免得一直失败一直查
+    assert draft.platform_words()["needed"] is False
+
+
+def test_platform_words_not_needed_for_empty_or_unchanged_description(service):
+    draft = service.create(UNB)
+    assert draft.platform_words()["needed"] is False
+    assert run(service.check_words(UNB, draft.id))[1] == "描述是空的"
+
+    draft = run(service.edit_item(UNB, "1001"))
+    assert draft.platform_words()["needed"] is False  # 和闲鱼上的一样
+    draft = service.update(UNB, draft.id, **edit_form(draft, description="洗衣机 九成新"))
+    assert draft.platform_words()["needed"] is True
 
 
 # ---- 编辑已有商品 ----

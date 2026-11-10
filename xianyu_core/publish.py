@@ -74,6 +74,27 @@ class PublishBlockedError(XianyuError):
 
 
 @dataclass
+class WordsCheck:
+    """违禁词接口的结果。`words` 是命中的词，`forbid` 是平台说不让发（forbidPublish）。"""
+
+    words: list[str]
+    forbid: bool
+    msg: str
+
+    @property
+    def blocked(self) -> bool:
+        """发布时拦不拦。命中了词就拦，不看 forbidPublish：平台有没有"提醒但能发"的等级，
+        线上还没见过真实返回，见 docs/forbidden-words-research.md 第四节。"""
+        return bool(self.words or self.forbid)
+
+    def raise_if_blocked(self) -> None:
+        if self.blocked:
+            reason = self.msg or "描述里有平台不让用的词"
+            words = "、".join(self.words)
+            raise PublishBlockedError(f"{reason}：{words}" if words else reason)
+
+
+@dataclass
 class UploadedImage:
     url: str
     width: int
@@ -177,8 +198,8 @@ class PublishApi:
             for s in data.get("services") or []
         ]
 
-    async def check_words(self, desc: str, user_id: str) -> None:
-        """描述里有违禁词时抛 PublishBlockedError。"""
+    async def check_words(self, desc: str, user_id: str) -> WordsCheck:
+        """查描述里有没有平台不让用的词（网页端发布页输入描述时调的接口），只返回结果，不拦。"""
         data = await self._mtop.call(
             BADWORDS_API,
             {
@@ -190,15 +211,17 @@ class PublishApi:
             spm_cnt=SPM_PUBLISH,
         )
         if not data.get("result"):
-            return
+            return WordsCheck(words=[], forbid=False, msg="")
         words = [
-            word
+            str(word)
             for item in (data.get("badWordAlertInfo") or {}).get("items") or []
             for word in item.get("words") or []
         ]
-        if words or data.get("forbidPublish"):
-            reason = data.get("msg") or "描述里有平台不让用的词"
-            raise PublishBlockedError(f"{reason}：{'、'.join(words)}" if words else reason)
+        return WordsCheck(
+            words=list(dict.fromkeys(words)),
+            forbid=bool(data.get("forbidPublish")),
+            msg=str(data.get("msg") or ""),
+        )
 
     async def upload(self, content: bytes, filename: str) -> UploadedImage:
         """传一张 JPEG 到闲鱼，返回图片地址和尺寸。"""

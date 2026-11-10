@@ -59,6 +59,7 @@ import {
   putDraft,
   useAddImage,
   useAddresses,
+  useCheckWords,
   useChooseLabel,
   useDeleteDraft,
   usePlaces,
@@ -67,11 +68,17 @@ import {
   useRemoveImage,
   useSaveDraft,
 } from "./queries"
+import { WordCheck, type PlatformState } from "./word-check"
 
 const MAX_IMAGES = 9
 const MAX_DESC = 1500
 /** 停止输入多久以后自动保存 */
 const SAVE_DELAY_MS = 800
+/**
+ * 描述保存好以后再等多久查平台违禁词。本地词表随保存一起查（不请求闲鱼）；平台检查算读接口的限流，
+ * 所以等描述真停下来：打字时一直在改、不查，停手 0.8 秒保存，再过这么久没改才查，同一段描述只查一次
+ */
+const WORDS_DELAY_MS = 2000
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/bmp"
 const EMOJI = /\p{Extended_Pictographic}/u
 
@@ -689,6 +696,9 @@ function EditableDraft({
   const recommend = useRecommend(account, draft.id)
   const choose = useChooseLabel(account, draft.id)
   const publish = usePublish(account, draft)
+  const checkWords = useCheckWords(account, draft.id)
+  // 平台检查没跑的原因，只对当时那段描述有效
+  const [skipped, setSkipped] = useState<{ description: string; reason: string } | null>(null)
 
   const errors = priceErrors(form)
   const invalid = Object.keys(errors).length > 0
@@ -734,6 +744,25 @@ function EditableDraft({
     }, SAVE_DELAY_MS)
     return () => clearTimeout(timer)
   }, [form, dirty, invalid, flush])
+
+  // 描述保存好了、还没按它查过平台，停一会儿再查。查完（或者没跑）needed 不变就不会再触发
+  const wordsNeeded = draft.platform_words.needed
+  const savedDescription = draft.description
+  const runCheckWords = checkWords.mutate
+  const checkNow = useCallback(
+    (force: boolean) =>
+      runCheckWords(force, {
+        onSuccess: ({ skipped }) =>
+          setSkipped(skipped ? { description: savedDescription, reason: skipped } : null),
+      }),
+    [runCheckWords, savedDescription],
+  )
+  const publishing = publish.isPending
+  useEffect(() => {
+    if (!wordsNeeded || dirty || publishing) return
+    const timer = setTimeout(() => checkNow(false), WORDS_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [wordsNeeded, dirty, publishing, checkNow])
 
   const update = (patch: Partial<FormState>) => {
     setForm((f) => ({ ...f, ...patch }))
@@ -795,6 +824,14 @@ function EditableDraft({
 
   const lacks = missing(draft, form)
   const busy = publish.isPending
+  const descDirty = form.description !== draft.description
+  let platformState: PlatformState = { kind: "idle" }
+  if (descDirty) platformState = { kind: "typing" }
+  else if (checkWords.isPending) platformState = { kind: "checking" }
+  else if (checkWords.isError) platformState = { kind: "failed", error: errorMessage(checkWords.error) }
+  else if (skipped && skipped.description === draft.description)
+    platformState = { kind: "skipped", reason: skipped.reason }
+  else if (draft.platform_words.needed) platformState = { kind: "waiting" }
   const labelBusy = recommend.isPending || choose.isPending || busy
   const descEmoji = EMOJI.test(form.description)
 
@@ -892,13 +929,7 @@ function EditableDraft({
           </ul>
         </Field>
 
-        <Field
-          label="描述"
-          htmlFor="draft-desc"
-          required
-          hintId="draft-desc-hint"
-          hint="标题由闲鱼从描述里截。写清楚品牌型号、成色、来源，不能有 emoji"
-        >
+        <Field label="描述" htmlFor="draft-desc" required>
           <div className="relative">
             <Textarea
               id="draft-desc"
@@ -916,9 +947,13 @@ function EditableDraft({
               {form.description.length}/{MAX_DESC}
             </span>
           </div>
+          <p id="draft-desc-hint" className="text-xs text-muted-foreground">
+            标题由闲鱼从描述里截。写清楚品牌型号、成色、来源，不能有 emoji
+          </p>
           {descEmoji && (
             <FieldError id="draft-desc-error">描述里有 emoji，网页端发布不让用，发布前删掉</FieldError>
           )}
+          <WordCheck draft={draft} state={platformState} onRecheck={() => checkNow(true)} />
         </Field>
 
         <Field

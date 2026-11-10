@@ -184,3 +184,14 @@ def test_check_during_block_is_risk_without_request(accounts, platform):
     assert status.state is LoginState.RISK
     assert "暂停" in status.message
     assert platform.calls == []
+
+
+def test_remaining_counts_without_taking_a_slot(clock):
+    guard = make(clock, limits={READ: 3})
+    assert guard.remaining(UNB, DETAIL_API) == 3
+    run(guard.acquire(UNB, DETAIL_API))
+    run(guard.acquire(UNB, EDIT_API))  # 改动类单独计数
+    assert guard.remaining(UNB, DETAIL_API) == 2
+    assert guard.remaining(UNB, DETAIL_API) == 2  # 看一眼不占名额
+    clock.now += 61
+    assert guard.remaining(UNB, DETAIL_API) == 3

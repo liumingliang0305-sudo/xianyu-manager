@@ -463,6 +463,41 @@ def test_draft_to_published_item(client, platform):
     assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
 
 
+def test_draft_word_checks(client, platform):
+    draft = client.post(drafts_url()).json()
+    url = drafts_url(f"/{draft['id']}")
+    assert draft["word_hits"] == []
+    assert draft["platform_words"] == {"needed": False, "result": None}
+
+    platform.bad_words.append("代购")
+    draft = client.put(url, json={"description": "代购，加我微信"}).json()
+    [hit] = draft["word_hits"]
+    assert (hit["text"], hit["start"], hit["end"], hit["category"], hit["level"]) == (
+        "加我微信",
+        3,
+        7,
+        "contact",
+        "strong",
+    )
+    assert hit["basis"] == "official" and hit["suggest"]
+    assert draft["platform_words"]["needed"] is True
+
+    body = client.post(f"{url}/words").json()
+    assert body["skipped"] is None
+    result = body["draft"]["platform_words"]["result"]
+    assert (result["words"], result["forbid"], result["current"]) == (["代购"], True, True)
+    assert body["draft"]["platform_words"]["needed"] is False
+
+    # 风控熔断以后只给本地词表的结果，平台检查不发请求、说明没跑
+    platform.fail["mtop.idle.pc.idleitem.editDetail"] = "RGV587_ERROR::SM::哎哟喂,被挤爆啦"
+    client.get(items_url("/1001/detail"))
+    sent = len(platform.calls)
+    body = client.post(f"{url}/words", json={"force": True}).json()
+    assert "暂停" in body["skipped"]
+    assert body["draft"]["word_hits"][0]["text"] == "加我微信"
+    assert len(platform.calls) == sent
+
+
 def test_edit_item_through_draft(client, platform):
     client.post(items_url("/sync"), json={})
     draft = client.post(items_url("/1001/edit")).json()

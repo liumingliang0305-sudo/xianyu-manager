@@ -19,6 +19,7 @@
   GET .../messages/stream（Server-Sent Events）通知页面；回复也走这条连接；
 - 发布：先存草稿（app/drafts.py），图片传到 .../drafts/{id}/images（请求体就是图片文件），
   存在本机 data/images；点发布时才传到闲鱼。发货地按名字搜用自己的高德 key（app/places.py）；
+  草稿带着本地词表查描述的结果（word_hits），.../drafts/{id}/words 查平台违禁词；
 - 编辑商品：POST .../items/{id}/edit 拿到这个商品的编辑草稿，之后和发布一样用
   .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
 - 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发；
@@ -302,6 +303,10 @@ class DraftIn(BaseModel):
     take_self: bool = False
     images: list[str] = []  # 图片的新顺序（sha）
     address: dict[str, Any] | None = None  # .../publish/addresses 返回的 address
+
+
+class WordsIn(BaseModel):
+    force: bool = False  # 描述没变也再查一次（用户点了"再查一次"）
 
 
 class ChooseIn(BaseModel):
@@ -1098,6 +1103,20 @@ def create_app(
             draft = await drafts(request).choose(account_id, draft_id, body.property_id, body.keys)
         return _draft(draft)
 
+    @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/words")
+    async def check_draft_words(
+        request: Request, account_id: str, draft_id: int, body: WordsIn | None = None
+    ) -> dict[str, Any]:
+        """编辑时查一次平台违禁词（请求平台），描述没变不再查。
+
+        `skipped` 是没查的原因（账号熔断、登录失效……），查了是 null；查失败了记在草稿上，不报错。
+        """
+        account_id = account(request, account_id)
+        force = body.force if body else False
+        async with locks[account_id]:
+            draft, skipped = await drafts(request).check_words(account_id, draft_id, force=force)
+        return {"draft": _draft(draft), "skipped": skipped}
+
     @authed.post("/api/accounts/{account_id}/drafts/{draft_id}/publish")
     async def publish_draft(
         request: Request, account_id: str, draft_id: int, body: PublishIn | None = None
@@ -1405,6 +1424,8 @@ def _draft(draft: Draft) -> dict[str, Any]:
         "properties": draft.properties(),
         "labels": draft.current_labels(),
         "unsupported": draft.unsupported(),
+        "word_hits": [asdict(hit) for hit in draft.word_hits()],
+        "platform_words": draft.platform_words(),
         "address": draft.address,
         "item_id": draft.item_id,
         "edit_item_id": draft.edit_item_id,
