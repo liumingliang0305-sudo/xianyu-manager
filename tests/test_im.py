@@ -327,7 +327,11 @@ def test_read_receipt_parse():
     assert MessageRead.parse(data) == MessageRead(
         message_id="1793378200001.PNM", cid="777", unread_count=0, read_at=1793378300.5
     )
-    assert MessageRead.parse({"1": "x.PNM"}) is None  # 没说还有几个没读
+    # 没带还有几个没读的：回执本身就是有人读了，按 0 算
+    assert MessageRead.parse({"1": "x.PNM"}) == MessageRead("x.PNM", "", 0, None)
+    assert MessageRead.parse({"1": "x.PNM", "3": "?"}) is None  # 带了但看不懂
+    assert MessageRead.parse({"3": 0}) is None  # 没说是哪条消息
+    assert MessageRead.parse({"1": ["x.PNM"], "3": 0}) is None
     assert MessageRead.parse(["x"]) is None
 
 
@@ -490,7 +494,7 @@ def test_events_yield_pushes_and_chat_messages():
 def test_events_yield_read_receipts():
     """条目类型 40103 是已读回执；解不出来的照样给出来，带着条目类型。"""
     server = FakeIm()
-    broken = entry({1: "x.PNM"}, packer="msgpack", object_type=im.READ_RECEIPT_OBJECT_TYPE)
+    broken = entry({3: 0}, packer="msgpack", object_type=im.READ_RECEIPT_OBJECT_TYPE)
 
     async def go():
         conn = await open_conn(server)

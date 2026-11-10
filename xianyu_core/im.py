@@ -409,6 +409,9 @@ class MessageRead:
 
     解出来是 `{1: 消息 ID, 2: 接收方个数, 3: 还有几个没读, 4: 会话 ID@goofish, 5: 会话类型,
     6: 读的时间（毫秒）}`，字段照网页版 JS 里的 MsgReadToSenderEventModel。
+
+    这个推送还没实测过。"还有几个没读"没带的（MessagePack 里值是空的字段不带）按 0 算：
+    回执本身就是"有人读了"，这里只有单聊，读的只能是对方。
     """
 
     message_id: str
@@ -420,9 +423,9 @@ class MessageRead:
     def parse(cls, data: Any) -> MessageRead | None:
         if not isinstance(data, dict):
             return None
-        message_id = str(data.get("1") or "")
-        unread = _int_or_none(data.get("3"))
-        if not message_id or unread is None:
+        message_id = data.get("1")
+        unread = 0 if data.get("3") is None else _int_or_none(data.get("3"))
+        if not isinstance(message_id, str) or not message_id or unread is None:
             return None
         at = data.get("6")
         return cls(
