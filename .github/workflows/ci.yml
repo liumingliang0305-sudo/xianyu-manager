@@ -1,5 +1,5 @@
 # 每个 PR 和推到 main 的提交都跑：后端 ruff + pytest（连一个 PostgreSQL 服务容器），前端 oxlint + 构建。
-# 命令和本机一样，本机能过这里就能过（见 README「快速上手」）。
+# 命令和本机一样，本机能过这里就能过（见 docs/development.md「测试和检查」）。
 name: CI
 
 on:

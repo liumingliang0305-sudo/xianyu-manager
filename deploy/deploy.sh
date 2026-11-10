@@ -3,7 +3,7 @@
 #
 #   deploy/deploy.sh [ssh 主机]      在自己电脑上、项目根目录运行，主机默认 huawei
 #
-# 服务器第一次要先装好 uv、xym 用户、/etc/xym.env 和两个 systemd 服务，见 README「部署」。
+# 服务器第一次要先装好 uv、xym 用户、/etc/xym.env 和两个 systemd 服务，见 docs/deployment.md。
 # 只传已提交的代码（git archive），没提交的改动不会上去。服务器上的 .venv 和 data/ 不动。
 set -euo pipefail
 

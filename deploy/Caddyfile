@@ -1,4 +1,4 @@
-# 管理后台对公网的 HTTPS 入口：应用服务器上的 Caddy，装法见 README「部署」。
+# 管理后台对公网的 HTTPS 入口：应用服务器上的 Caddy，装法见 docs/deployment.md。
 # 证书是 Let's Encrypt 给 IP 地址发的，6 天有效，Caddy 自己续。
 # 后台（xym serve）还是只听本机 8000，外面只能经过这里进来。
 # 公网 IP 写在 /etc/caddy/caddy.env（XYM_PUBLIC_IP=...），不放进仓库。
