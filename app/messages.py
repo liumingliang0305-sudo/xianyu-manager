@@ -18,7 +18,12 @@ USER_SESSION_TYPES）列会话时跳过，推下来的消息也不存；以前�
 
 对方读没读：每条消息存平台的 unreadCount（自己发的消息上 0 就是对方读了，网页版也按这个显示
 "已读"、"未读"）。对方读了平台实时推已读回执，收到就改；拉消息时平台给的也会改。只往"读了"改，
-读过的不会变回没读。
+读过的不会变回没读。回执会漏（断线的时候、平台没推），所以不只靠它：
+- 拉一个会话最新的消息时，一直翻到盖住自己发的、还没被读的消息（最新 READ_WINDOW 条里的），
+  不是只看第一页；
+- 对方在会话里有动静（发来消息、读了其中一条）而自己还有消息没被读，过 RECHECK_DELAY 秒向平台
+  核对一次（见 `_recheck_soon`）；
+- 页面开着会话、最新一条自己发的还没被读时，隔一阵调一次 `fetch`（间隔在页面上控制）。
 
 订单：新存进来的消息里带订单号的（交易卡片之类，见 xianyu_core/im.py 的 `_order_ref`），
 交给 `on_order`，`xym serve` 里是 app/orders.py 的 `OrderFeed`，在后台把订单记进本地库。
@@ -88,6 +93,9 @@ SUBSCRIBER_QUEUE = 100
 CLOSING = {"type": "closing"}  # 服务要退出了，订阅到此结束
 IMAGE_CONTENT_TYPE = 2  # 消息的内层内容类型：图片
 MAX_TEXT = 500  # 一条消息最多几个字。平台的上限没查到，这是自己定的，防止误贴一大段
+READ_WINDOW = 50  # 核对对方读没读时只管会话最新的这么多条（页面打开会话时显示的条数）
+RECHECK_DELAY = 2.0  # 对方有动静以后等几秒再向平台核对：回执常常是连着来的，等它们到齐
+RECHECK_INTERVAL = 30.0  # 同一个会话两次核对至少隔多久
 
 # 不知道对方昵称的，用对方最近一条本人发的消息里的昵称补上（见 ChatMessage.sender_name）
 _CONVERSATION_SELECT = """
@@ -329,6 +337,24 @@ class MessageStore:
         row = self._db.execute(
             "SELECT MIN(sent_at) AS sent_at FROM messages WHERE account_id = %s AND cid = %s",
             (account_id, cid),
+        ).fetchone()
+        return row["sent_at"]
+
+    def awaiting_read_since(
+        self, account_id: str, cid: str, *, window: int = READ_WINDOW
+    ) -> float | None:
+        """会话最新的 `window` 条消息里，自己发的、对方还没读（或者不知道读没读）的最早一条的
+        发送时间；都读了是 None。"""
+        row = self._db.execute(
+            """
+            SELECT MIN(sent_at) AS sent_at FROM (
+                SELECT sender_id, sent_at, unread_count FROM messages
+                WHERE account_id = %s AND cid = %s
+                ORDER BY sent_at DESC NULLS LAST, message_id DESC LIMIT %s
+            ) newest
+            WHERE sender_id = %s AND (unread_count IS NULL OR unread_count > 0)
+            """,
+            (account_id, cid, window, account_id),
         ).fetchone()
         return row["sent_at"]
 
@@ -640,6 +666,8 @@ class MessageHub:
         client_options: dict[str, Any] | None = None,
         watch_interval: float = WATCH_INTERVAL,
         request_interval: float = REQUEST_INTERVAL,
+        recheck_delay: float = RECHECK_DELAY,
+        recheck_interval: float = RECHECK_INTERVAL,
         on_order: Callable[[str, str, str], None] | None = None,
     ):
         self.store = store
@@ -649,6 +677,12 @@ class MessageHub:
         self._client_options = client_options or {}
         self._watch_interval = watch_interval
         self._interval = request_interval
+        self._recheck_delay = recheck_delay
+        self._recheck_interval = recheck_interval
+        self._rechecking: set[tuple[str, str]] = set()  # 等着核对的 (账号, 会话)
+        self._rechecked: dict[tuple[str, str], float] = {}  # 上次核对的时间（monotonic）
+        # 没处理的推送 (lwp, 条目类型)，每种只记一次日志
+        self._seen_pushes: set[tuple[str, int | None]] = set()
         self._on_order = on_order
         self._lines: dict[str, _Line] = {}
         self._claims: dict[str, ImLock] = {}
@@ -887,12 +921,33 @@ class MessageHub:
             changed = self.store.set_unread_counts(
                 account_id, {event.message_id: event.unread_count}
             )
+            # 记在日志里：这个推送有没有来、来的是什么，线上出了"已读不变"能从这里查
+            log.info(
+                "账号 %s 收到已读回执：会话 %s 的消息 %s 还有 %d 个接收方没读（%s）",
+                account_id,
+                event.cid,
+                event.message_id,
+                event.unread_count,
+                "已更新" if changed else "本地没有这条，或者已经是读过的",
+            )
             for cid in sorted(changed):
                 self._publish(account_id, {"type": "messages", "cid": cid})
-            if not changed:
-                log.debug("已读回执里的消息 %s 本地没有，或者已经是读过的", event.message_id)
+            # 对方在看这个会话：别的消息的回执可能没推、漏了，稍后核对一次
+            for cid in sorted(changed | ({event.cid} - {""})):
+                self._recheck_soon(account_id, cid)
             return
         if not isinstance(event, ChatMessage):
+            if (event.lwp, event.object_type) not in self._seen_pushes:
+                self._seen_pushes.add((event.lwp, event.object_type))
+                data = event.data
+                fields = sorted(data) if isinstance(data, dict) else type(data).__name__
+                log.info(
+                    "账号 %s 收到没处理的推送（这种只记这一次）：%s，条目类型 %s，字段 %s",
+                    account_id,
+                    event.lwp,
+                    event.object_type,
+                    fields,
+                )
             return
         if event.session_type and event.session_type not in USER_SESSION_TYPES:
             log.debug(
@@ -904,8 +959,44 @@ class MessageHub:
                 account_id, {"type": "message", "cid": event.cid, "message_id": event.message_id}
             )
             self._saved(account_id, [event])
-        else:
-            log.debug("消息 %s 已经存过了（自己发的推回来、或者重复推送）", event.message_id)
+            if event.sender_id != account_id:
+                # 对方发来了消息，多半也看过了：自己还有没被读的，稍后向平台核对一次
+                self._recheck_soon(account_id, event.cid)
+            return
+        log.debug("消息 %s 已经存过了（自己发的推回来、或者重复推送）", event.message_id)
+        # 存过的这条再来一遍时带着的读没读照样记：只往"读了"改，旧的不会盖掉新的
+        if event.unread_count is not None and self.store.set_unread_counts(
+            account_id, {event.message_id: event.unread_count}
+        ):
+            self._publish(account_id, {"type": "messages", "cid": event.cid})
+
+    def _recheck_soon(self, account_id: str, cid: str) -> None:
+        """对方在这个会话里有动静了，稍后（RECHECK_DELAY 秒）在后台向平台核对一次读没读。
+
+        到时候自己发的消息都被读了就不发请求。同一个会话等着的只有一个，两次核对至少隔
+        RECHECK_INTERVAL 秒。
+        """
+        key = (account_id, cid)
+        if key not in self._rechecking:
+            self._rechecking.add(key)
+            self._spawn(self._recheck(account_id, cid))
+
+    async def _recheck(self, account_id: str, cid: str) -> None:
+        key = (account_id, cid)
+        wait = self._recheck_delay
+        if key in self._rechecked:
+            wait = max(wait, self._rechecked[key] + self._recheck_interval - time.monotonic())
+        try:
+            await asyncio.sleep(wait)
+        finally:
+            self._rechecking.discard(key)  # 从这以后再有动静，另排一次
+        if self.store.awaiting_read_since(account_id, cid) is None:
+            return
+        self._rechecked[key] = time.monotonic()
+        try:
+            await self.fetch_newest(account_id, cid, self._online(account_id))
+        except (ImOfflineError, XianyuError) as exc:
+            log.debug("核对会话 %s 的消息读没读失败，下次再说：%s", cid, exc)
 
     def _store_page(self, account_id: str, messages: list[ChatMessage]) -> tuple[int, bool]:
         """从平台拉到的一页消息：新的存下来，本地已经有的更新对方读没读。
@@ -971,6 +1062,8 @@ class MessageHub:
         counts = {m.message_id: m.unread_count for m in lasts if m.unread_count is not None}
         for cid in sorted(self.store.set_unread_counts(account_id, counts)):
             self._publish(account_id, {"type": "messages", "cid": cid})
+            # 这个会话漏了回执：最后一条以外的也可能漏了，核对一次
+            self._recheck_soon(account_id, cid)
 
         shown = [cid for cid, c in listed.items() if c.visible]  # 删掉的会话不补拉、不查昵称
         stale = self.store.stale(account_id, shown[:BACKFILL_CONVERSATIONS])
@@ -1054,10 +1147,14 @@ class MessageHub:
 
         头一次拉、或者没接上（中间断了一截）时，往前翻的游标从这里接着往前，这样翻历史时能把
         断掉的一截补上。返回新存了几条。
+
+        接上以后，自己发的消息里还有对方没读的（见 `MessageStore.awaiting_read_since`），接着翻到
+        盖住最早的那条：平台给的是现在读没读，漏掉的已读回执靠这个补上，不只补第一页里的。
         """
         async with self._fetch_locks[account_id, cid]:
             _, older_more = self.store.older(account_id, cid)
             pages = MAX_NEWEST_PAGES if self.store.oldest_sent_at(account_id, cid) else 1
+            awaiting = self.store.awaiting_read_since(account_id, cid)
             cursor, added, joined, read_changed = NEWEST_CURSOR, 0, False, False
             for n in range(pages):
                 if n:
@@ -1066,9 +1163,11 @@ class MessageHub:
                 new, changed = self._store_page(account_id, page.messages)
                 added += new
                 read_changed |= changed
-                joined = new < len(page.messages)
+                joined = joined or new < len(page.messages)
                 more = page.has_more and page.next_cursor is not None
-                if joined or not more:
+                times = [m.sent_at for m in page.messages if m.sent_at is not None]
+                covered = awaiting is None or (bool(times) and min(times) <= awaiting)
+                if not more or (joined and covered):
                     break
                 cursor = page.next_cursor
             if older_more is None or not joined:
