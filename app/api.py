@@ -35,6 +35,8 @@
 - 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
   按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
   照它在这个账号建一个发布草稿。
+- 第三方货源（app/sources.py）：POST /api/sources 提取公开网页正文和图片，按用户保存，
+  GET /api/sources/{source_id} 查看详情，本地图片鉴权后读取；可建草稿或带进 AI 对话。
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
@@ -100,6 +102,7 @@ from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.prompt_templates import PromptTemplateNotFoundError, PromptTemplateService
 from app.search import SearchService
+from app.sources import Source, SourceNotFoundError, SourceService
 from app.stash import StashedItem, StashNotFoundError, StashService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
 from xianyu_core.credential import Credential
@@ -114,7 +117,7 @@ from xianyu_core.errors import (
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.order import SOLD
-from xianyu_core.publish import PublishBlockedError
+from xianyu_core.publish import MAX_DESC, MAX_IMAGES, PublishBlockedError
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -164,6 +167,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountNotFoundError, 404, "account_not_found"),
     (DraftNotFoundError, 404, "draft_not_found"),
     (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
+    (SourceNotFoundError, 404, "source_not_found"),
     (PromptTemplateNotFoundError, 404, "prompt_template_not_found"),
     (AgentChatNotFoundError, 404, "agent_chat_not_found"),
     (AgentUnavailableError, 503, "agent_unavailable"),
@@ -289,11 +293,16 @@ class ItemStatsIn(BaseModel):
 
 class AgentChatIn(BaseModel):
     pdd_goods_id: str | None = None  # 带哪个拼多多货源
+    source_id: str | None = None  # 带哪个第三方货源
     stash_item_id: str | None = None  # 带哪件暂存，两个都可不带
 
 
 class AgentMessageIn(BaseModel):
     text: str
+
+
+class SourceImportIn(BaseModel):
+    url: str
 
 
 class PromptTemplateIn(BaseModel):
@@ -383,9 +392,12 @@ def create_app(
         images = image_store.ImageStore(images_dir)
         app.state.drafts = DraftService(conn, accounts, app.state.items, images)
         app.state.pdd = PddService(conn, images, transport=transport)
+        app.state.sources = SourceService(conn, images, transport=transport)
         app.state.stash = StashService(conn)
         app.state.prompt_templates = PromptTemplateService(conn)
-        app.state.agent = AgentService(conn, app.state.pdd, app.state.stash, agent_model)
+        app.state.agent = AgentService(
+            conn, app.state.pdd, app.state.stash, agent_model, sources=app.state.sources
+        )
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
             conn,
@@ -470,6 +482,9 @@ def create_app(
     def stash(request: Request) -> StashService:
         return request.app.state.stash
 
+    def sources(request: Request) -> SourceService:
+        return request.app.state.sources
+
     def prompt_templates(request: Request) -> PromptTemplateService:
         return request.app.state.prompt_templates
 
@@ -488,7 +503,8 @@ def create_app(
                 goods = pdd(request).get(user_id, chat.pdd_goods_id)
         if chat.stash_item_id:
             stash_item = stash(request).find(user_id, chat.stash_item_id)
-        return _agent_chat(chat, goods, stash_item)
+        source = sources(request).find(user_id, chat.source_id) if chat.source_id else None
+        return _agent_chat(chat, goods, stash_item, source)
 
     def matrix(request: Request) -> AccountMatrix:
         return request.app.state.matrix
@@ -834,6 +850,50 @@ def create_app(
         )
         return _draft(draft)
 
+    @authed.post("/api/sources")
+    async def import_source(request: Request, body: SourceImportIn) -> dict[str, Any]:
+        source, added = await sources(request).ingest(request.state.user.id, body.url)
+        return {"source": _source(source, detail=True), "added": added}
+
+    @authed.get("/api/sources")
+    async def list_sources(request: Request) -> dict[str, Any]:
+        return {"sources": [_source(s) for s in sources(request).list(request.state.user.id)]}
+
+    @authed.get("/api/sources/{source_id}")
+    async def source_detail(request: Request, source_id: str) -> dict[str, Any]:
+        return _source(sources(request).get(request.state.user.id, source_id), detail=True)
+
+    @authed.post("/api/sources/{source_id}/images")
+    async def fetch_source_images(request: Request, source_id: str) -> dict[str, Any]:
+        source = await sources(request).fetch_images(request.state.user.id, source_id)
+        return _source(source, detail=True)
+
+    @authed.get("/api/sources/{source_id}/images/{sha}")
+    async def source_image(request: Request, source_id: str, sha: str) -> FileResponse:
+        path = sources(request).image_path(request.state.user.id, source_id, sha)
+        return FileResponse(
+            path, media_type="image/jpeg", headers={"Cache-Control": "private, no-store"}
+        )
+
+    @authed.delete("/api/sources/{source_id}")
+    async def delete_source(request: Request, source_id: str) -> dict[str, Any]:
+        await sources(request).delete(request.state.user.id, source_id)
+        return {"ok": True}
+
+    @authed.post("/api/accounts/{account_id}/sources/{source_id}/draft")
+    async def draft_from_source(
+        request: Request, account_id: str, source_id: str
+    ) -> dict[str, Any]:
+        account_id = account(request, account_id)
+        source = sources(request).get(request.state.user.id, source_id)
+        images = [img for img in source.images if img.sha][:MAX_IMAGES]
+        draft = drafts(request).create(
+            account_id,
+            f"{source.title}\n\n{source.content}"[:MAX_DESC],
+            images=[DraftImage(img.sha, img.width or 0, img.height or 0) for img in images],
+        )
+        return _draft(draft)
+
     @authed.get("/api/accounts/{account_id}/items")
     async def list_items(
         request: Request, account_id: str, status: int | None = None, include_gone: bool = False
@@ -1027,9 +1087,12 @@ def create_app(
 
     @authed.post("/api/agent/chats")
     async def create_agent_chat(request: Request, body: AgentChatIn) -> dict[str, Any]:
-        """开一个对话，拼多多货源和暂存都可选。不调模型。"""
+        """开一个对话，拼多多、第三方货源和暂存都可选。不调模型。"""
         chat = agent(request).create(
-            request.state.user.id, pdd_goods_id=body.pdd_goods_id, stash_item_id=body.stash_item_id
+            request.state.user.id,
+            pdd_goods_id=body.pdd_goods_id,
+            stash_item_id=body.stash_item_id,
+            source_id=body.source_id,
         )
         return {**agent_chat(request, chat), "messages": []}
 
@@ -1517,8 +1580,29 @@ def _stashed(item: StashedItem) -> dict[str, Any]:
     return {**asdict(item), "url": item.url}
 
 
+def _source(source: Source, *, detail: bool = False) -> dict[str, Any]:
+    cover = next((img for img in source.images if img.sha), None)
+    body = {
+        "source_id": source.source_id,
+        "url": source.url,
+        "title": source.title,
+        "platform": source.platform,
+        "author": source.author,
+        "preview": source.content[:180],
+        "content_length": len(source.content),
+        "cover_sha": cover.sha if cover else None,
+        "image_count": len(source.images),
+        "missing_images": source.missing(),
+        "imported_at": source.imported_at,
+        "updated_at": source.updated_at,
+    }
+    if detail:
+        body.update(content=source.content, images=[asdict(img) for img in source.images])
+    return body
+
+
 def _agent_chat(
-    chat: AgentChat, goods: PddGoods | None, item: StashedItem | None
+    chat: AgentChat, goods: PddGoods | None, item: StashedItem | None, source: Source | None = None
 ) -> dict[str, Any]:
     pdd_goods = stash_item = None
     if goods:
@@ -1541,6 +1625,8 @@ def _agent_chat(
         "title": chat.title,
         "pdd_goods_id": chat.pdd_goods_id,
         "pdd_goods": pdd_goods,
+        "source_id": chat.source_id,
+        "source": _source(source) if source else None,
         "stash_item_id": chat.stash_item_id,
         "stash_item": stash_item,
         "created_at": chat.created_at,

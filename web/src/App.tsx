@@ -14,6 +14,7 @@ import { OrdersPage } from "@/features/orders/orders-page"
 import { PddPage } from "@/features/pdd/pdd-page"
 import { PublishPage } from "@/features/publish/publish-page"
 import { SearchPage } from "@/features/search/search-page"
+import { SourcesPage } from "@/features/sources/sources-page"
 import { TemplatesPage } from "@/features/templates/templates-page"
 import { AccountProvider } from "@/hooks/use-account"
 import { useAuth } from "@/hooks/use-auth"
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="search" element={<SearchPage />} />
           <Route path="accounts" element={<AccountsPage />} />
           <Route path="pdd" element={<PddPage />} />
+          <Route path="sources" element={<SourcesPage />} />
           <Route path="agent" element={<AgentPage />} />
           <Route path="templates" element={<TemplatesPage />} />
           <Route path="*" element={<Navigate to="/items" replace />} />

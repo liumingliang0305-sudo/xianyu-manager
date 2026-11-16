@@ -278,6 +278,23 @@ pdd_goods = Table(
     Index("pdd_goods_user", "user_id", "updated_at"),
 )
 
+# 第三方货源（app/sources.py）：公开网页的文字和图片，和拼多多货源独立，按用户保存。
+third_party_sources = Table(
+    "third_party_sources",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("source_id", Text, primary_key=True),  # 规范化链接的哈希，同一链接再次导入是更新
+    Column("url", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("platform", Text, nullable=False),
+    Column("author", Text, nullable=False, server_default=""),
+    Column("images", Text, nullable=False, server_default="[]"),  # JSON：原地址、本地 sha、宽高
+    Column("imported_at", Double, nullable=False),
+    Column("updated_at", Double, nullable=False),
+    Index("third_party_sources_user", "user_id", "updated_at"),
+)
+
 # 搜索暂存（app/stash.py）：搜索页上点「暂存」留下的商品（别人的），存的是搜到时搜索结果里的样子。
 # 按管理后台的用户存，不跟闲鱼账号走，名下账号共用
 search_stash = Table(
@@ -319,6 +336,7 @@ agent_chats = Table(
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
     Column("pdd_goods_id", Text),  # 带的拼多多货源（pdd_goods.goods_id），没带是 NULL
+    Column("source_id", Text),  # 带的第三方货源，删除货源后保留 ID，聊天记录不跟着删
     Column("stash_item_id", Text),  # 带的暂存（search_stash.item_id），没带是 NULL
     Column("title", Text, nullable=False, server_default=""),  # 第一条消息的开头，还没聊是空串
     # JSON：PydanticAI 的消息历史原样（ModelMessagesTypeAdapter），下一轮原样带回去

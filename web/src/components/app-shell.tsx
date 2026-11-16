@@ -6,6 +6,7 @@ import {
   FileTextIcon,
   KeyRoundIcon,
   LayoutGridIcon,
+  LinkIcon,
   LogOutIcon,
   MessageSquareIcon,
   MoonIcon,
@@ -70,6 +71,7 @@ const NAV: NavEntry[] = [
 const SHARED_NAV: NavEntry[] = [
   { to: "/accounts", label: "账号矩阵", icon: LayoutGridIcon },
   { to: "/pdd", label: "拼多多货源", icon: WarehouseIcon },
+  { to: "/sources", label: "第三方货源", icon: LinkIcon },
   { to: "/agent", label: "AI 助手", icon: BotIcon },
   { to: "/templates", label: "模板管理", icon: FileTextIcon },
 ]
@@ -350,9 +352,10 @@ function Content({ onLogin }: { onLogin: () => void }) {
   // 也不放当前账号的登录、熔断提示
   const onAccounts = useMatch("/accounts")
   const onPdd = useMatch("/pdd")
+  const onSources = useMatch("/sources")
   const onAgent = useMatch("/agent")
   const onTemplates = useMatch("/templates")
-  if (onAccounts || onPdd || onAgent || onTemplates) return <Outlet />
+  if (onAccounts || onPdd || onSources || onAgent || onTemplates) return <Outlet />
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">

@@ -585,6 +585,33 @@ export interface PddImagesResult {
   total: number
 }
 
+export interface SourceSummary {
+  source_id: string
+  url: string
+  title: string
+  platform: string
+  author: string
+  preview: string
+  content_length: number
+  cover_sha: string | null
+  image_count: number
+  missing_images: number
+  imported_at: number
+  updated_at: number
+}
+
+export interface SourceImage {
+  url: string
+  sha: string | null
+  width: number | null
+  height: number | null
+}
+
+export interface ThirdPartySource extends SourceSummary {
+  content: string
+  images: SourceImage[]
+}
+
 /** 提示词模板列表只带正文开头，完整内容在查看、编辑时读取 */
 export interface PromptTemplateSummary {
   id: number
@@ -628,6 +655,8 @@ export interface AgentChatSummary {
   title: string
   pdd_goods_id: string | null
   pdd_goods: AgentGoods | null
+  source_id: string | null
+  source: SourceSummary | null
   stash_item_id: string | null
   stash_item: AgentStashItem | null
   created_at: number
@@ -729,6 +758,21 @@ export async function draftImage(account: string, draftId: number, sha: string):
     resp = await authorizedFetch(`/api${draftsPath(account)}/${draftId}/images/${sha}`)
   } catch {
     throw new ApiError(0, "network", "连不上后台，确认 uv run xym serve 在运行")
+  }
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new ApiError(resp.status, body?.code ?? "http_error", body?.message ?? "取图片失败")
+  }
+  return resp.blob()
+}
+
+/** 第三方货源的本地图片，先鉴权再读取，原站不可用时仍能查看。 */
+export async function sourceImage(sourceId: string, sha: string): Promise<Blob> {
+  let resp: Response
+  try {
+    resp = await authorizedFetch(`/api/sources/${encodeURIComponent(sourceId)}/images/${sha}`)
+  } catch {
+    throw new ApiError(0, "network", "连不上后台，图片读取失败")
   }
   if (!resp.ok) {
     const body = await resp.json().catch(() => null)
@@ -1138,6 +1182,27 @@ export const api = {
       { method: "POST" },
     ),
 
+  sources: () => request<{ sources: SourceSummary[] }>("/sources").then((r) => r.sources),
+
+  source: (sourceId: string) => request<ThirdPartySource>(`/sources/${encodeURIComponent(sourceId)}`),
+
+  importSource: (url: string) =>
+    request<{ source: ThirdPartySource; added: boolean }>("/sources", {
+      method: "POST", body: JSON.stringify({ url }),
+    }),
+
+  fetchSourceImages: (sourceId: string) =>
+    request<ThirdPartySource>(`/sources/${encodeURIComponent(sourceId)}/images`, { method: "POST" }),
+
+  deleteSource: (sourceId: string) =>
+    request<{ ok: true }>(`/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" }),
+
+  draftFromSource: (account: string, sourceId: string) =>
+    request<Draft>(
+      `/accounts/${encodeURIComponent(account)}/sources/${encodeURIComponent(sourceId)}/draft`,
+      { method: "POST" },
+    ),
+
   promptTemplates: () =>
     request<{ templates: PromptTemplateSummary[] }>("/prompt-templates").then((r) => r.templates),
 
@@ -1162,7 +1227,7 @@ export const api = {
   agentChat: (chatId: number) => request<AgentChat>(`/agent/chats/${chatId}`),
 
   /** 开一个对话，拼多多货源和暂存都可选。不调模型 */
-  createAgentChat: (body: { pdd_goods_id: string | null; stash_item_id: string | null }) =>
+  createAgentChat: (body: { pdd_goods_id: string | null; stash_item_id: string | null; source_id?: string | null }) =>
     request<AgentChat>("/agent/chats", { method: "POST", body: JSON.stringify(body) }),
 
   deleteAgentChat: (chatId: number) =>
