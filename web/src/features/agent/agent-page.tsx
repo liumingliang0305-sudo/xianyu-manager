@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   CopyIcon,
   EllipsisIcon,
   Loader2Icon,
@@ -53,7 +54,7 @@ function attachedLabel(chat: AgentChatSummary): string {
   const parts = []
   if (chat.pdd_goods_id) parts.push(chat.pdd_goods?.title ?? "货源已删除")
   if (chat.stash_item_id) parts.push(chat.stash_item?.title ?? "暂存已移出")
-  return parts.join(" ＋ ")
+  return parts.join(" ＋ ") || "未附带商品"
 }
 
 /** 还没聊的对话，按带的东西给几句开场 */
@@ -67,11 +68,16 @@ function starters(chat: AgentChatSummary): string[] {
       "和同行比，这件货的卖点有什么不一样？",
     ]
   if (goods) return ["给这件货写一段闲鱼描述", "起 3 个闲鱼标题", "按拼单价算，闲鱼上定多少钱合适？"]
-  return ["这件商品的文案好在哪里？", "照这个写法，写一段能套用的描述模板", "这个价格在闲鱼上算贵吗？"]
+  if (peer) return ["这件商品的文案好在哪里？", "照这个写法，写一段能套用的描述模板", "这个价格在闲鱼上算贵吗？"]
+  return ["帮我写一份闲鱼商品描述模板", "闲鱼商品怎么定价更合适？", "和买家沟通时有哪些注意事项？"]
 }
 
 function ChatRow({ chat, active, onOpen }: { chat: AgentChatSummary; active: boolean; onOpen: () => void }) {
-  const cover = chat.pdd_goods ? (
+  const cover = !chat.pdd_goods_id && !chat.stash_item_id ? (
+    <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+      <BotIcon className="size-4" aria-hidden />
+    </div>
+  ) : chat.pdd_goods ? (
     <PddThumb url={chat.pdd_goods.cover} size={40} />
   ) : (
     <ItemThumb url={chat.stash_item?.pic_url ?? ""} size={40} />
@@ -389,6 +395,9 @@ function ChatPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {!summary.pdd_goods_id && !summary.stash_item_id && (
+            <span className="text-sm text-muted-foreground">直接对话</span>
+          )}
           {summary.pdd_goods_id && (
             <Attachment
               kind="拼多多货源"
@@ -452,7 +461,7 @@ export function AgentPage() {
       return p
     })
 
-  let description = "带着拼多多货源、同行的商品和大模型聊：写文案、起标题、商量定价"
+  let description = "和大模型聊文案、标题、定价，也可以带上拼多多货源或同行的商品"
   if (query.data) {
     const model = query.data.model ? ` · 模型 ${query.data.model}` : ""
     description = `${chats.length} 个对话${model}`
@@ -464,7 +473,7 @@ export function AgentPage() {
     list = <LoadError what="读取对话" error={query.error} onRetry={() => void query.refetch()} />
   else if (chats.length === 0)
     list = (
-      <EmptyState title="还没有对话">选一个拼多多货源或者暂存的同行商品，和 AI 聊聊怎么写文案、怎么定价。</EmptyState>
+      <EmptyState title="还没有对话">直接和 AI 聊聊文案、标题、定价，也可以带上拼多多货源或暂存的同行商品。</EmptyState>
     )
   else
     list = (

@@ -1124,7 +1124,7 @@ export const api = {
 
   agentChat: (chatId: number) => request<AgentChat>(`/agent/chats/${chatId}`),
 
-  /** 开一个对话，带上一个拼多多货源、一件暂存（至少一个）。不调模型 */
+  /** 开一个对话，拼多多货源和暂存都可选。不调模型 */
   createAgentChat: (body: { pdd_goods_id: string | null; stash_item_id: string | null }) =>
     request<AgentChat>("/agent/chats", { method: "POST", body: JSON.stringify(body) }),
 

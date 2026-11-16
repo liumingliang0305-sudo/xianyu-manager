@@ -1,7 +1,7 @@
 """AI 助手：带着一个拼多多货源、一件搜索暂存（同行在闲鱼上卖的商品）和大模型对话，
 比如照同行的写法给这件货写闲鱼文案、商量怎么定价。用 PydanticAI 调模型。
 
-现在只做对话：一个对话开始时选好带哪个货源、哪件暂存（至少一个，之后不能换），模型只能看到它们的文字资料
+现在只做对话：可以不带商品直接聊，也可以开始时选好带哪个货源、哪件暂存（都可选，之后不能换），模型只能看到它们的文字资料
 （标题、参数、规格、价格、同行的标签和描述），看不到图片，也不能动手（建草稿、改商品）。
 
 模型取环境变量 XYM_AGENT_MODEL，写法是 PydanticAI 的 "provider:model"，不设是 DEFAULT_MODEL
@@ -73,7 +73,7 @@ XIANYU_TAG = register_tag("xianyu_item")
 
 INSTRUCTIONS = f"""\
 你在帮一个闲鱼卖家干活。他从拼多多进货（货源），在闲鱼上卖；也会参考同行在闲鱼上卖的同类商品。
-这次对话带上了下面的货源和（或）同行商品，围绕它们回答：写闲鱼文案、起标题、商量定价、比较卖点这些。
+卖家可以直接和你对话，也可以带上货源和（或）同行商品作为参考：写闲鱼文案、起标题、商量定价、比较卖点这些。
 
 - 页面不渲染 Markdown，回复用纯文本：不要用 **、#、表格，分点用"1."或"-"开头。
 - 闲鱼的商品描述最多 {MAX_DESC} 字，标题是平台从描述开头截的，所以描述头一句就要说清楚卖的是什么。
@@ -183,7 +183,10 @@ def attached(ctx: RunContext[ChatDeps]) -> str:
             f"同行的商品（闲鱼商品 {deps.stash_item_id}）已经被卖家移出暂存，资料看不到了，"
             "前面聊过的还在对话里。"
         )
-    return "\n\n".join(blocks)
+    return (
+        "\n\n".join(blocks)
+        or "这次对话没有附带货源或同行商品，根据卖家的消息回答，需要商品资料时再询问。"
+    )
 
 
 def pdd_text(goods: PddGoods) -> str:
@@ -308,11 +311,9 @@ class AgentService:
     def create(
         self, user_id: int, *, pdd_goods_id: str | None, stash_item_id: str | None
     ) -> AgentChat:
-        """开一个对话，带上一个货源、一件暂存，至少要有一个。不调模型。"""
+        """开一个对话，货源和暂存都可选。不调模型。"""
         pdd_goods_id = (pdd_goods_id or "").strip() or None
         stash_item_id = (stash_item_id or "").strip() or None
-        if not pdd_goods_id and not stash_item_id:
-            raise ValueError("至少带上一个拼多多货源或者一件暂存")
         if pdd_goods_id:
             self._pdd.get(user_id, pdd_goods_id)
         if stash_item_id and self._stash.find(user_id, stash_item_id) is None:

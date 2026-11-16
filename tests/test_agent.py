@@ -161,9 +161,58 @@ def test_scraped_text_cannot_break_out_of_its_tag(client, model):
     assert "<pdd_goods goods_id" not in instructions  # 没带货源
 
 
-def test_create_needs_something_attached(client):
-    resp = client.post(CHATS, json={})
-    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+@pytest.mark.parametrize(
+    "attachments",
+    [
+        {},
+        {"pdd_goods_id": None, "stash_item_id": None},
+        {"pdd_goods_id": " \t", "stash_item_id": " \n"},
+    ],
+)
+def test_chat_without_attachments(client, model, attachments):
+    assert client.delete(f"/api/pdd/goods/{GOODS_ID}").status_code == 200
+    assert client.delete("/api/search/stash/1001").status_code == 200
+
+    resp = client.post(CHATS, json=attachments)
+    assert resp.status_code == 200, resp.text
+    chat = resp.json()
+    assert chat["pdd_goods_id"] is None and chat["pdd_goods"] is None
+    assert chat["stash_item_id"] is None and chat["stash_item"] is None
+    assert chat["title"] == "" and chat["messages"] == []
+
+    model.replies = [["你好，", "有什么可以帮你？"], ["可以从商品描述和定价开始。"]]
+    events = send(client, chat["id"], "你好")
+    assert events[-1][0] == "done"
+    assert "".join(e[1]["text"] for e in events[:-1]) == "你好，有什么可以帮你？"
+    instructions, _ = model.calls[0]
+    assert "这次对话没有附带货源或同行商品" in instructions
+    assert "<pdd_goods goods_id=" not in instructions
+    assert "<xianyu_item item_id=" not in instructions
+
+    assert send(client, chat["id"], "我想开始在闲鱼卖东西")[-1][0] == "done"
+    _, messages = model.calls[1]
+    prompts = [
+        part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert prompts == ["你好", "我想开始在闲鱼卖东西"]
+    detail = client.get(f"{CHATS}/{chat['id']}").json()
+    assert [(m["role"], m["text"]) for m in detail["messages"]] == [
+        ("user", "你好"),
+        ("assistant", "你好，有什么可以帮你？"),
+        ("user", "我想开始在闲鱼卖东西"),
+        ("assistant", "可以从商品描述和定价开始。"),
+    ]
+    listed = client.get(CHATS).json()["chats"]
+    assert len(listed) == 1
+    assert listed[0]["id"] == chat["id"] and listed[0]["title"] == "你好"
+    assert listed[0]["pdd_goods_id"] is None and listed[0]["stash_item_id"] is None
+
+
+def test_create_validates_selected_attachments(client):
     resp = client.post(CHATS, json={"pdd_goods_id": "123"})
     assert (resp.status_code, resp.json()["code"]) == (404, "pdd_goods_not_found")
     resp = client.post(CHATS, json={"stash_item_id": "999"})

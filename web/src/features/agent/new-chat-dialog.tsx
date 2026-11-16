@@ -107,7 +107,7 @@ function ChoiceList({
   )
 }
 
-/** 新对话：选一个拼多多货源、一件暂存（至少一个），开了以后不能换 */
+/** 新对话：拼多多货源、暂存都可选，开了以后不能换 */
 export function NewChatDialog({
   onClose,
   onCreated,
@@ -149,7 +149,7 @@ export function NewChatDialog({
         <DialogHeader>
           <DialogTitle>新对话</DialogTitle>
           <DialogDescription>
-            选要聊的拼多多货源和同行的商品（搜索页暂存的），至少选一个。模型只看得到它们的文字资料，开了以后不能换。
+            可以直接开始对话，也可以带上拼多多货源或同行的商品（搜索页暂存的）。模型只看得到它们的文字资料，开了以后不能换。
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-4">
@@ -180,7 +180,7 @@ export function NewChatDialog({
           <Button variant="outline" onClick={onClose} disabled={create.isPending}>
             取消
           </Button>
-          <Button onClick={submit} disabled={(!goodsId && !itemId) || create.isPending}>
+          <Button onClick={submit} disabled={create.isPending}>
             {create.isPending && <Loader2Icon className="animate-spin" />}
             开始对话
           </Button>

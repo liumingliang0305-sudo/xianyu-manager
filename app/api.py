@@ -38,7 +38,7 @@
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
-- AI 助手（app/agent.py）：/api/agent/chats 开对话时带上一个拼多多货源、一件暂存，
+- AI 助手（app/agent.py）：/api/agent/chats 开对话时可选带上一个拼多多货源、一件暂存，
   POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
 """
@@ -286,7 +286,7 @@ class ItemStatsIn(BaseModel):
 
 class AgentChatIn(BaseModel):
     pdd_goods_id: str | None = None  # 带哪个拼多多货源
-    stash_item_id: str | None = None  # 带哪件暂存，两个至少要有一个
+    stash_item_id: str | None = None  # 带哪件暂存，两个都可不带
 
 
 class AgentMessageIn(BaseModel):
@@ -983,7 +983,7 @@ def create_app(
 
     @authed.post("/api/agent/chats")
     async def create_agent_chat(request: Request, body: AgentChatIn) -> dict[str, Any]:
-        """开一个对话，带上一个拼多多货源、一件暂存（至少一个）。不调模型。"""
+        """开一个对话，拼多多货源和暂存都可选。不调模型。"""
         chat = agent(request).create(
             request.state.user.id, pdd_goods_id=body.pdd_goods_id, stash_item_id=body.stash_item_id
         )
