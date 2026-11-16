@@ -3,6 +3,7 @@ import {
   BotIcon,
   CheckIcon,
   ChevronsUpDownIcon,
+  FileTextIcon,
   KeyRoundIcon,
   LayoutGridIcon,
   LogOutIcon,
@@ -70,6 +71,7 @@ const SHARED_NAV: NavEntry[] = [
   { to: "/accounts", label: "账号矩阵", icon: LayoutGridIcon },
   { to: "/pdd", label: "拼多多货源", icon: WarehouseIcon },
   { to: "/agent", label: "AI 助手", icon: BotIcon },
+  { to: "/templates", label: "模板管理", icon: FileTextIcon },
 ]
 
 const NAV_ITEM =
@@ -344,12 +346,13 @@ function LoginBanner({ login, onLogin }: { login: LoginStatus; onLogin: () => vo
 
 function Content({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, isLoading, error } = useAccount()
-  // 账号矩阵管的是所有账号、拼多多货源和 AI 助手是名下账号共用的：没有账号时也能进，
+  // 账号矩阵管的是所有账号、货源、AI 助手和模板是名下账号共用的：没有账号时也能进，
   // 也不放当前账号的登录、熔断提示
   const onAccounts = useMatch("/accounts")
   const onPdd = useMatch("/pdd")
   const onAgent = useMatch("/agent")
-  if (onAccounts || onPdd || onAgent) return <Outlet />
+  const onTemplates = useMatch("/templates")
+  if (onAccounts || onPdd || onAgent || onTemplates) return <Outlet />
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">

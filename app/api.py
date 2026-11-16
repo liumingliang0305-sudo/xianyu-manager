@@ -41,6 +41,7 @@
 - AI 助手（app/agent.py）：/api/agent/chats 开对话时可选带上一个拼多多货源、一件暂存，
   POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
+- 提示词模板（app/prompt_templates.py）：/api/prompt-templates 增删改查，按用户保存。
 """
 
 from __future__ import annotations
@@ -97,6 +98,7 @@ from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderRecord, OrderService
 from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft_text
 from app.places import PlaceSearch, PlacesUnavailableError
+from app.prompt_templates import PromptTemplateNotFoundError, PromptTemplateService
 from app.search import SearchService
 from app.stash import StashedItem, StashNotFoundError, StashService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
@@ -162,6 +164,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (AccountNotFoundError, 404, "account_not_found"),
     (DraftNotFoundError, 404, "draft_not_found"),
     (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
+    (PromptTemplateNotFoundError, 404, "prompt_template_not_found"),
     (AgentChatNotFoundError, 404, "agent_chat_not_found"),
     (AgentUnavailableError, 503, "agent_unavailable"),
     (StashNotFoundError, 404, "stash_not_found"),
@@ -293,6 +296,11 @@ class AgentMessageIn(BaseModel):
     text: str
 
 
+class PromptTemplateIn(BaseModel):
+    name: str
+    content: str
+
+
 class DraftIn(BaseModel):
     description: str = ""
     price: str | None = None  # 元，空是还没填
@@ -376,6 +384,7 @@ def create_app(
         app.state.drafts = DraftService(conn, accounts, app.state.items, images)
         app.state.pdd = PddService(conn, images, transport=transport)
         app.state.stash = StashService(conn)
+        app.state.prompt_templates = PromptTemplateService(conn)
         app.state.agent = AgentService(conn, app.state.pdd, app.state.stash, agent_model)
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
@@ -460,6 +469,9 @@ def create_app(
 
     def stash(request: Request) -> StashService:
         return request.app.state.stash
+
+    def prompt_templates(request: Request) -> PromptTemplateService:
+        return request.app.state.prompt_templates
 
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
@@ -966,6 +978,38 @@ def create_app(
     async def remove_stash(request: Request, item_id: str) -> dict[str, Any]:
         """移出暂存。本来就不在的也算成功（连点两下不报错）。"""
         return {"removed": stash(request).remove(request.state.user.id, item_id)}
+
+    @authed.get("/api/prompt-templates")
+    async def list_prompt_templates(request: Request) -> dict[str, Any]:
+        return {
+            "templates": [
+                asdict(template)
+                for template in prompt_templates(request).list(request.state.user.id)
+            ]
+        }
+
+    @authed.post("/api/prompt-templates")
+    async def create_prompt_template(request: Request, body: PromptTemplateIn) -> dict[str, Any]:
+        return asdict(prompt_templates(request).create(request.state.user.id, **body.model_dump()))
+
+    @authed.get("/api/prompt-templates/{template_id}")
+    async def prompt_template_detail(request: Request, template_id: int) -> dict[str, Any]:
+        return asdict(prompt_templates(request).get(request.state.user.id, template_id))
+
+    @authed.put("/api/prompt-templates/{template_id}")
+    async def update_prompt_template(
+        request: Request, template_id: int, body: PromptTemplateIn
+    ) -> dict[str, Any]:
+        return asdict(
+            prompt_templates(request).update(
+                request.state.user.id, template_id, **body.model_dump()
+            )
+        )
+
+    @authed.delete("/api/prompt-templates/{template_id}")
+    async def delete_prompt_template(request: Request, template_id: int) -> dict[str, Any]:
+        prompt_templates(request).delete(request.state.user.id, template_id)
+        return {"ok": True}
 
     @authed.get("/api/agent/chats")
     async def list_agent_chats(request: Request) -> dict[str, Any]:

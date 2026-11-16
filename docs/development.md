@@ -100,11 +100,12 @@ app/             业务层：只通过 xianyu_core 和闲鱼通信
   stash.py         搜索暂存：搜索结果里挑出来的商品存一份（搜到时的样子 + 搜索词 + 插件拿来的详情），按用户存
   pdd.py           拼多多货源：插件推来的商品整理、存库、下载图片，照它建发布草稿的描述
   agent.py         AI 助手（PydanticAI）：带着一个拼多多货源、一件暂存和模型对话，流式回复，对话按用户存
+  prompt_templates.py  提示词模板：名称和正文的增删改查，按用户存
 web/             管理后台前端：Vite + React + TypeScript + Tailwind + shadcn/ui
   src/lib/api.ts       后端接口和类型；请求都带访问令牌，过期了自动换新的
   src/lib/auth.ts      登录状态：访问令牌放在内存里，打开页面时拿 cookie 里的刷新令牌换
   src/components/ui/   shadcn/ui 组件（在 web/ 里 pnpm dlx shadcn@latest add 生成，可以直接改）
-  src/features/        按页面分：auth、items、publish、orders、autosync、messages、search、accounts、pdd、agent
+  src/features/        按页面分：auth、items、publish、orders、autosync、messages、search、accounts、pdd、agent、templates
 extension/       Chrome 插件，见 docs/extension.md
 migrations/      Alembic 迁移（alembic.ini 在项目根目录）
 deploy/          部署脚本和服务配置，见 docs/deployment.md

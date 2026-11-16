@@ -585,6 +585,25 @@ export interface PddImagesResult {
   total: number
 }
 
+/** 提示词模板列表只带正文开头，完整内容在查看、编辑时读取 */
+export interface PromptTemplateSummary {
+  id: number
+  name: string
+  preview: string
+  content_length: number
+  created_at: number
+  updated_at: number
+}
+
+export interface PromptTemplate extends Omit<PromptTemplateSummary, "preview" | "content_length"> {
+  content: string
+}
+
+export interface PromptTemplateInput {
+  name: string
+  content: string
+}
+
 /** AI 助手对话带的拼多多货源（概况） */
 export interface AgentGoods {
   goods_id: string
@@ -1118,6 +1137,24 @@ export const api = {
       `/accounts/${encodeURIComponent(account)}/pdd/${encodeURIComponent(goodsId)}/draft`,
       { method: "POST" },
     ),
+
+  promptTemplates: () =>
+    request<{ templates: PromptTemplateSummary[] }>("/prompt-templates").then((r) => r.templates),
+
+  promptTemplate: (templateId: number) =>
+    request<PromptTemplate>(`/prompt-templates/${templateId}`),
+
+  createPromptTemplate: (body: PromptTemplateInput) =>
+    request<PromptTemplate>("/prompt-templates", { method: "POST", body: JSON.stringify(body) }),
+
+  updatePromptTemplate: (templateId: number, body: PromptTemplateInput) =>
+    request<PromptTemplate>(`/prompt-templates/${templateId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  deletePromptTemplate: (templateId: number) =>
+    request<{ ok: true }>(`/prompt-templates/${templateId}`, { method: "DELETE" }),
 
   /** AI 助手的对话（按用户存），最近聊过的在前；带上用的模型、没配好的原因 */
   agentChats: () => request<AgentChatList>("/agent/chats"),

@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Double,
     ForeignKey,
@@ -325,4 +326,21 @@ agent_chats = Table(
     Column("created_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),  # 最后一轮回复完的时间
     Index("agent_chats_user", "user_id", "updated_at"),
+)
+
+# 提示词模板（app/prompt_templates.py）：按后台用户保存，名下闲鱼账号共用。
+prompt_templates = Table(
+    "prompt_templates",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", Double, nullable=False),
+    Column("updated_at", Double, nullable=False),
+    CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="prompt_templates_name_length"),
+    CheckConstraint(
+        "char_length(content) BETWEEN 1 AND 20000", name="prompt_templates_content_length"
+    ),
+    Index("prompt_templates_user", "user_id", "updated_at", "id"),
 )
