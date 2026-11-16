@@ -53,6 +53,7 @@ from xianyu_core.publish import (
     labels_from_cards,
     post_fee,
     post_mode_from,
+    strip_emoji,
     submit_payload,
     unsupported_cards,
 )
@@ -231,7 +232,7 @@ class DraftService:
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 account_id,
-                description,
+                strip_emoji(description),
                 _images_json(images),
                 last["address"] if last else None,
                 pdd_goods_id,
@@ -275,7 +276,7 @@ class DraftService:
             " post_mode = %s, post_price_cent = %s, take_self = %s, images = %s, address = %s,"
             " updated_at = %s WHERE id = %s",
             (
-                description,
+                strip_emoji(description),
                 price_cent,
                 orig_price_cent,
                 post_mode,
@@ -432,7 +433,7 @@ class DraftService:
                 edit_item_id,
                 relist_item_id,
                 json.dumps(detail, ensure_ascii=False),
-                (detail.get("itemTextDTO") or {}).get("desc") or "",
+                strip_emoji((detail.get("itemTextDTO") or {}).get("desc") or ""),
                 _int_or_none(price.get("priceInCent")) or None,
                 _int_or_none(price.get("origPriceInCent")) or None,
                 post_mode,
@@ -508,6 +509,14 @@ class DraftService:
         if draft.item_id:
             done = "这些改动已经提交到闲鱼了" if draft.edit_item_id else "这个草稿已经发布了"
             raise ValueError(f"{done}，不能再改")
+        # 以前保存过的草稿也要清理，推荐分类、检查违禁词、发布都只使用清理后的描述。
+        description = strip_emoji(draft.description)
+        if description != draft.description:
+            draft.description, draft.updated_at = description, time.time()
+            self._db.execute(
+                "UPDATE drafts SET description = %s, updated_at = %s WHERE id = %s",
+                (description, draft.updated_at, draft.id),
+            )
         return draft
 
     async def _upload(self, api: PublishApi, draft: Draft) -> None:

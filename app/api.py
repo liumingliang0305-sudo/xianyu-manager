@@ -117,10 +117,11 @@ from xianyu_core.errors import (
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.order import SOLD
-from xianyu_core.publish import MAX_DESC, MAX_IMAGES, PublishBlockedError
+from xianyu_core.publish import MAX_DESC, MAX_IMAGES, PublishBlockedError, strip_emoji
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+REVISION_FILE = Path(__file__).resolve().parent.parent / "REVISION"
 # 消息推送流多久没事件就发一行注释，顺便发现页面已经关了、用户已经没有权限了
 SSE_PING = 15.0
 # 刷新令牌的 cookie：只发给 /api/auth 下面的接口，页面脚本读不到
@@ -364,6 +365,8 @@ def create_app(
     Model 对象（测试换 FunctionModel）；None 时对话能看、发不了消息（见 app/agent.py）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
+    # 启动时固定版本，不能每次读磁盘：部署复制了新代码但旧进程仍在时，健康检查要能区分。
+    revision = REVISION_FILE.read_text().strip() if REVISION_FILE.is_file() else ""
     searcher = SearchService(accounts)
     places = PlaceSearch(amap_key, transport=transport)
     locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -628,7 +631,7 @@ def create_app(
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         """不用登录：发版脚本用它确认后台起来了。"""
-        return {"ok": True}
+        return {"ok": True, **({"revision": revision} if revision else {})}
 
     @app.post("/api/auth/login")
     async def sign_in(request: Request, response: Response, body: SignInIn) -> dict[str, Any]:
@@ -889,7 +892,7 @@ def create_app(
         images = [img for img in source.images if img.sha][:MAX_IMAGES]
         draft = drafts(request).create(
             account_id,
-            f"{source.title}\n\n{source.content}"[:MAX_DESC],
+            strip_emoji(f"{source.title}\n\n{source.content}")[:MAX_DESC],
             images=[DraftImage(img.sha, img.width or 0, img.height or 0) for img in images],
         )
         return _draft(draft)

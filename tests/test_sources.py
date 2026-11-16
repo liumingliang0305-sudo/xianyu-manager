@@ -13,7 +13,7 @@ from app import sources
 from app.api import create_app
 from app.sources import PublicTransport, canonical_url, extract, fetch, image_url, public_url
 from xianyu_core.guard import Guard
-from xianyu_core.publish import MAX_DESC
+from xianyu_core.publish import MAX_DESC, strip_emoji
 
 URL = "https://www.jianpian.cn/a/1g2eyk37"
 ARTICLE = json.loads((Path(__file__).parent / "jianpian_article.json").read_text())
@@ -312,7 +312,9 @@ def test_draft_reuses_saved_images_and_delete_preserves_shared_files(client, tmp
     response = client.post(f"/api/accounts/{UNB}/sources/{source_id}/draft")
     assert response.status_code == 200, response.text
     draft = response.json()
-    assert draft["description"].startswith(source["title"])
+    assert draft["description"].startswith(strip_emoji(source["title"]))
+    assert strip_emoji(draft["description"]) == draft["description"]
+    assert client.get(f"/api/sources/{source_id}").json()["content"] == source["content"]
     assert len(draft["description"]) <= MAX_DESC
     assert len(draft["images"]) == 9
     assert draft["images"][0]["sha"] == source["images"][0]["sha"]

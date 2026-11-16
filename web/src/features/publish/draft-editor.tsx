@@ -73,7 +73,10 @@ const MAX_DESC = 1500
 /** 停止输入多久以后自动保存 */
 const SAVE_DELAY_MS = 800
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/bmp"
-const EMOJI = /\p{Extended_Pictographic}/u
+/** 与 xianyu_core/publish.py 一致，去掉 emoji 及其组合符，保留普通数字、中文和单位。 */
+const EMOJI = /[#*0-9]\uFE0F?\u20E3|[\u00A9\u00AE\u203C\u2049\u2122\u2139\u2194-\u2199\u21A9-\u21AA\u231A-\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA\u24C2\u25AA-\u25AB\u25B6\u25C0\u25FB-\u25FE\u2600-\u27BF\u2934-\u2935\u2B00-\u2BFF\u3030\u303D\u3297\u3299\u{1F000}-\u{1FAFF}]/gu
+const EMOJI_COMPONENT = /\u200D|\u20E3|\uFE0E|\uFE0F|[\u{E0020}-\u{E007F}]/gu
+const stripEmoji = (text: string) => text.replace(EMOJI, "").replace(EMOJI_COMPONENT, "")
 
 const POST_OPTIONS: { value: PostMode; label: string }[] = [
   { value: "free", label: "包邮" },
@@ -100,7 +103,7 @@ function centText(cents: number | null): string {
 
 function fromDraft(draft: Draft): FormState {
   return {
-    description: draft.description,
+    description: stripEmoji(draft.description),
     price: centText(draft.price_cent),
     origPrice: centText(draft.orig_price_cent),
     postMode: draft.post_mode,
@@ -675,7 +678,7 @@ function EditableDraft({
 }) {
   const client = useQueryClient()
   const [form, setForm] = useState(() => fromDraft(draft))
-  const [dirty, setDirty] = useState(false)
+  const [dirty, setDirty] = useState(() => stripEmoji(draft.description) !== draft.description)
   const [deleting, setDeleting] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [guard, setGuard] = useState<string | null>(null)
@@ -796,7 +799,6 @@ function EditableDraft({
   const lacks = missing(draft, form)
   const busy = publish.isPending
   const labelBusy = recommend.isPending || choose.isPending || busy
-  const descEmoji = EMOJI.test(form.description)
 
   // 编辑时自动保存只是暂存在后台，点"保存到闲鱼"才改到闲鱼上，用词上分开
   const saveWord = editing ? "暂存" : "保存"
@@ -897,7 +899,7 @@ function EditableDraft({
           htmlFor="draft-desc"
           required
           hintId="draft-desc-hint"
-          hint="标题由闲鱼从描述里截。写清楚品牌型号、成色、来源，不能有 emoji"
+          hint="标题由闲鱼从描述里截。写清楚品牌型号、成色、来源，输入或粘贴的 emoji 会自动去除"
         >
           <div className="relative">
             <Textarea
@@ -908,17 +910,13 @@ function EditableDraft({
               disabled={busy}
               placeholder="描述一下宝贝的品牌型号、货品来源…"
               aria-describedby="draft-desc-hint"
-              aria-invalid={descEmoji || undefined}
-              onChange={(e) => update({ description: e.target.value })}
+              onChange={(e) => update({ description: stripEmoji(e.target.value) })}
               className="min-h-36 pb-6"
             />
             <span className="pointer-events-none absolute right-2.5 bottom-1.5 text-xs text-muted-foreground tabular-nums">
               {form.description.length}/{MAX_DESC}
             </span>
           </div>
-          {descEmoji && (
-            <FieldError id="draft-desc-error">描述里有 emoji，网页端发布不让用，发布前删掉</FieldError>
-          )}
         </Field>
 
         <Field

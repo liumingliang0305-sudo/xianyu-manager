@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 
 import pytest
 from fakes import POI_HOME, UNB, png
@@ -127,6 +128,46 @@ def test_create_update_and_list(service):
     # 新草稿沿用上一个选过的发货地
     assert service.create(UNB).address["poiId"] == "B0F"
     assert [d.id for d in service.list(UNB)][1] == draft.id
+
+
+def test_new_and_saved_drafts_remove_emoji(service):
+    draft = service.create(UNB, "🏡民宿✅\n16房30床，🏊‍♀️泳池")
+    assert draft.description == "民宿\n16房30床，泳池"
+    draft = fill(service, draft, description="👨‍👩‍👧‍👦家庭团建👍🏽\n🇨🇳价格200元")
+    assert draft.description == "家庭团建\n价格200元"
+    assert service.get(UNB, draft.id).description == draft.description
+
+
+def test_old_draft_is_cleaned_before_checks_and_publish(service, database, platform):
+    draft = ready(service)
+    database.execute("UPDATE drafts SET description = %s WHERE id = %s", ("灯✅\n包邮🚚", draft.id))
+    published = run(service.publish(UNB, draft.id))
+    assert published.description == "灯\n包邮"
+    assert platform.published[-1]["itemTextDTO"]["desc"] == "灯\n包邮"
+    checked = [
+        data for api, data in platform.calls if api == "mtop.taobao.idleitem.badwords.prepubcheck"
+    ]
+    assert checked and "✅" not in json.dumps(checked, ensure_ascii=False)
+
+
+def test_emoji_only_old_draft_fails_as_empty_before_platform_request(service, database, platform):
+    draft = ready(service)
+    database.execute("UPDATE drafts SET description = %s WHERE id = %s", ("🏡✅🏊‍♀️", draft.id))
+    calls = len(platform.calls)
+    with pytest.raises(ValueError, match="描述不能为空"):
+        run(service.publish(UNB, draft.id))
+    assert len(platform.calls) == calls
+
+
+def test_edit_and_relist_drafts_remove_emoji_from_imported_text(service, platform, items):
+    platform.items["1001"]["desc"] = "洗衣机✅\n全自动10公斤🚚"
+    draft = run(service.edit_item(UNB, "1001"))
+    assert draft.description == "洗衣机\n全自动10公斤"
+    assert draft.origin["itemTextDTO"]["desc"] == "洗衣机✅\n全自动10公斤🚚"
+    platform.items["1001"]["status"] = 1
+    run(items.sync(UNB))
+    draft = run(service.relist_item(UNB, "1001"))
+    assert draft.description == "洗衣机\n全自动10公斤"
 
 
 def test_images_add_reorder_remove(service, store):

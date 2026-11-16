@@ -95,13 +95,18 @@ install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
 
 ```bash
 deploy/deploy.sh            # 默认主机 huawei，也可以传别的 ssh 主机名
+deploy/deploy.sh huawei v0.1.0  # 部署已发布的 tag，也可以指定提交 SHA
 ```
 
 它会：
 
-1. 用 `git archive` 导出已提交的代码（没提交的改动不会上去），在本机打包前端（服务器上不用装 Node）；
-2. rsync 到服务器的 `/opt/xianyu-manager`（服务器上的 `.venv` 和 `data/` 不动）；
-3. 在服务器上 `uv sync --locked --no-dev`、`alembic upgrade head`、重启 `xym`，等接口能访问了才算完。
+1. 将指定 tag / 提交解析为固定的完整 SHA，用 `git archive` 导出，在本机打包前端（未提交的改动不会上去，服务器上不用装 Node）；
+2. 完整上传到服务器的临时目录，再取得部署锁，避免两个部署交叉覆盖；
+3. 暂停 `xym`，更新 `/opt/xianyu-manager`，保留 `.venv` 和 `data/`，执行 `uv sync --locked --no-dev` 和 `alembic upgrade head` 后启动；
+4. 确认服务正在运行、健康接口可访问且返回的进程版本等于目标 SHA，才报告成功；每次请求有超时，失败时输出服务状态和日志。
+
+可以从任意工作目录运行脚本。GitHub 发版后应先确认该提交的 CI 全部通过，再指定同一个 tag 部署。
+依赖安装或迁移失败时脚本会停止并报告错误，不会自动回退数据库；修复原因后重新部署同一版本。
 
 第一次装依赖从 PyPI 下载比较慢（十几分钟），之后 uv 有缓存，只下变了的包。
 

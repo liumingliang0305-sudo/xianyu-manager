@@ -12,6 +12,7 @@ from xianyu_core.publish import (
     choose,
     labels_from_cards,
     post_mode_from,
+    strip_emoji,
     submit_payload,
     unsupported_cards,
 )
@@ -188,6 +189,23 @@ def test_check_desc_length():
     check_desc("好" * 1500)
     with pytest.raises(ValueError, match="最多 1500"):
         check_desc("好" * 1501)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("🏡栖云庄园✅\n16房30床，5m×13m 泳池🏊‍♀️", "栖云庄园\n16房30床，5m×13m 泳池"),
+        ("👨‍👩‍👧‍👦家庭团建👍🏽，🇨🇳包邮", "家庭团建，包邮"),
+        ("1️⃣独立厨房\n2⃣温泉♨️", "独立厨房\n温泉"),
+        ("30℃，100㎡，¥200/池 → 价格不变，𠮷字保留", "30℃，100㎡，¥200/池 → 价格不变，𠮷字保留"),
+        ("#1 *2 2026-11-16，10公斤", "#1 *2 2026-11-16，10公斤"),
+        ("🧑🏿‍🚀🏳️‍🌈", ""),
+    ],
+)
+def test_strip_emoji_preserves_text_numbers_and_newlines(text, expected):
+    assert strip_emoji(text) == expected
+    if expected.strip():
+        check_desc(expected)
 
 
 @pytest.mark.parametrize(

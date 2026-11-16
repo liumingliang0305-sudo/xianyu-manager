@@ -63,10 +63,20 @@ POST_MODE_TEXT = {"free": "包邮", "distance": "按距离计费", "fixed": "一
 # 编辑已有商品时原来的邮费对不上上面四种（比如 App 里设的运费模板）：原样带回去
 KEEP_POST = "keep"
 
-# 网页端描述框不让输入 emoji。这里按常见的 emoji 码段粗判
+# 网页端描述框不让输入 emoji。与草稿编辑器使用同一组码段，连同键帽、变体、
+# 肤色、旗帜和组合符一起去除，保留普通数字、中文（包括扩展区）、标点和单位。
 _EMOJI = re.compile(
-    "[\U0001f000-\U0001faff\U00002600-\U000027bf\U00002b00-\U00002bff\U0000fe0f\U000020e3]"
+    "[#*0-9]\ufe0f?\u20e3|[\u00a9\u00ae\u203c\u2049\u2122\u2139"
+    "\u2194-\u2199\u21a9-\u21aa\u231a-\u231b\u2328\u23cf\u23e9-\u23f3\u23f8-\u23fa"
+    "\u24c2\u25aa-\u25ab\u25b6\u25c0\u25fb-\u25fe\u2600-\u27bf\u2934-\u2935"
+    "\u2b00-\u2bff\u3030\u303d\u3297\u3299\U0001f000-\U0001faff"
+    "\u200d\u20e3\ufe0e-\ufe0f\U000e0020-\U000e007f]"
 )
+
+
+def strip_emoji(text: str) -> str:
+    """去掉网页端发布不接受的 emoji，正文、换行和普通数字保持原样。"""
+    return _EMOJI.sub("", text)
 
 
 class PublishBlockedError(XianyuError):
