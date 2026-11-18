@@ -19,6 +19,7 @@
 - **第三方货源**：粘贴简篇等公开网页链接，保存文字和图片，可建草稿、带入 AI 对话
 - **AI 助手**：带上货源和同行商品和大模型聊文案、标题、定价
 - **模板管理**：保存常用的写作要求和文案模板，查看、编辑、复制、删除，按后台用户隔离
+- **问题反馈**：后台用户提交问题和建议，管理员处理，确认后一键推成 GitHub issue
 - **账号安全**：每个账号限流，碰到风控自动熔断 30 分钟，交给人工处理
 
 ## 技术栈
@@ -100,6 +101,7 @@ uv run xym serve                          # 接口和页面都在 8000 端口
 | `DATABASE_URL` | 数据库连接串，不设时连本机 docker 里的库 |
 | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`XYM_AGENT_MODEL` | AI 助手用的模型，默认配的是魔搭社区 |
 | `AMAP_KEY` | 高德 key，发布页按名字搜发货地 |
+| `XYM_GITHUB_TOKEN`、`XYM_GITHUB_REPO` | 问题反馈推成 GitHub issue 用的 token 和仓库 |
 
 详见[配置文档](docs/configuration.md)。
 

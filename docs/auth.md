@@ -20,7 +20,13 @@ uv run xym users list               # 每个用户名下的闲鱼账号
 uv run xym users passwd alice       # 重设密码，这个用户已经登录的地方都要重新登录
 uv run xym users disable alice      # 停用：登录不了，已经登录的地方马上失效，插件令牌也不认
 uv run xym users enable alice       # 恢复
+uv run xym users admin alice        # 设成管理员
+uv run xym users admin alice --off  # 取消管理员
 ```
+
+**管理员**只多两件事：看所有人提交的问题反馈、把反馈推成 GitHub issue（见[功能说明](features.md#问题反馈)）。
+闲鱼账号、商品这些数据照样只看得到自己名下的。第一个用户自动是管理员；已经有用户的库升级时，最早建的那个用户设成管理员。
+改了马上生效，不用重新登录。
 
 服务器上在自己电脑上用 `deploy/xym.sh users ...` 跑，见[部署](deployment.md#用户和闲鱼账号)。
 

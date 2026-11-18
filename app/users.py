@@ -47,6 +47,7 @@ class User:
     username: str
     token_version: int
     disabled: bool
+    is_admin: bool  # 管理员：看所有人的问题反馈、推到 GitHub
     created_at: float
     plugin_token_at: float | None  # 插件令牌生成的时间，没有是 None
 
@@ -91,16 +92,16 @@ class Users:
 
     # ---- 用户 ----
 
-    async def create(self, username: str, password: str) -> User:
+    async def create(self, username: str, password: str, *, is_admin: bool = False) -> User:
         name = normalize_username(username)
         check_password_rule(password)
         if self.find(name):
             raise ValueError(f"用户 {name} 已经有了")
         password_hash = await asyncio.to_thread(_hasher.hash, password)
         row = self._db.execute(
-            "INSERT INTO users (username, password_hash, created_at) VALUES (%s, %s, %s)"
-            " RETURNING *",
-            (name, password_hash, time.time()),
+            "INSERT INTO users (username, password_hash, is_admin, created_at)"
+            " VALUES (%s, %s, %s, %s) RETURNING *",
+            (name, password_hash, is_admin, time.time()),
         ).fetchone()
         return User.from_row(row)
 
@@ -156,6 +157,10 @@ class Users:
                 (disabled, user_id),
             )
             self._db.execute("DELETE FROM refresh_tokens WHERE user_id = %s", (user_id,))
+
+    def set_admin(self, user_id: int, is_admin: bool) -> None:
+        """设成、取消管理员。每个请求都重新查用户，马上生效，不用重新登录。"""
+        self._db.execute("UPDATE users SET is_admin = %s WHERE id = %s", (is_admin, user_id))
 
     # ---- 刷新令牌 ----
 

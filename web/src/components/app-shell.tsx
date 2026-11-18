@@ -9,6 +9,7 @@ import {
   LinkIcon,
   LogOutIcon,
   MessageSquareIcon,
+  MessageSquareWarningIcon,
   MoonIcon,
   PackageIcon,
   PlugIcon,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useState, type ComponentType } from "react"
-import { NavLink, Outlet, useMatch, useNavigate } from "react-router"
+import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router"
 import { toast } from "sonner"
 
 import { AccountAvatar, LoginDot } from "@/components/account-bits"
@@ -45,6 +46,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { PasswordDialog } from "@/features/auth/password-dialog"
 import { PluginTokenDialog } from "@/features/auth/plugin-token-dialog"
+import { FeedbackDialog } from "@/features/feedback/feedback-dialog"
 import { useAccount } from "@/hooks/use-account"
 import { useUser } from "@/hooks/use-auth"
 import { LOGIN_LABEL, accountName, loginHint, maskId } from "@/lib/account"
@@ -74,6 +76,7 @@ const SHARED_NAV: NavEntry[] = [
   { to: "/sources", label: "第三方货源", icon: LinkIcon },
   { to: "/agent", label: "AI 助手", icon: BotIcon },
   { to: "/templates", label: "模板管理", icon: FileTextIcon },
+  { to: "/feedback", label: "问题反馈", icon: MessageSquareWarningIcon },
 ]
 
 const NAV_ITEM =
@@ -231,10 +234,13 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
   )
 }
 
-/** 登录的用户：改密码、插件令牌、退出登录。宽屏放在侧栏底下，窄屏是顶栏右边一个图标。 */
+/** 登录的用户：改密码、插件令牌、反馈问题、退出登录。宽屏放在侧栏底下，窄屏是顶栏右边一个图标。 */
 function UserMenu({ compact = false }: { compact?: boolean }) {
-  const { username } = useUser()
-  const [dialog, setDialog] = useState<"password" | "plugin" | null>(null)
+  const { username, is_admin: isAdmin } = useUser()
+  const [dialog, setDialog] = useState<"password" | "plugin" | "feedback" | null>(null)
+  // 在哪个页面点的反馈，一起交上去；在问题反馈页上点的不用记
+  const [feedbackPage, setFeedbackPage] = useState("")
+  const { pathname } = useLocation()
   const close = () => setDialog(null)
   return (
     <>
@@ -257,7 +263,9 @@ function UserMenu({ compact = false }: { compact?: boolean }) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align={compact ? "end" : "start"} side={compact ? "bottom" : "top"} className="w-56">
           <DropdownMenuLabel>
-            <span className="block text-xs font-normal text-muted-foreground">已登录</span>
+            <span className="block text-xs font-normal text-muted-foreground">
+              {isAdmin ? "已登录 · 管理员" : "已登录"}
+            </span>
             <span className="block truncate">{username}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
@@ -269,6 +277,15 @@ function UserMenu({ compact = false }: { compact?: boolean }) {
             <PlugIcon />
             浏览器插件令牌
           </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setFeedbackPage(pathname === "/feedback" ? "" : pathname)
+              setDialog("feedback")
+            }}
+          >
+            <MessageSquareWarningIcon />
+            反馈问题…
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => void signOut()}>
             <LogOutIcon />
@@ -278,6 +295,7 @@ function UserMenu({ compact = false }: { compact?: boolean }) {
       </DropdownMenu>
       {dialog === "password" && <PasswordDialog onClose={close} />}
       {dialog === "plugin" && <PluginTokenDialog onClose={close} />}
+      {dialog === "feedback" && <FeedbackDialog page={feedbackPage} onClose={close} />}
     </>
   )
 }
@@ -348,14 +366,15 @@ function LoginBanner({ login, onLogin }: { login: LoginStatus; onLogin: () => vo
 
 function Content({ onLogin }: { onLogin: () => void }) {
   const { accounts, account, isLoading, error } = useAccount()
-  // 账号矩阵管的是所有账号、货源、AI 助手和模板是名下账号共用的：没有账号时也能进，
-  // 也不放当前账号的登录、熔断提示
+  // 账号矩阵管的是所有账号、货源、AI 助手和模板是名下账号共用的，问题反馈跟着后台用户走：
+  // 没有账号时也能进，也不放当前账号的登录、熔断提示
   const onAccounts = useMatch("/accounts")
   const onPdd = useMatch("/pdd")
   const onSources = useMatch("/sources")
   const onAgent = useMatch("/agent")
   const onTemplates = useMatch("/templates")
-  if (onAccounts || onPdd || onSources || onAgent || onTemplates) return <Outlet />
+  const onFeedback = useMatch("/feedback")
+  if (onAccounts || onPdd || onSources || onAgent || onTemplates || onFeedback) return <Outlet />
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">

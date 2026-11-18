@@ -2,10 +2,11 @@
 
 uv run xym serve [--port 8000]                  启动管理后台，只监听本机
 uv run xym users add <用户名>                    建管理后台的用户（提示输入密码）
-                                                第一个用户顺带接手已有的闲鱼账号
+                                                第一个用户是管理员，顺带接手已有的闲鱼账号
 uv run xym users list                           每个用户名下的闲鱼账号
 uv run xym users passwd <用户名>                 重设密码，这个用户已经登录的地方都要重新登录
 uv run xym users disable|enable <用户名>         停用 / 恢复
+uv run xym users admin <用户名> [--off]          设成管理员（看所有人的问题反馈、推到 GitHub）/ 取消
 
 部署在服务器上时用 deploy/xym.sh 在服务器上跑。
 数据库连接串取环境变量 DATABASE_URL（或 --db），没设时连本机 docker 里的（docker compose up -d）。
@@ -54,18 +55,20 @@ async def run_users(args: argparse.Namespace) -> int:
         if not rows:
             print("还没有用户，用 xym users add <用户名> 建一个")
             return 0
-        print(f"{'用户':<16} {'状态':<4}  闲鱼账号")
+        print(f"{'用户':<16} {'状态':<4}  {'角色':<4}  闲鱼账号")
         for user in rows:
             owned = ", ".join(sorted(users.account_ids(user.id))) or "-"
-            print(f"{user.username:<16} {'停用' if user.disabled else '正常':<4}  {owned}")
+            state = "停用" if user.disabled else "正常"
+            role = "管理员" if user.is_admin else "-"
+            print(f"{user.username:<16} {state:<4}  {role:<4}  {owned}")
         return 0
     if args.users_command == "add":
         name = normalize_username(args.username)
         if users.find(name):
             raise ValueError(f"用户 {name} 已经有了")
         first = not users.list()
-        user = await users.create(name, _read_password())
-        print(f"已建用户 {user.username}")
+        user = await users.create(name, _read_password(), is_admin=first)
+        print(f"已建用户 {user.username}" + ("（管理员）" if first else ""))
         if first:
             # 有用户以前登录的闲鱼账号都没有归属，谁都看不到，交给第一个用户
             ownerless = [a for a in Accounts(args.accounts).ids() if users.owner(a) is None]
@@ -81,6 +84,9 @@ async def run_users(args: argparse.Namespace) -> int:
     if args.users_command == "passwd":
         await users.set_password(user.id, _read_password("新密码"))
         print(f"{user.username} 的密码改好了，已经登录的地方要重新登录")
+    elif args.users_command == "admin":
+        users.set_admin(user.id, not args.off)
+        print(f"已取消 {user.username} 的管理员" if args.off else f"{user.username} 现在是管理员")
     elif args.users_command == "disable":
         users.set_disabled(user.id, True)
         print(f"已停用 {user.username}：登录不了，已经登录的地方马上失效，插件令牌也不认了")
@@ -91,7 +97,7 @@ async def run_users(args: argparse.Namespace) -> int:
 
 
 def serve(args: argparse.Namespace) -> int:
-    from app import agent, places
+    from app import agent, feedback, places
     from app.api import WEB_DIST, create_app
     from app.keepalive import LOGIN_CHECK_INTERVAL
 
@@ -103,6 +109,7 @@ def serve(args: argparse.Namespace) -> int:
         )
     if not (WEB_DIST / "index.html").is_file():
         print("没有找到 web/dist，只启动接口。前端开发用 pnpm -C web dev", file=sys.stderr)
+    github_token, github_repo = feedback.load_github()
     conn = db.connect(args.db)  # 连不上、表结构不是最新的，启动前就报出来
     if not Users(conn).list():
         print("还没有用户，页面上登录不了，先运行 xym users add <用户名>", file=sys.stderr)
@@ -116,6 +123,8 @@ def serve(args: argparse.Namespace) -> int:
         auto_sync=True,
         amap_key=places.load_key(),
         agent_model=agent.model_name(),
+        github_token=github_token,
+        github_repo=github_repo,
     )
     run_server(app, args.host, args.port)
     return 0
@@ -156,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
         ("enable", "恢复停用的用户"),
     ):
         users.add_parser(name, help=help_text).add_argument("username")
+    admin = users.add_parser("admin", help="设成管理员：看所有人的问题反馈、推到 GitHub")
+    admin.add_argument("username")
+    admin.add_argument("--off", action="store_true", help="取消管理员")
 
     p = sub.add_parser("serve", help="启动管理后台（HTTP 接口 + 打包好的前端）")
     p.add_argument("--host", default="127.0.0.1", help="明文 http，不要直接监听公网地址")

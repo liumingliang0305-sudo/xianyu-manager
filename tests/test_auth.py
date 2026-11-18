@@ -277,6 +277,14 @@ def test_cli_first_user_takes_existing_accounts(accounts, database_url, monkeypa
 
     assert cli.main([*base, "users", "disable", "bob"]) == 0
     assert users.find("bob").disabled
+
+    # 第一个用户是管理员，后来的不是；用 admin 设、--off 取消
+    assert alice.is_admin and not bob.is_admin
+    assert cli.main([*base, "users", "admin", "bob"]) == 0
+    assert users.find("bob").is_admin
+    assert cli.main([*base, "users", "admin", "alice", "--off"]) == 0
+    assert not users.find("alice").is_admin
+    assert cli.main([*base, "users", "admin", "nobody"]) == 1
     conn.close()
 
 

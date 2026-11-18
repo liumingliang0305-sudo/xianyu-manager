@@ -40,6 +40,8 @@ users = Table(
     # 改密码、停用时加一，之前签发的访问令牌跟着作废
     Column("token_version", Integer, nullable=False, server_default=text("0")),
     Column("disabled", Boolean, nullable=False, server_default=text("false")),
+    # 管理员：看所有人的问题反馈、推到 GitHub。第一个用户是，别的用 xym users admin 设
+    Column("is_admin", Boolean, nullable=False, server_default=text("false")),
     # 登录同步插件用的令牌，只存 SHA-256；没生成过是 NULL
     Column("plugin_token_hash", Text),
     Column("plugin_token_at", Double),
@@ -361,4 +363,30 @@ prompt_templates = Table(
         "char_length(content) BETWEEN 1 AND 20000", name="prompt_templates_content_length"
     ),
     Index("prompt_templates_user", "user_id", "updated_at", "id"),
+)
+
+# 问题反馈（app/feedback.py）：后台用户提交，管理员处理、推成 GitHub issue。
+feedback = Table(
+    "feedback",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("kind", Text, nullable=False),  # bug 问题、idea 建议、other 其他
+    Column("title", Text, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("page", Text, nullable=False, server_default=""),  # 在哪个页面提交的（前端路由）
+    Column("user_agent", Text, nullable=False, server_default=""),
+    Column("revision", Text, nullable=False, server_default=""),  # 提交时后台的版本
+    Column("status", Text, nullable=False, server_default="open"),  # open 待处理、done 已处理
+    # 推到 GitHub 以后的 issue；没推过是 NULL
+    Column("issue_number", Integer),
+    Column("issue_url", Text),
+    Column("pushed_at", Double),
+    Column("created_at", Double, nullable=False),
+    Column("updated_at", Double, nullable=False),
+    CheckConstraint("kind IN ('bug', 'idea', 'other')", name="feedback_kind"),
+    CheckConstraint("status IN ('open', 'done')", name="feedback_status"),
+    CheckConstraint("char_length(title) BETWEEN 1 AND 100", name="feedback_title_length"),
+    CheckConstraint("char_length(content) BETWEEN 1 AND 5000", name="feedback_content_length"),
+    Index("feedback_user", "user_id", "id"),
 )

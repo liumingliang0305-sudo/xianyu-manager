@@ -5,6 +5,8 @@
 export interface AuthUser {
   id: number
   username: string
+  /** 管理员：看所有人的问题反馈、推到 GitHub */
+  is_admin: boolean
 }
 
 /** 登录成功、刷新、改密码都返回这个 */
@@ -57,7 +59,11 @@ export function acceptSession(session: AuthSession) {
   token = session.access_token
   expiresAt = Date.now() + session.expires_in * 1000
   const current = state.status === "signed-in" ? state.user : null
-  if (current?.id !== session.user.id || current.username !== session.user.username) {
+  if (
+    current?.id !== session.user.id ||
+    current.username !== session.user.username ||
+    current.is_admin !== session.user.is_admin
+  ) {
     setState({ status: "signed-in", user: session.user })
   }
 }

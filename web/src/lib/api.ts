@@ -631,6 +631,58 @@ export interface PromptTemplateInput {
   content: string
 }
 
+/** 问题反馈的种类：bug 问题、idea 建议、other 其他 */
+export type FeedbackKind = "bug" | "idea" | "other"
+/** open 待处理，done 已处理（管理员标记） */
+export type FeedbackStatus = "open" | "done"
+
+export interface Feedback {
+  id: number
+  /** 提交人 */
+  username: string
+  kind: FeedbackKind
+  title: string
+  content: string
+  /** 在哪个页面提交的（前端路由），没有是空串 */
+  page: string
+  user_agent: string
+  /** 提交时后台的版本，没有是空串 */
+  revision: string
+  status: FeedbackStatus
+  /** 推到 GitHub 以后的 issue，没推过是 null */
+  issue_number: number | null
+  issue_url: string | null
+  pushed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface FeedbackInput {
+  kind: FeedbackKind
+  title: string
+  content: string
+  page: string
+}
+
+/** 管理员看到的 GitHub 配置：推到哪个仓库，没配好时缺什么 */
+export interface GitHubInfo {
+  repo: string | null
+  missing: string | null
+}
+
+export interface FeedbackList {
+  feedback: Feedback[]
+  /** 只有管理员看所有人的（scope=all）时有 */
+  github?: GitHubInfo
+}
+
+/** 推到 GitHub 的默认标题、正文、标签 */
+export interface IssueDraft extends GitHubInfo {
+  title: string
+  body: string
+  labels: string[]
+}
+
 /** AI 助手对话带的拼多多货源（概况） */
 export interface AgentGoods {
   goods_id: string
@@ -1202,6 +1254,32 @@ export const api = {
       `/accounts/${encodeURIComponent(account)}/sources/${encodeURIComponent(sourceId)}/draft`,
       { method: "POST" },
     ),
+
+  /** 问题反馈：mine 自己提交的；all 所有人的，只有管理员能看，新提交的在前 */
+  feedbackList: (scope: "mine" | "all") => request<FeedbackList>(`/feedback?scope=${scope}`),
+
+  createFeedback: (body: FeedbackInput) =>
+    request<Feedback>("/feedback", { method: "POST", body: JSON.stringify(body) }),
+
+  deleteFeedback: (feedbackId: number) =>
+    request<{ ok: true }>(`/feedback/${feedbackId}`, { method: "DELETE" }),
+
+  /** 管理员：标记处理完、重新打开 */
+  setFeedbackStatus: (feedbackId: number, status: FeedbackStatus) =>
+    request<Feedback>(`/feedback/${feedbackId}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    }),
+
+  /** 管理员：推到 GitHub 的默认标题和正文 */
+  feedbackIssueDraft: (feedbackId: number) => request<IssueDraft>(`/feedback/${feedbackId}/issue`),
+
+  /** 管理员：推成 GitHub issue，一条只推一次 */
+  pushFeedbackIssue: (feedbackId: number, body: { title: string; body: string }) =>
+    request<Feedback>(`/feedback/${feedbackId}/issue`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   promptTemplates: () =>
     request<{ templates: PromptTemplateSummary[] }>("/prompt-templates").then((r) => r.templates),

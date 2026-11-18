@@ -9,6 +9,8 @@
 | `OPENAI_BASE_URL` | OpenAI 兼容接口的地址 | 直连 OpenAI |
 | `XYM_AGENT_MODEL` | AI 助手用的模型 | `openai:gpt-6.1-sol` |
 | `AMAP_KEY` | 高德 key，发布页按名字搜发货地 | 读 `data/amap.key`，也没有就只能从常用地址里选 |
+| `XYM_GITHUB_TOKEN` | 问题反馈推成 GitHub issue 用的 token | 反馈能提交、处理，推不了 |
+| `XYM_GITHUB_REPO` | 推到哪个仓库，写成 `owner/name` | 同上 |
 | `TEST_DATABASE_URL` | 测试用的库（只有 `pytest` 用） | `postgresql://xianyu:xianyu@localhost:5432/xianyu_test` |
 
 写在哪：
@@ -58,6 +60,25 @@ XYM_AGENT_MODEL=deepseek-ai/DeepSeek-V4.1-Flash-1017
 - 带前缀的是 PydanticAI 的 `provider:model` 写法（比如 `openai:gpt-6.1-terra`）。换别家的（Claude 这些）要先装对应的
   pydantic-ai-slim 扩展，key 用那一家自己的环境变量；
 - 国内服务器能直接连魔搭，直连 OpenAI 不通。
+
+## 问题反馈推到 GitHub
+
+"问题反馈"页上管理员点「推到 GitHub」，后台用 GitHub 的接口在一个仓库里建 issue。要一个 token：
+
+1. GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token；
+2. Repository access 选 **Only select repositories**，只勾要推的那个仓库；
+3. Permissions → Repository permissions → **Issues** 选 **Read and write**，别的都不用开；
+4. 有效期按自己习惯选，过期了推送会报"token 不对或者过期了"，换一个新的就行。
+
+```
+XYM_GITHUB_TOKEN=github_pat_...
+XYM_GITHUB_REPO=liumingliang0305-sudo/xianyu-manager
+```
+
+- 本机写在 `.env`，服务器写在 `/etc/xym.env`，改完重启（`systemctl restart xym`）；
+- token 只在后台用，不发给浏览器；
+- **仓库是公开的时候 issue 谁都看得到**。默认正文不带提交人，推送前弹窗里能改标题和正文，有手机号、订单号、闲鱼账号这类信息先删掉；
+- 服务器要能连上 `api.github.com`。连不上时推送会报"连不上 GitHub"，反馈本身不受影响，可以过会儿再推。
 
 ## 本地数据
 

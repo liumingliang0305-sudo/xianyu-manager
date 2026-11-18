@@ -44,6 +44,10 @@
   POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
 - 提示词模板（app/prompt_templates.py）：/api/prompt-templates 增删改查，按用户保存。
+- 问题反馈（app/feedback.py）：POST /api/feedback 谁都能提交，GET /api/feedback 看自己提交的；
+  管理员（users.is_admin）?scope=all 看所有人的，PUT .../{id}/status 标记处理，
+  POST .../{id}/issue 推成 GitHub issue。不是管理员 403 forbidden，没配 GitHub 503
+  github_unavailable。
 """
 
 from __future__ import annotations
@@ -87,6 +91,17 @@ from app.auth import (
 )
 from app.autosync import INTERVAL_CHOICES, ITEMS, JOBS, MANUAL, AutoSync
 from app.drafts import Draft, DraftImage, DraftNotFoundError, DraftService, address_option
+from app.feedback import (
+    AlreadyPushedError,
+    Feedback,
+    FeedbackNotFoundError,
+    FeedbackService,
+    GitHubError,
+    GitHubIssues,
+    GitHubUnavailableError,
+    NotAdminError,
+    issue_draft,
+)
 from app.items import ItemService, PriceGuardError
 from app.login import (
     LoginNotFoundError,
@@ -170,6 +185,11 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (PddGoodsNotFoundError, 404, "pdd_goods_not_found"),
     (SourceNotFoundError, 404, "source_not_found"),
     (PromptTemplateNotFoundError, 404, "prompt_template_not_found"),
+    (FeedbackNotFoundError, 404, "feedback_not_found"),
+    (NotAdminError, 403, "forbidden"),
+    (AlreadyPushedError, 409, "already_pushed"),
+    (GitHubUnavailableError, 503, "github_unavailable"),
+    (GitHubError, 502, "github_error"),
     (AgentChatNotFoundError, 404, "agent_chat_not_found"),
     (AgentUnavailableError, 503, "agent_unavailable"),
     (StashNotFoundError, 404, "stash_not_found"),
@@ -311,6 +331,23 @@ class PromptTemplateIn(BaseModel):
     content: str
 
 
+class FeedbackIn(BaseModel):
+    kind: str  # bug 问题、idea 建议、other 其他
+    title: str
+    content: str
+    page: str = ""  # 在哪个页面提交的（前端路由）
+
+
+class FeedbackStatusIn(BaseModel):
+    status: str  # open 待处理、done 已处理
+
+
+class IssueIn(BaseModel):
+    # 推到 GitHub 的标题和正文，不给就用默认的（GET .../issue 返回的那份）
+    title: str | None = None
+    body: str | None = None
+
+
 class DraftIn(BaseModel):
     description: str = ""
     price: str | None = None  # 元，空是还没填
@@ -346,6 +383,8 @@ def create_app(
     auto_sync: bool = False,
     auto_sync_options: dict[str, Any] | None = None,
     agent_model: Any = None,
+    github_token: str | None = None,
+    github_repo: str | None = None,
 ) -> FastAPI:
     """`database_url`：数据库连接串，不给时用 db.default_url()（环境变量 DATABASE_URL）。
     `guard`：限流和熔断，不给时用 data/guard.json 里的熔断状态。
@@ -363,6 +402,9 @@ def create_app(
 
     `agent_model`：AI 助手用的模型，PydanticAI 的模型名（"openai:gpt-6.1-sol"）或者
     Model 对象（测试换 FunctionModel）；None 时对话能看、发不了消息（见 app/agent.py）。
+
+    `github_token`、`github_repo`：问题反馈推成 GitHub issue 用的 token 和仓库（owner/name），
+    没有时反馈照样能提交、处理，只是推不了（见 app/feedback.py）。
     """
     accounts = Accounts(accounts_dir, transport=transport, guard=guard or make_guard())
     # 启动时固定版本，不能每次读磁盘：部署复制了新代码但旧进程仍在时，健康检查要能区分。
@@ -398,6 +440,9 @@ def create_app(
         app.state.sources = SourceService(conn, images, transport=transport)
         app.state.stash = StashService(conn)
         app.state.prompt_templates = PromptTemplateService(conn)
+        app.state.feedback = FeedbackService(
+            conn, GitHubIssues(github_token, github_repo, transport=transport), revision=revision
+        )
         app.state.agent = AgentService(
             conn, app.state.pdd, app.state.stash, agent_model, sources=app.state.sources
         )
@@ -491,6 +536,18 @@ def create_app(
     def prompt_templates(request: Request) -> PromptTemplateService:
         return request.app.state.prompt_templates
 
+    def feedback(request: Request) -> FeedbackService:
+        return request.app.state.feedback
+
+    def require_admin(request: Request) -> None:
+        if not request.state.user.is_admin:
+            raise NotAdminError("只有管理员能做这个")
+
+    def feedback_viewer(request: Request) -> int | None:
+        """管理员看得到所有人的反馈（None），别人只看得到自己的。"""
+        user: User = request.state.user
+        return None if user.is_admin else user.id
+
     def hub(request: Request) -> MessageHub:
         return request.app.state.messages
 
@@ -577,7 +634,7 @@ def create_app(
         return {
             "access_token": tokens.issue(user),
             "expires_in": tokens.ttl,
-            "user": {"id": user.id, "username": user.username},
+            "user": {"id": user.id, "username": user.username, "is_admin": user.is_admin},
         }
 
     async def account_info(
@@ -1073,6 +1130,63 @@ def create_app(
     async def delete_prompt_template(request: Request, template_id: int) -> dict[str, Any]:
         prompt_templates(request).delete(request.state.user.id, template_id)
         return {"ok": True}
+
+    @authed.get("/api/feedback")
+    async def list_feedback(request: Request, scope: str = "mine") -> dict[str, Any]:
+        """scope=mine 自己提交的；scope=all 所有人的，只有管理员能看，带上 GitHub 配好了没有。
+        新提交的在前。"""
+        service = feedback(request)
+        if scope == "all":
+            require_admin(request)
+            return {
+                "feedback": [_feedback(f) for f in service.list(None)],
+                "github": {"repo": service.github.repo, "missing": service.github.missing},
+            }
+        return {"feedback": [_feedback(f) for f in service.list(request.state.user.id)]}
+
+    @authed.post("/api/feedback")
+    async def create_feedback(request: Request, body: FeedbackIn) -> dict[str, Any]:
+        """提交反馈。顺带记下浏览器和后台的版本，排查问题用。"""
+        created = feedback(request).create(
+            request.state.user.id,
+            **body.model_dump(),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+        return _feedback(created)
+
+    @authed.get("/api/feedback/{feedback_id}")
+    async def feedback_detail(request: Request, feedback_id: int) -> dict[str, Any]:
+        return _feedback(feedback(request).get(feedback_id, feedback_viewer(request)))
+
+    @authed.delete("/api/feedback/{feedback_id}")
+    async def delete_feedback(request: Request, feedback_id: int) -> dict[str, Any]:
+        """删掉反馈：自己提交的，管理员谁的都能删。推到 GitHub 的 issue 不跟着删。"""
+        feedback(request).delete(feedback_id, feedback_viewer(request))
+        return {"ok": True}
+
+    @authed.put("/api/feedback/{feedback_id}/status")
+    async def set_feedback_status(
+        request: Request, feedback_id: int, body: FeedbackStatusIn
+    ) -> dict[str, Any]:
+        require_admin(request)
+        return _feedback(feedback(request).set_status(feedback_id, body.status))
+
+    @authed.get("/api/feedback/{feedback_id}/issue")
+    async def feedback_issue_draft(request: Request, feedback_id: int) -> dict[str, Any]:
+        """推到 GitHub 的默认标题、正文、标签，和推到哪个仓库、没配好时缺什么。"""
+        require_admin(request)
+        service = feedback(request)
+        draft = issue_draft(service.get(feedback_id))
+        return {**asdict(draft), "repo": service.github.repo, "missing": service.github.missing}
+
+    @authed.post("/api/feedback/{feedback_id}/issue")
+    async def push_feedback_issue(
+        request: Request, feedback_id: int, body: IssueIn
+    ) -> dict[str, Any]:
+        """推成 GitHub issue，一条只推一次（推过的 409 already_pushed）。"""
+        require_admin(request)
+        pushed = await feedback(request).push(feedback_id, title=body.title, body=body.body)
+        return _feedback(pushed)
 
     @authed.get("/api/agent/chats")
     async def list_agent_chats(request: Request) -> dict[str, Any]:
@@ -1581,6 +1695,12 @@ def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
 
 def _stashed(item: StashedItem) -> dict[str, Any]:
     return {**asdict(item), "url": item.url}
+
+
+def _feedback(feedback: Feedback) -> dict[str, Any]:
+    body = asdict(feedback)
+    del body["user_id"]
+    return body
 
 
 def _source(source: Source, *, detail: bool = False) -> dict[str, Any]:

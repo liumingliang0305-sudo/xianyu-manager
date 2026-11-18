@@ -43,7 +43,7 @@ install -m 600 /dev/null /etc/xym.env && vi /etc/xym.env
 cp deploy/xym.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable xym
 ```
 
-`/etc/xym.env` 里还可以写 AI 助手的模型、高德 key，见[配置](configuration.md)。
+`/etc/xym.env` 里还可以写 AI 助手的模型、高德 key、问题反馈推到 GitHub 用的 token，见[配置](configuration.md)。
 
 `xym` 服务以不能登录的 `xym` 用户运行，只监听本机 8000，排在 `pg-tunnel` 后面启动，连不上数据库就 5 秒后重试；
 除了 `data/` 别的目录都只读。装好以后在自己电脑上跑一次[发版](#发版)。
@@ -129,7 +129,7 @@ CSP 等安全响应头；接口文档页不开；请求体最大 1MB。安全组
 服务器上的用户和闲鱼账号都和本机分开。
 
 - **用户**在服务器上建。在自己电脑上用 `deploy/xym.sh` 跑服务器上的 `xym` 命令（SSH 过去、带上 `/etc/xym.env`、以 `xym` 用户运行，
-  密码在本机终端里输）。第一个用户会接手服务器上以前扫码登录的闲鱼账号：
+  密码在本机终端里输）。第一个用户是管理员，会接手服务器上以前扫码登录的闲鱼账号：
 
   ```bash
   deploy/xym.sh users add alice
