@@ -1,20 +1,23 @@
-"""问题反馈（app/feedback.py）：提交、按用户隔离、管理员处理、推成 GitHub issue。"""
+"""问题反馈（app/feedback.py）：提交、截图、按用户隔离、管理员处理、推成 GitHub issue。"""
 
+import io
 import json
 
 import httpx
 import pytest
 from fakes import PASSWORD, add_user, sign_in
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import db
 from app.api import create_app
-from app.feedback import MAX_CONTENT, MAX_TITLE, load_github
+from app.feedback import MAX_CONTENT, MAX_IMAGES, MAX_TITLE, load_github
 from app.users import Users
 from xianyu_core.guard import Guard
 
 URL = "/api/feedback"
 REPO = "owner/xianyu-manager"
+REPO_ID = 1437
 BODY = {
     "kind": "bug",
     "title": "订单页同步按钮没反应",
@@ -24,17 +27,37 @@ BODY = {
 
 
 class FakeGitHub:
-    """假的 GitHub 接口：记下建 issue 的请求，按 status 回。"""
+    """假的 GitHub 接口：查仓库 id、传图片、建 issue，记下请求，按 status 回。"""
 
     def __init__(self):
         self.requests: list[httpx.Request] = []
-        self.status = 201
+        self.status = 201  # 建 issue
+        self.upload_status = 201  # 传图片
         self.number = 41
+        self.assets = 0
+
+    @property
+    def issues(self) -> list[httpx.Request]:
+        return [r for r in self.requests if r.url.path.endswith("/issues")]
+
+    @property
+    def uploads(self) -> list[httpx.Request]:
+        return [r for r in self.requests if r.url.host == "uploads.github.com"]
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.url.host == "uploads.github.com":
+            assert request.url.path == "/user-attachments/assets"
+            if self.upload_status != 201:
+                return httpx.Response(self.upload_status, json={"message": "Not Found"})
+            self.assets += 1
+            return httpx.Response(
+                201, json={"url": f"https://github.com/user-attachments/assets/{self.assets}"}
+            )
         if request.url.host != "api.github.com":
             pytest.fail(f"问题反馈不该请求别的地方：{request.url}")
-        self.requests.append(request)
+        if request.method == "GET" and request.url.path == f"/repos/{REPO}":
+            return httpx.Response(200, json={"id": REPO_ID, "full_name": REPO})
         if self.status != 201:
             return httpx.Response(self.status, json={"message": "Bad credentials"})
         self.number += 1
@@ -45,6 +68,18 @@ class FakeGitHub:
                 "html_url": f"https://github.com/{REPO}/issues/{self.number}",
             },
         )
+
+
+def png(color: str, size: tuple[int, int] = (8, 6)) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", size, color).save(out, "PNG")
+    return out.getvalue()
+
+
+def upload(client, color: str) -> str:
+    resp = client.post(f"{URL}/images", content=png(color), headers={"content-type": "image/png"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["sha"]
 
 
 @pytest.fixture
@@ -298,3 +333,139 @@ def test_load_github(monkeypatch):
     monkeypatch.setenv("XYM_GITHUB_TOKEN", " ghp_x \n")
     monkeypatch.setenv("XYM_GITHUB_REPO", REPO)
     assert load_github() == ("ghp_x", REPO)
+
+
+def test_screenshots_upload_and_view(make_client, tmp_path):
+    alice = make_client("alice")
+    bob = make_client("bob")
+    admin = make_client("boss", admin=True)
+    resp = alice.post(f"{URL}/images", content=png("red", (40, 30)))
+    assert resp.status_code == 200, resp.text
+    stored = resp.json()
+    assert (stored["width"], stored["height"]) == (40, 30)
+    red, blue = stored["sha"], upload(alice, "blue")
+    # 存成 JPEG，文件名是哈希
+    assert (tmp_path / "images" / f"{red}.jpg").exists()
+
+    created = alice.post(URL, json={**BODY, "images": [red, blue, red]}).json()
+    assert created["images"] == [red, blue]  # 去重，顺序不变
+    assert alice.get(URL).json()["feedback"][0]["images"] == [red, blue]
+    assert alice.post(URL, json=BODY).json()["images"] == []
+
+    for client in [alice, admin]:
+        resp = client.get(f"{URL}/{created['id']}/images/{blue}")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/jpeg"
+        assert resp.content.startswith(b"\xff\xd8")
+    # 别人的反馈里的截图看不到；反馈里没有的图也不给，哪怕文件在
+    other = upload(alice, "green")
+    for resp in [
+        bob.get(f"{URL}/{created['id']}/images/{blue}"),
+        alice.get(f"{URL}/{created['id']}/images/{other}"),
+    ]:
+        assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("images", "message"),
+    [
+        (["0" * 64], "没传上"),
+        (["../../etc/passwd"], "图片编号"),
+    ],
+)
+def test_rejects_unknown_screenshots(make_client, images, message):
+    client = make_client()
+    resp = client.post(URL, json={**BODY, "images": images})
+    assert resp.status_code == 400
+    assert message in resp.json()["message"]
+    assert client.get(URL).json() == {"feedback": []}
+
+
+def test_rejects_bad_screenshot_files(make_client):
+    client = make_client()
+    resp = client.post(f"{URL}/images", content=b"not an image")
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "invalid"
+    shas = [upload(client, f"#{i * 30:02x}{255 - i * 30:02x}80") for i in range(MAX_IMAGES + 1)]
+    assert len(set(shas)) == MAX_IMAGES + 1
+    resp = client.post(URL, json={**BODY, "images": shas})
+    assert resp.status_code == 400
+    assert f"最多 {MAX_IMAGES} 张" in resp.json()["message"]
+    assert client.post(URL, json={**BODY, "images": shas[:MAX_IMAGES]}).status_code == 200
+
+
+def test_push_with_chosen_screenshots(make_client, github):
+    alice = make_client("alice")
+    admin = make_client("boss", admin=True)
+    shas = [upload(alice, color) for color in ["red", "green", "blue"]]
+    created = alice.post(URL, json={**BODY, "images": shas}).json()
+    issue_url = f"{URL}/{created['id']}/issue"
+
+    # 不在这条反馈里的图推不了
+    resp = admin.post(issue_url, json={"images": [upload(admin, "white")]})
+    assert resp.status_code == 400
+    assert not github.requests
+
+    # 勾了第 3 张和第 1 张：按反馈里的顺序传，编号和页面上的对得上
+    resp = admin.post(issue_url, json={"body": "正文", "images": [shas[2], shas[0]]})
+    assert resp.status_code == 200, resp.text
+    assert [r.url.params["name"] for r in github.uploads] == [
+        f"feedback-{created['id']}-1.jpg",
+        f"feedback-{created['id']}-3.jpg",
+    ]
+    first = github.uploads[0]
+    assert first.method == "POST"
+    assert first.url.params["content_type"] == "image/jpeg"
+    assert first.url.params["repository_id"] == str(REPO_ID)
+    assert first.headers["content-type"] == "application/octet-stream"
+    assert first.headers["authorization"] == "Bearer ghp_test"
+    assert first.content.startswith(b"\xff\xd8")
+    (issue,) = github.issues
+    assert json.loads(issue.content)["body"] == (
+        "正文\n\n"
+        "![截图 1](https://github.com/user-attachments/assets/1)\n\n"
+        "![截图 3](https://github.com/user-attachments/assets/2)"
+    )
+    # 图片传完才建 issue
+    assert github.requests.index(issue) == len(github.requests) - 1
+
+
+def test_push_takes_all_screenshots_by_default(make_client, github):
+    admin = make_client("boss", admin=True)
+    shas = [upload(admin, color) for color in ["red", "green"]]
+    first = admin.post(URL, json={**BODY, "images": shas}).json()
+    second = admin.post(URL, json={**BODY, "images": shas[:1]}).json()
+    assert admin.post(f"{URL}/{first['id']}/issue", json={}).status_code == 200
+    body = json.loads(github.issues[0].content)["body"]
+    assert body.endswith(
+        "![截图 1](https://github.com/user-attachments/assets/1)\n\n"
+        "![截图 2](https://github.com/user-attachments/assets/2)"
+    )
+    assert body.startswith(BODY["content"])
+    # 一张都不勾就只推文字；仓库 id 只查一次
+    assert admin.post(f"{URL}/{second['id']}/issue", json={"images": []}).status_code == 200
+    assert len(github.uploads) == 2
+    assert "user-attachments" not in json.loads(github.issues[1].content)["body"]
+    assert sum(r.url.path == f"/repos/{REPO}" for r in github.requests) == 1
+
+
+def test_screenshot_upload_failure_creates_no_issue(make_client, github):
+    admin = make_client("boss", admin=True)
+    created = admin.post(URL, json={**BODY, "images": [upload(admin, "red")]}).json()
+    github.upload_status = 404
+    resp = admin.post(f"{URL}/{created['id']}/issue", json={})
+    assert resp.status_code == 502
+    assert resp.json()["code"] == "github_error"
+    assert "第 1 张截图" in resp.json()["message"] and "写权限" in resp.json()["message"]
+    assert not github.issues
+    assert admin.get(f"{URL}/{created['id']}").json()["issue_number"] is None
+
+
+def test_delete_drops_screenshots_nobody_uses(make_client, tmp_path):
+    client = make_client()
+    shared, own = upload(client, "red"), upload(client, "blue")
+    first = client.post(URL, json={**BODY, "images": [shared, own]}).json()
+    client.post(URL, json={**BODY, "images": [shared]})
+    assert client.delete(f"{URL}/{first['id']}").json() == {"ok": True}
+    assert (tmp_path / "images" / f"{shared}.jpg").exists()  # 另一条还在用
+    assert not (tmp_path / "images" / f"{own}.jpg").exists()

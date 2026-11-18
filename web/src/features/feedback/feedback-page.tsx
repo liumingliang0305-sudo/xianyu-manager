@@ -3,6 +3,7 @@ import {
   EllipsisIcon,
   ExternalLinkIcon,
   EyeIcon,
+  ImageIcon,
   Loader2Icon,
   PlusIcon,
   RotateCcwIcon,
@@ -189,8 +190,20 @@ export function FeedbackPage() {
                   onClick={() => open(feedback.id)}
                   className="group grid w-full gap-1 rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
-                  <span className="line-clamp-1 font-medium break-all group-hover:underline">
-                    {feedback.title}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="line-clamp-1 font-medium break-all group-hover:underline">
+                      {feedback.title}
+                    </span>
+                    {feedback.images.length > 0 && (
+                      <span
+                        title={`${feedback.images.length} 张截图`}
+                        className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums"
+                      >
+                        <ImageIcon className="size-3.5" aria-hidden />
+                        {feedback.images.length}
+                        <span className="sr-only">张截图</span>
+                      </span>
+                    )}
                   </span>
                   <span className="line-clamp-1 text-[13px] leading-5 break-all text-muted-foreground">
                     {feedback.content}

@@ -649,6 +649,8 @@ export interface Feedback {
   /** 提交时后台的版本，没有是空串 */
   revision: string
   status: FeedbackStatus
+  /** 截图的 sha，按添加的顺序；用 feedbackImage 取 */
+  images: string[]
   /** 推到 GitHub 以后的 issue，没推过是 null */
   issue_number: number | null
   issue_url: string | null
@@ -662,6 +664,22 @@ export interface FeedbackInput {
   title: string
   content: string
   page: string
+  /** 先用 uploadFeedbackImage 传上去的截图 */
+  images: string[]
+}
+
+/** 传上去的一张截图（后台转成了 JPEG） */
+export interface StoredImage {
+  sha: string
+  width: number
+  height: number
+}
+
+/** 推成 GitHub issue：标题、正文，和一起推的截图（接在正文最后） */
+export interface IssueInput {
+  title: string
+  body: string
+  images: string[]
 }
 
 /** 管理员看到的 GitHub 配置：推到哪个仓库，没配好时缺什么 */
@@ -829,6 +847,21 @@ export async function sourceImage(sourceId: string, sha: string): Promise<Blob> 
   if (!resp.ok) {
     const body = await resp.json().catch(() => null)
     throw new ApiError(resp.status, body?.code ?? "http_error", body?.message ?? "取图片失败")
+  }
+  return resp.blob()
+}
+
+/** 问题反馈里的一张截图，要带访问令牌取，页面上用 blob: 地址显示 */
+export async function feedbackImage(feedbackId: number, sha: string): Promise<Blob> {
+  let resp: Response
+  try {
+    resp = await authorizedFetch(`/api/feedback/${feedbackId}/images/${sha}`)
+  } catch {
+    throw new ApiError(0, "network", "连不上后台，截图读取失败")
+  }
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new ApiError(resp.status, body?.code ?? "http_error", body?.message ?? "取截图失败")
   }
   return resp.blob()
 }
@@ -1261,6 +1294,14 @@ export const api = {
   createFeedback: (body: FeedbackInput) =>
     request<Feedback>("/feedback", { method: "POST", body: JSON.stringify(body) }),
 
+  /** 先传一张截图：请求体就是图片文件，提交反馈时带上返回的 sha */
+  uploadFeedbackImage: (file: File) =>
+    request<StoredImage>("/feedback/images", {
+      method: "POST",
+      body: file,
+      headers: { "content-type": file.type || "application/octet-stream" },
+    }),
+
   deleteFeedback: (feedbackId: number) =>
     request<{ ok: true }>(`/feedback/${feedbackId}`, { method: "DELETE" }),
 
@@ -1275,7 +1316,7 @@ export const api = {
   feedbackIssueDraft: (feedbackId: number) => request<IssueDraft>(`/feedback/${feedbackId}/issue`),
 
   /** 管理员：推成 GitHub issue，一条只推一次 */
-  pushFeedbackIssue: (feedbackId: number, body: { title: string; body: string }) =>
+  pushFeedbackIssue: (feedbackId: number, body: IssueInput) =>
     request<Feedback>(`/feedback/${feedbackId}/issue`, {
       method: "POST",
       body: JSON.stringify(body),

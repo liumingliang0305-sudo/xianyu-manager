@@ -13,6 +13,7 @@ import {
 import { errorMessage, type Feedback } from "@/lib/api"
 import { dateTime } from "@/lib/format"
 
+import { FeedbackImageLink } from "./feedback-image"
 import { FeedbackStatusPill } from "./feedback-status"
 import { KIND_LABEL, useSetFeedbackStatus } from "./queries"
 
@@ -84,8 +85,17 @@ export function FeedbackDetail({
             )}
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-sm leading-6 break-words whitespace-pre-wrap">
-          {feedback.content}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
+          <p className="text-sm leading-6 break-words whitespace-pre-wrap">{feedback.content}</p>
+          {feedback.images.length > 0 && (
+            <ul aria-label="截图" className="mt-4 flex flex-wrap gap-2">
+              {feedback.images.map((sha, i) => (
+                <li key={sha}>
+                  <FeedbackImageLink feedbackId={feedback.id} sha={sha} index={i + 1} />
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <dl className="grid gap-2 border-t p-4 text-xs tabular-nums">
           <Field label="状态">

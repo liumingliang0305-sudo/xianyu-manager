@@ -67,7 +67,7 @@ XYM_AGENT_MODEL=deepseek-ai/DeepSeek-V4.1-Flash-1017
 
 1. GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token；
 2. Repository access 选 **Only select repositories**，只勾要推的那个仓库；
-3. Permissions → Repository permissions → **Issues** 选 **Read and write**，别的都不用开；
+3. Permissions → Repository permissions → **Issues** 选 **Read and write**，别的都不用开（截图也够传，2026-11 在服务器上试过）；
 4. 有效期按自己习惯选，过期了推送会报"token 不对或者过期了"，换一个新的就行。
 
 ```
@@ -77,8 +77,11 @@ XYM_GITHUB_REPO=liumingliang0305-sudo/xianyu-manager
 
 - 本机写在 `.env`，服务器写在 `/etc/xym.env`，改完重启（`systemctl restart xym`）；
 - token 只在后台用，不发给浏览器；
-- **仓库是公开的时候 issue 谁都看得到**。默认正文不带提交人，推送前弹窗里能改标题和正文，有手机号、订单号、闲鱼账号这类信息先删掉；
-- 服务器要能连上 `api.github.com`。连不上时推送会报"连不上 GitHub"，反馈本身不受影响，可以过会儿再推。
+- **仓库是公开的时候 issue 谁都看得到**。默认正文不带提交人，推送前弹窗里能改标题和正文、取消勾选截图，
+  有手机号、订单号、闲鱼账号这类信息先删掉；
+- 服务器要能连上 `api.github.com`，带截图时还有 `uploads.github.com`（一张要几秒）。连不上时推送会报"连不上 GitHub"，
+  反馈本身不受影响，可以过会儿再推。截图上传接口没写进 GitHub 的 REST 文档，是网页和 gh `--attach` 用的那个；
+  GitHub 哪天改了它，推送会在传截图那步报错，这时可以不勾截图先推文字。
 
 ## 本地数据
 
@@ -89,7 +92,7 @@ XYM_GITHUB_REPO=liumingliang0305-sudo/xianyu-manager
 | `data/accounts/<unb>.json` | 闲鱼账号的凭证（cookie），权限 0600。**等同于账号密码，不要外传** |
 | `data/accounts/<unb>.im.json` | 即时消息用的设备 ID，第一次连的时候生成，之后一直用同一个，不要删 |
 | `data/accounts/<unb>.im.lock` | 文件锁，保证一个账号只有一个 `xym serve` 在连，进程退出时系统自动放开 |
-| `data/images/<sha256>.jpg` | 发布草稿和拼多多货源的图片（统一转成 JPEG，同一张图只存一份），两边都不用了才删 |
+| `data/images/<sha256>.jpg` | 发布草稿、拼多多和第三方货源的图片、问题反馈的截图（统一转成 JPEG，同一张图只存一份），都不用了才删 |
 | `data/auth.key` | 管理后台访问令牌的签名密钥，第一次启动时生成，见[用户和登录](auth.md#鉴权) |
 | `data/guard.json` | 每个账号的风控熔断状态，见 [guard.md](guard.md) |
 | `data/amap.key` | 高德 key（可选） |

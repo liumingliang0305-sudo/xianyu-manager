@@ -1,4 +1,4 @@
-import { Loader2Icon } from "lucide-react"
+import { CheckIcon, Loader2Icon } from "lucide-react"
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
@@ -18,7 +18,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { errorMessage, type Feedback, type IssueDraft } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
+import { FeedbackImage } from "./feedback-image"
 import { useIssueDraft, usePushIssue } from "./queries"
 
 // GitHub issue 标题的上限（app/feedback.py 的 MAX_ISSUE_TITLE）
@@ -36,6 +38,8 @@ function IssueForm({
   const push = usePushIssue(feedback.id)
   const [title, setTitle] = useState(draft.title)
   const [body, setBody] = useState(draft.body)
+  // 一起推的截图，默认全勾
+  const [chosen, setChosen] = useState(() => new Set(feedback.images))
   const [submitted, setSubmitted] = useState(false)
   const titleLength = Array.from(title.trim()).length
   const titleError =
@@ -52,7 +56,7 @@ function IssueForm({
     setSubmitted(true)
     if (!titleLength || titleLength > MAX_TITLE) return
     push.mutate(
-      { title, body },
+      { title, body, images: feedback.images.filter((sha) => chosen.has(sha)) },
       {
         onSuccess: (pushed) => {
           toast.success(`已推到 GitHub：#${pushed.issue_number}`, {
@@ -77,7 +81,9 @@ function IssueForm({
         </Callout>
       ) : (
         <Callout tone="warning">
-          公开仓库的 issue 谁都看得到。推送前确认标题和正文里没有手机号、订单号、闲鱼账号这类信息。
+          公开仓库的 issue 谁都看得到。推送前确认标题、正文
+          {feedback.images.length > 0 && "和勾上的截图"}
+          里没有手机号、订单号、闲鱼账号这类信息。
         </Callout>
       )}
       <div className="grid gap-2">
@@ -130,6 +136,66 @@ function IssueForm({
           GitHub 按 Markdown 显示。默认正文带了页面、版本和浏览器，没带提交人。
         </p>
       </div>
+      {feedback.images.length > 0 && (
+        <fieldset className="grid gap-2" disabled={push.isPending || blocked}>
+          <legend className="mb-2 flex w-full items-center justify-between gap-4 text-sm leading-none font-medium">
+            一起推的截图
+            <span className="text-xs font-normal text-muted-foreground tabular-nums">
+              勾了 {chosen.size} / {feedback.images.length} 张
+            </span>
+          </legend>
+          <ul className="flex flex-wrap gap-3">
+            {feedback.images.map((sha, i) => {
+              const on = chosen.has(sha)
+              return (
+                <li key={sha}>
+                  <label className="group grid cursor-pointer gap-1 text-center text-xs text-muted-foreground has-disabled:cursor-default">
+                    <span className="relative">
+                      <FeedbackImage
+                        feedbackId={feedback.id}
+                        sha={sha}
+                        alt={`截图 ${i + 1}`}
+                        className={cn(
+                          "size-24 transition",
+                          on ? "border-primary ring-1 ring-primary" : "opacity-45",
+                        )}
+                      />
+                      <input
+                        type="checkbox"
+                        className="peer sr-only"
+                        checked={on}
+                        onChange={() => {
+                          setChosen((old) => {
+                            const next = new Set(old)
+                            if (next.has(sha)) next.delete(sha)
+                            else next.add(sha)
+                            return next
+                          })
+                          push.reset()
+                        }}
+                      />
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "absolute top-1 left-1 flex size-5 items-center justify-center rounded border bg-background shadow-xs",
+                          "peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50",
+                          on && "border-primary bg-primary text-primary-foreground",
+                        )}
+                      >
+                        {on && <CheckIcon className="size-3.5" />}
+                      </span>
+                    </span>
+                    <span className={on ? "text-foreground" : undefined}>截图 {i + 1}</span>
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            勾上的截图会传到 GitHub，按顺序接在正文最后。一张要几秒，推送时多等一会儿。
+          </p>
+        </fieldset>
+      )}
       {push.error != null && (
         <p role="alert" className="text-sm text-destructive">
           推送失败：{errorMessage(push.error)}

@@ -1,8 +1,8 @@
-"""草稿、拼多多和第三方货源的图片存在本机：data/images/<sha256>.jpg。
+"""草稿、拼多多、第三方货源的图片和问题反馈的截图存在本机：data/images/<sha256>.jpg。
 
 传进来的图片统一转成 JPEG（按 EXIF 摆正、透明的地方铺白、长边超过 2048 缩小），文件名是转好以后的
 SHA-256，同一张图只存一份。发布时再传到闲鱼，传过的地址记在草稿里，下次发布不用再传。
-草稿、拼多多和第三方货源共用这些文件，删的时候所有记录都没在用才删（drop_unused）。
+这些记录共用图片文件，删的时候所有记录都没在用才删（drop_unused）。
 """
 
 from __future__ import annotations
@@ -68,14 +68,15 @@ class ImageStore:
 
 
 def drop_unused(db: Database, store: ImageStore, shas: Iterable[str]) -> None:
-    """草稿、拼多多和第三方货源都没用到的图片才删。sha 存在 JSON 文本里。"""
+    """草稿、拼多多、第三方货源和问题反馈都没用到的图片才删。sha 存在 JSON 文本里。"""
     for sha in set(shas):
         pattern = f'%"{sha}"%'
         used = db.execute(
             "SELECT 1 FROM drafts WHERE images LIKE %s"
             " UNION ALL SELECT 1 FROM pdd_goods WHERE data LIKE %s"
-            " UNION ALL SELECT 1 FROM third_party_sources WHERE images LIKE %s LIMIT 1",
-            (pattern, pattern, pattern),
+            " UNION ALL SELECT 1 FROM third_party_sources WHERE images LIKE %s"
+            " UNION ALL SELECT 1 FROM feedback WHERE images LIKE %s LIMIT 1",
+            (pattern, pattern, pattern, pattern),
         ).fetchone()
         if not used:
             store.delete(sha)

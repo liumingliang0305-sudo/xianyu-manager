@@ -45,9 +45,10 @@
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
 - 提示词模板（app/prompt_templates.py）：/api/prompt-templates 增删改查，按用户保存。
 - 问题反馈（app/feedback.py）：POST /api/feedback 谁都能提交，GET /api/feedback 看自己提交的；
+  截图先一张张 POST /api/feedback/images（请求体就是图片文件），提交时带上返回的 sha。
   管理员（users.is_admin）?scope=all 看所有人的，PUT .../{id}/status 标记处理，
-  POST .../{id}/issue 推成 GitHub issue。不是管理员 403 forbidden，没配 GitHub 503
-  github_unavailable。
+  POST .../{id}/issue 推成 GitHub issue（勾上的截图一起传到 GitHub）。不是管理员 403 forbidden，
+  没配 GitHub 503 github_unavailable。
 """
 
 from __future__ import annotations
@@ -336,6 +337,7 @@ class FeedbackIn(BaseModel):
     title: str
     content: str
     page: str = ""  # 在哪个页面提交的（前端路由）
+    images: list[str] = []  # 截图：POST /api/feedback/images 返回的 sha
 
 
 class FeedbackStatusIn(BaseModel):
@@ -346,6 +348,7 @@ class IssueIn(BaseModel):
     # 推到 GitHub 的标题和正文，不给就用默认的（GET .../issue 返回的那份）
     title: str | None = None
     body: str | None = None
+    images: list[str] | None = None  # 一起推的截图，不给就是全部
 
 
 class DraftIn(BaseModel):
@@ -441,7 +444,10 @@ def create_app(
         app.state.stash = StashService(conn)
         app.state.prompt_templates = PromptTemplateService(conn)
         app.state.feedback = FeedbackService(
-            conn, GitHubIssues(github_token, github_repo, transport=transport), revision=revision
+            conn,
+            GitHubIssues(github_token, github_repo, transport=transport),
+            images,
+            revision=revision,
         )
         app.state.agent = AgentService(
             conn, app.state.pdd, app.state.stash, agent_model, sources=app.state.sources
@@ -1154,6 +1160,25 @@ def create_app(
         )
         return _feedback(created)
 
+    @authed.post("/api/feedback/images")
+    async def add_feedback_image(request: Request) -> dict[str, Any]:
+        """先传一张截图（请求体就是图片文件，不是表单），提交反馈时带上返回的 sha。"""
+        size = int(request.headers.get("content-length") or 0)
+        if size > image_store.MAX_BYTES:
+            raise ValueError(f"图片太大，最大 {image_store.MAX_BYTES // 1024 // 1024} MB")
+        stored = feedback(request).save_image(await request.body())
+        return asdict(stored)
+
+    @authed.get("/api/feedback/{feedback_id}/images/{sha}")
+    async def feedback_image(request: Request, feedback_id: int, sha: str) -> FileResponse:
+        path = feedback(request).image_path(feedback_id, sha, feedback_viewer(request))
+        # 文件名就是内容的哈希，内容不会变
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
     @authed.get("/api/feedback/{feedback_id}")
     async def feedback_detail(request: Request, feedback_id: int) -> dict[str, Any]:
         return _feedback(feedback(request).get(feedback_id, feedback_viewer(request)))
@@ -1183,9 +1208,12 @@ def create_app(
     async def push_feedback_issue(
         request: Request, feedback_id: int, body: IssueIn
     ) -> dict[str, Any]:
-        """推成 GitHub issue，一条只推一次（推过的 409 already_pushed）。"""
+        """推成 GitHub issue，一条只推一次（推过的 409 already_pushed）。
+        勾上的截图先传到 GitHub，接在正文最后；哪张传不上就不建 issue（502 github_error）。"""
         require_admin(request)
-        pushed = await feedback(request).push(feedback_id, title=body.title, body=body.body)
+        pushed = await feedback(request).push(
+            feedback_id, title=body.title, body=body.body, images=body.images
+        )
         return _feedback(pushed)
 
     @authed.get("/api/agent/chats")

@@ -378,6 +378,7 @@ feedback = Table(
     Column("user_agent", Text, nullable=False, server_default=""),
     Column("revision", Text, nullable=False, server_default=""),  # 提交时后台的版本
     Column("status", Text, nullable=False, server_default="open"),  # open 待处理、done 已处理
+    Column("images", Text, nullable=False, server_default="[]"),  # JSON：截图的 sha（data/images）
     # 推到 GitHub 以后的 issue；没推过是 NULL
     Column("issue_number", Integer),
     Column("issue_url", Text),

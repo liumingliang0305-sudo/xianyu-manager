@@ -30,6 +30,8 @@ import { count } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { KIND_LABEL, useCreateFeedback } from "./queries"
+import { ScreenshotPicker } from "./screenshot-picker"
+import { hasFiles, useScreenshots } from "./use-screenshots"
 
 // 和 app/feedback.py 的限制一致，按 Unicode 字符计数
 const MAX_TITLE = 100
@@ -59,9 +61,17 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
   const [content, setContent] = useState("")
   const [submitted, setSubmitted] = useState(false)
   const [discarding, setDiscarding] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const screenshots = useScreenshots()
   const titleInput = useRef<HTMLInputElement>(null)
   const contentInput = useRef<HTMLTextAreaElement>(null)
-  const body = { kind, title: title.trim(), content: content.trim(), page }
+  const body = {
+    kind,
+    title: title.trim(),
+    content: content.trim(),
+    page,
+    images: screenshots.shas,
+  }
   const titleLength = Array.from(body.title).length
   const contentLength = Array.from(body.content).length
   const titleError =
@@ -76,7 +86,14 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
       : submitted && !body.content
         ? "请写一下具体情况"
         : ""
-  const dirty = !!body.title || !!body.content
+  const shotsError = !submitted
+    ? ""
+    : screenshots.failed
+      ? "有截图没传上：点一下重传，或者删掉"
+      : screenshots.uploading
+        ? "截图还在上传，传完再提交"
+        : ""
+  const dirty = !!body.title || !!body.content || screenshots.shots.length > 0
 
   useEffect(() => {
     if (!dirty) return
@@ -106,6 +123,7 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
       contentInput.current?.focus()
       return
     }
+    if (screenshots.uploading || screenshots.failed) return
     create.mutate(body, {
       onSuccess: () => {
         toast.success("已提交，谢谢反馈", {
@@ -123,6 +141,27 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
           className="sm:max-w-2xl"
           showCloseButton={!create.isPending}
           onInteractOutside={(event) => event.preventDefault()}
+          // 截图在这个窗口里任何地方粘贴、拖进来都行
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files]
+            if (!files.length || create.isPending) return
+            event.preventDefault()
+            screenshots.add(files)
+          }}
+          onDragOver={(event) => {
+            if (!hasFiles(event) || create.isPending) return
+            event.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+          }}
+          onDrop={(event) => {
+            if (!hasFiles(event)) return
+            event.preventDefault()
+            setDragging(false)
+            if (!create.isPending) screenshots.add([...event.dataTransfer.files])
+          }}
         >
           <DialogHeader>
             <DialogTitle>反馈问题</DialogTitle>
@@ -217,6 +256,12 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
                     : "会一起记下浏览器版本，方便排查。")}
               </p>
             </div>
+            <ScreenshotPicker
+              screenshots={screenshots}
+              dragging={dragging}
+              disabled={create.isPending}
+              error={shotsError}
+            />
             {create.error != null && (
               <p role="alert" className="text-sm text-destructive">
                 提交失败：{errorMessage(create.error)}
@@ -227,8 +272,10 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
                 取消
               </Button>
               <Button type="submit" disabled={create.isPending}>
-                {create.isPending && <Loader2Icon className="animate-spin" aria-hidden />}
-                {create.isPending ? "提交中…" : "提交反馈"}
+                {(create.isPending || screenshots.uploading) && (
+                  <Loader2Icon className="animate-spin" aria-hidden />
+                )}
+                {create.isPending ? "提交中…" : screenshots.uploading ? "截图上传中…" : "提交反馈"}
               </Button>
             </DialogFooter>
           </form>

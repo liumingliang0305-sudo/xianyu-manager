@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
   api,
+  feedbackImage,
   type Feedback,
   type FeedbackKind,
   type FeedbackList,
   type FeedbackStatus,
+  type IssueInput,
 } from "@/lib/api"
 
 export const KIND_LABEL: Record<FeedbackKind, string> = {
@@ -81,7 +83,21 @@ export function useIssueDraft(id: number | null) {
 export function usePushIssue(id: number) {
   const replace = useReplaceFeedback()
   return useMutation({
-    mutationFn: (body: { title: string; body: string }) => api.pushFeedbackIssue(id, body),
+    mutationFn: (body: IssueInput) => api.pushFeedbackIssue(id, body),
     onSuccess: replace,
+  })
+}
+
+/**
+ * 反馈里的一张截图，返回 blob: 地址。内容按哈希存的不会变，取过一次就一直用这个地址，
+ * 不释放：一条反馈最多 6 张，看过的留在内存里也不多。不挂在 ["feedback"] 下面，
+ * 列表刷新时不跟着重取。
+ */
+export function useFeedbackImage(feedbackId: number, sha: string) {
+  return useQuery({
+    queryKey: ["feedback-image", feedbackId, sha],
+    queryFn: async () => URL.createObjectURL(await feedbackImage(feedbackId, sha)),
+    staleTime: Infinity,
+    gcTime: Infinity,
   })
 }
