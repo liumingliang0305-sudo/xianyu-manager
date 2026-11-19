@@ -342,6 +342,8 @@ agent_chats = Table(
     Column("pdd_goods_id", Text),  # 带的拼多多货源（pdd_goods.goods_id），没带是 NULL
     Column("source_id", Text),  # 带的第三方货源，删除货源后保留 ID，聊天记录不跟着删
     Column("stash_item_id", Text),  # 带的暂存（search_stash.item_id），没带是 NULL
+    # 带的提示词模板（prompt_templates.id），没带是 NULL；删除模板后保留 ID，聊天记录不跟着删
+    Column("template_id", BigInteger),
     Column("title", Text, nullable=False, server_default=""),  # 第一条消息的开头，还没聊是空串
     # JSON：PydanticAI 的消息历史原样（ModelMessagesTypeAdapter），下一轮原样带回去
     Column("messages", Text, nullable=False, server_default="[]"),

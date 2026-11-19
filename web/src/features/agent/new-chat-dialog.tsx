@@ -1,4 +1,4 @@
-import { CheckIcon, Loader2Icon } from "lucide-react"
+import { CheckIcon, FileTextIcon, Loader2Icon } from "lucide-react"
 import { useId, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -19,10 +19,12 @@ import { usePddGoods } from "@/features/pdd/queries"
 import { useStash } from "@/features/search/queries"
 import { useSources } from "@/features/sources/queries"
 import { SourcePhoto } from "@/features/sources/source-photo"
+import { usePromptTemplates } from "@/features/templates/queries"
 import { errorMessage } from "@/lib/api"
 import { timeAgo, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+import { IconThumb } from "./icon-thumb"
 import { useCreateAgentChat } from "./queries"
 
 interface Choice {
@@ -43,6 +45,7 @@ function ChoiceList({
   error,
   onRetry,
   empty,
+  filterBy = "标题",
 }: {
   label: string
   none: string
@@ -53,6 +56,8 @@ function ChoiceList({
   error: unknown
   onRetry: () => void
   empty: string
+  /** 按什么筛（只按 title 筛，这里只是叫法：商品叫标题，模板叫名称） */
+  filterBy?: string
 }) {
   const [search, setSearch] = useState("")
   const groupId = useId()
@@ -80,14 +85,14 @@ function ChoiceList({
               {c.thumb ?? <span className="w-10 shrink-0" aria-hidden />}
               <span className="min-w-0 flex-1">
                 <span className={cn("line-clamp-2 text-sm", !c.id && "text-muted-foreground")}>{c.title}</span>
-                {c.meta && <span className="block text-xs text-muted-foreground tabular-nums">{c.meta}</span>}
+                {c.meta && <span className="block truncate text-xs text-muted-foreground tabular-nums">{c.meta}</span>}
               </span>
               <CheckIcon className={cn("size-4 shrink-0", !selected && "invisible")} aria-hidden />
             </label>
           )
         })}
         {text && shown.length === 0 && (
-          <p className="px-2 py-3 text-sm text-muted-foreground">没有标题里带「{search.trim()}」的</p>
+          <p className="px-2 py-3 text-sm text-muted-foreground">没有{filterBy}里带「{search.trim()}」的</p>
         )}
       </div>
     )
@@ -98,7 +103,7 @@ function ChoiceList({
       <SearchInput
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="按标题筛…"
+        placeholder={`按${filterBy}筛…`}
         aria-label={`筛选${label}`}
         disabled={choices.length === 0}
       />
@@ -107,7 +112,7 @@ function ChoiceList({
   )
 }
 
-/** 新对话：拼多多货源、暂存都可选，开了以后不能换 */
+/** 新对话：拼多多货源、第三方货源、暂存和模板都可选，开了以后不能换 */
 export function NewChatDialog({
   onClose,
   onCreated,
@@ -118,10 +123,12 @@ export function NewChatDialog({
   const goods = usePddGoods()
   const stash = useStash()
   const sources = useSources()
+  const templates = usePromptTemplates()
   const create = useCreateAgentChat()
   const [goodsId, setGoodsId] = useState<string | null>(null)
   const [itemId, setItemId] = useState<string | null>(null)
   const [sourceId, setSourceId] = useState<string | null>(null)
+  const [templateId, setTemplateId] = useState<string | null>(null)
 
   const goodsChoices: Choice[] = (goods.data ?? []).map((g) => ({
     id: g.goods_id,
@@ -141,10 +148,21 @@ export function NewChatDialog({
     thumb: <SourcePhoto sourceId={source.source_id} sha={source.cover_sha} size={40} />,
     meta: `${source.platform} · ${source.image_count} 张图片`,
   }))
+  const templateChoices: Choice[] = (templates.data ?? []).map((t) => ({
+    id: String(t.id),
+    title: t.name,
+    thumb: <IconThumb icon={FileTextIcon} />,
+    meta: t.preview.replace(/\s+/g, " "),
+  }))
 
   const submit = () =>
     create.mutate(
-      { pdd_goods_id: goodsId, stash_item_id: itemId, source_id: sourceId },
+      {
+        pdd_goods_id: goodsId,
+        stash_item_id: itemId,
+        source_id: sourceId,
+        template_id: templateId ? Number(templateId) : null,
+      },
       {
         onSuccess: (chat) => onCreated(chat.id),
         onError: (error) => toast.error(errorMessage(error)),
@@ -153,14 +171,14 @@ export function NewChatDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !create.isPending && onClose()}>
-      <DialogContent className="sm:max-w-5xl">
+      <DialogContent className="sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>新对话</DialogTitle>
           <DialogDescription>
-            可以直接开始对话，也可以选择拼多多货源、第三方货源和同行商品作为参考。每类可选一条，模型只读取文字资料，开始后不能更换。
+            可以直接开始对话，也可以选择拼多多货源、第三方货源和同行商品作为参考，再选一个模板让模型照着写。每类可选一条，模型只读取文字资料，开始后不能更换。
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-4 gap-4">
           <ChoiceList
             label="拼多多货源"
             none="不带货源"
@@ -193,6 +211,18 @@ export function NewChatDialog({
             error={stash.error}
             onRetry={() => void stash.refetch()}
             empty="还没有暂存：在搜索页的结果里点「暂存」"
+          />
+          <ChoiceList
+            label="模板"
+            none="不带模板"
+            choices={templateChoices}
+            value={templateId}
+            onChange={setTemplateId}
+            loading={templates.isPending}
+            error={templates.error}
+            onRetry={() => void templates.refetch()}
+            empty="还没有模板：在模板管理页新建"
+            filterBy="名称"
           />
         </div>
         <DialogFooter>

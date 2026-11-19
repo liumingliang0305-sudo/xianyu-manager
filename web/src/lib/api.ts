@@ -748,7 +748,14 @@ export interface AgentStashItem {
   price_cent: number
 }
 
-/** AI 助手的一个对话。带的货源、暂存删掉了：id 还在，对象是 null */
+/** AI 助手对话带的提示词模板（概况） */
+export interface AgentTemplate {
+  id: number
+  name: string
+  content_length: number
+}
+
+/** AI 助手的一个对话。带的货源、暂存、模板删掉了：id 还在，对象是 null */
 export interface AgentChatSummary {
   id: number
   /** 第一条消息的开头，还没聊是空串 */
@@ -759,9 +766,19 @@ export interface AgentChatSummary {
   source: SourceSummary | null
   stash_item_id: string | null
   stash_item: AgentStashItem | null
+  template_id: number | null
+  template: AgentTemplate | null
   created_at: number
   /** 最后一轮回复完的时间 */
   updated_at: number
+}
+
+/** 开对话时带什么，都可不带 */
+export interface AgentChatInput {
+  pdd_goods_id?: string | null
+  source_id?: string | null
+  stash_item_id?: string | null
+  template_id?: number | null
 }
 
 export interface AgentMessage {
@@ -1382,8 +1399,8 @@ export const api = {
 
   agentChat: (chatId: number) => request<AgentChat>(`/agent/chats/${chatId}`),
 
-  /** 开一个对话，拼多多货源和暂存都可选。不调模型 */
-  createAgentChat: (body: { pdd_goods_id: string | null; stash_item_id: string | null; source_id?: string | null }) =>
+  /** 开一个对话，拼多多、第三方货源、暂存和模板都可选。不调模型 */
+  createAgentChat: (body: AgentChatInput) =>
     request<AgentChat>("/agent/chats", { method: "POST", body: JSON.stringify(body) }),
 
   deleteAgentChat: (chatId: number) =>

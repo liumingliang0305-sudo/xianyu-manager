@@ -21,7 +21,7 @@ ci.yml[OQ6T]: F:GitHub Actions CI：推main和PR时跑后端ruff检查、格式�
 ===/<repository>/app/===
 __init__.py[AG2T]: F:业务层包标记，声明app只通过xianyu_core和闲鱼通信 | R:- | A:- | S:-
 accounts.py[AI8M]: F:闲鱼账号凭证与登录态：按unb读写data/accounts凭证，提供带限流熔断的MtopClient上下文、登录态确认、导入凭证的账号识别与校验 | R:code:xianyu_core/mtop.py,code:xianyu_core/credential.py,code:xianyu_core/guard.py,code:xianyu_core/im.py | A:Accounts,Accounts.mtop,Accounts.check,Accounts.identify,Accounts.verify,LoginState | S:登录态只存内存，EXPIRED和RISK不随max_age自动重查；mtop()退出时无论成败都把client.credential写回文件；verify与identify禁用自动续期，防插件反复推过期cookie绕过sdkSilent限频；remove保留<unb>.im.json设备ID
-agent.py[AA7L]: F:AI助手对话服务：按后台用户存对话，带拼多多、第三方货源和搜索暂存的文字资料用PydanticAI流式调模型，回复完整收到才落库 | R:code:app/pdd.py,code:app/sources.py,code:app/stash.py,code:app/db.py | A:AgentService,AgentService.reply,model_name,qualified,visible_messages,INSTRUCTIONS | S:无provider前缀的模型名补openai-chat:走Chat Completions；模型建不起来只标unavailable不阻断启动；同一对话同时只回一条；出错或中断整轮不落库
+agent.py[AA7L]: F:AI助手对话服务：按后台用户存对话，带拼多多、第三方货源、搜索暂存的文字资料和卖家选的提示词模板，用PydanticAI流式调模型，回复完整收到才落库 | R:code:app/pdd.py,code:app/sources.py,code:app/stash.py,code:app/prompt_templates.py,code:app/db.py | A:AgentService,AgentService.reply,model_name,qualified,visible_messages,INSTRUCTIONS | S:无provider前缀的模型名补openai-chat:走Chat Completions；模型建不起来只标unavailable不阻断启动；同一对话同时只回一条；模板当卖家指令照做，货源和暂存只当资料
 api.py[EG9L]: F:管理后台FastAPI应用工厂：装配全部业务服务和生命周期后台任务，提供鉴权、账号隔离、错误码映射、SSE推送、安全响应头与前端托管的全部HTTP接口 | R:code:app/accounts.py,code:app/users.py,code:app/auth.py,code:app/messages.py,code:app/autosync.py,code:app/drafts.py,code:app/orders.py,code:app/items.py | A:create_app,sse_events,ERRORS,SecurityHeaders,CONTENT_SECURITY_POLICY,REFRESH_COOKIE | S:除health和auth登录、刷新、登出外全挂authed；插件令牌(xymp_)只认/api/login/import与POST /api/pdd/goods；他人账号一律按不存在返回404；同账号平台请求必须持locks[account_id]串行，防凭证文件互相覆盖；ERRORS按序匹配，子类须在父类前；响应金额为分、请求价格为元字符串；REVISION启动时读一次供发版健康检查比对；SSE每次ping前重验用户与账号归属；/api/sources/parsers这类静态子路径须注册在同前缀{id}路由之前
 auth.py[DI8S]: F:后台登录鉴权基础：HS256 JWT访问令牌签发与校验、签名密钥文件生成、按用户名和IP的输错限次及限次用来源IP判定 | R:code:app/users.py,code:app/api.py | A:AccessTokens,LoginLimiter,load_key,client_ip,NotSignedInError,TooManyAttemptsError | S:令牌载荷带token_version，作废靠调用方每个请求查用户比对；删data/auth.key即令全部访问令牌失效；限次只在内存、重启清零；回环地址不按IP限次（隧道和本机都是127.0.0.1），真实IP依赖uvicorn只信本机代理的X-Forwarded-For
 autosync.py[AW7M]: F:商品与订单自动同步调度：交易消息触发、打开页面时过期触发、按账号可配间隔定时兜底，结果记sync_jobs并推送同步事件 | R:code:app/items.py,code:app/orders.py,code:app/accounts.py,code:app/db.py | A:AutoSync,AutoSync.visit,AutoSync.later,AutoSync.configure,INTERVAL_CHOICES,JobStatus | S:须在xym serve进程内运行以共享账号锁与限流计数（另起进程限流翻倍）；熔断、失效或风控过的账号不发请求，风控后待人工确认才恢复；自动只翻前3页
@@ -38,8 +38,8 @@ messages.py[AM9L]: F:即时消息：每账号一条IM长连接，新消息入库
 orders.py[AB8L]: F:订单服务：卖出和买到的订单进本地库（列表同步、按订单号添加、交易消息自动跟踪），拉实时详情，给待付款的卖出订单改价并记order_ops | R:code:xianyu_core/order.py,code:app/items.py,code:app/accounts.py,code:app/db.py,code:app/messages.py | A:OrderService,OrderFeed,OrderService.change_price,OrderService.track,parse_order_id,OrderRecord | S:side按详情里当前账号是否卖家判定；个人卖家拿不到卖出列表（PERMISSION_EXCEPTION），只能按订单号添加或靠交易消息；改价须提交全部价格项，先拉当前值补齐再按总价过保护线；OrderFeed出错跳过该笔，平台查不到的本次运行不再拉；卖家工作台路径未实测，原始条目存orders.raw
 pdd.py[IB7L]: F:拼多多货源：接收插件推来的商品页store.initDataObj字段，整理成标题、图片、视频、规格、参数、价格区间与店铺，按后台用户存库并下载图片，供建发布草稿 | R:code:app/images.py,code:app/db.py,code:extension/pdd.js,code:xianyu_core/publish.py | A:PddService,PddService.ingest,parse,draft_text,PddGoods,media_url | S:货源按后台用户存，不跟闲鱼账号走；只下载pddpic.com、yangkeduo.com域下的媒体，别的地址丢弃；视频只记地址；图、详情图、规格都有数量上限防灌入
 places.py[IB5T]: F:发货地搜索：用自有高德Web服务key调关键字搜索，把地点转成闲鱼poi.get的地址格式 | R:- | A:PlaceSearch,load_key,PlacesUnavailableError | S:key只在后台用不发浏览器；AMAP_KEY环境变量优先于data/amap.key；须extensions=all才有adcode作divisionId
-prompt_templates.py[AA4S]: F:提示词模板服务：按后台用户增删改查模板名称与正文，列表只返回正文开头的预览 | R:code:app/db.py | A:PromptTemplateService,PromptTemplate,PromptTemplateSummary | S:-
-schema.py[PD8M]: F:全部数据库表结构（SQLAlchemy Core），只供Alembic自动生成和核对迁移，业务代码直接写SQL | R:code:migrations/env.py,code:app/db.py | A:metadata,users,account_owners,items,drafts,orders | S:改表先改这里再alembic --autogenerate并人工检查；命名约定让主键外键名与PostgreSQL默认一致，否则自动生成会出差异；金额存分、时间存秒级double；令牌只存SHA-256、密码只存argon2id哈希
+prompt_templates.py[AA4S]: F:提示词模板服务：按后台用户增删改查模板名称与正文，列表只返回正文开头的预览；find供AI对话每轮现读所带模板 | R:code:app/db.py | A:PromptTemplateService,PromptTemplateService.find,PromptTemplate,PromptTemplateSummary | S:-
+schema.py[PD8M]: F:全部数据库表结构（SQLAlchemy Core），只供Alembic自动生成和核对迁移，业务代码直接写SQL | R:code:migrations/env.py,code:app/db.py | A:metadata,users,account_owners,items,drafts,orders | S:改表先改这里再alembic --autogenerate并人工检查；命名约定让主键外键名与PostgreSQL默认一致，否则自动生成会出差异；金额存分、时间存秒级double；令牌只存SHA-256、密码只存argon2id哈希；agent_chats带的货源、暂存、模板只存ID不加外键，删掉后保留ID好告诉模型已删
 search.py[AB4T]: F:闲鱼全站商品搜索服务：用指定账号转发一次平台搜索，结果不入库 | R:code:xianyu_core/search.py,code:app/accounts.py | A:SearchService | S:用哪个账号搜就占它的限流，被风控熔断的也是它
 sources.py[AB7M]: F:第三方货源服务：识别链接并按自动或手动选的解析方案提取，按后台用户存标题、正文、网站、方案和图片，图片下载到本地并可补下 | R:code:app/source_parsers.py,code:app/webpage.py,code:app/images.py,code:app/db.py | A:SourceService,SourceService.detect,SourceService.ingest,SourceService.fetch_images,Source,SourceNotFoundError | S:source_id是方案给出的规范链接的sha256前32位：改规范化规则会让旧货源再导入变成新条目
 stash.py[AB5M]: F:搜索暂存：校验并按后台用户保存搜索结果里的同行商品，以及插件转交的pc.detail完整描述、图片与计数 | R:code:xianyu_core/item.py,code:app/db.py,code:extension/goofish.js | A:StashService,StashedItem,StashService.save_detail,detail_images | S:后台不请求闲鱼，详情只能由插件在用户Chrome里取；再次暂存更新内容但保留首次暂存时间
@@ -103,6 +103,7 @@ script.py.mako[XD2T]: F:Alembic新迁移文件模板：带类型注解的revisio
 20261118_76caee8984cf_feedback.py[PQ4T]: F:迁移：建问题反馈表feedback，users加is_admin并把已有的最早用户设为管理员 | R:code:app/schema.py,code:migrations/versions/20261116_47fa824f061f_third_party_sources_and_chat_attachments.py | A:upgrade,downgrade | S:-
 20261119_5d0c3e9b71a4_feedback_images.py[PQ3T]: F:迁移：feedback加images列（截图sha的JSON文本，默认[]） | R:code:app/schema.py,code:migrations/versions/20261118_76caee8984cf_feedback.py | A:upgrade,downgrade | S:-
 20261119_b83e6d1f4a27_source_parsers.py[PB3T]: F:迁移：third_party_sources加parser记下用哪个解析方案，已有的简篇、美篇回填jianpian，其余默认generic | R:code:app/schema.py,code:migrations/versions/20261119_5d0c3e9b71a4_feedback_images.py | A:upgrade,downgrade | S:-
+20261119_e5a19c7d3b42_agent_chat_template.py[PA3T]: F:迁移：agent_chats加template_id，让AI对话可选带一个提示词模板 | R:code:app/schema.py,code:migrations/versions/20261119_b83e6d1f4a27_source_parsers.py | A:upgrade,downgrade | S:-
 
 ===/<repository>/web/===
 .gitignore[FV1T]: F:前端目录的忽略规则：日志、node_modules、dist和编辑器文件 | R:- | A:- | S:-
@@ -161,9 +162,10 @@ accounts-page.tsx[EB6L]: F:账号矩阵页：名下全部闲鱼账号的登录�
 queries.ts[AD5T]: F:账号矩阵数据钩子：与账号菜单共用["accounts"]缓存且每分钟刷新，重新检查、改备注、移除账号后直接改写缓存 | R:code:web/src/lib/api.ts | A:useAccountsLive,useCheckAccount,useSetRemark,useRemoveAccount | S:-
 
 ===/<repository>/web/src/features/agent/===
-agent-page.tsx[EA6L]: F:AI助手页：对话列表与当前对话，展示带的货源或暂存概况、流式回复气泡、开场建议、输入框和删除对话，模型不可用时提示原因 | R:code:web/src/features/agent/queries.ts,code:web/src/features/agent/new-chat-dialog.tsx,code:app/agent.py | A:AgentPage | S:单条消息上限4000字与后端MAX_PROMPT一致
-new-chat-dialog.tsx[EA5M]: F:新建AI对话弹窗：从拼多多货源、第三方货源和搜索暂存里各可搜索单选一件（都可不选），开了以后不能换 | R:code:web/src/features/agent/queries.ts,code:web/src/features/pdd/queries.ts,code:web/src/features/sources/queries.ts,code:web/src/features/search/queries.ts | A:NewChatDialog | S:-
+agent-page.tsx[EA6L]: F:AI助手页：对话列表与当前对话，展示带的货源、暂存或模板概况（可点进详情）、流式回复气泡、按所带内容给的开场建议、输入框和删除对话，模型不可用时提示原因 | R:code:web/src/features/agent/queries.ts,code:web/src/features/agent/new-chat-dialog.tsx,code:web/src/features/agent/icon-thumb.tsx,code:app/agent.py | A:AgentPage | S:单条消息上限4000字与后端MAX_PROMPT一致
+new-chat-dialog.tsx[EA5M]: F:新建AI对话弹窗：从拼多多货源、第三方货源、搜索暂存和提示词模板里各可搜索单选一个（都可不选），开了以后不能换 | R:code:web/src/features/agent/queries.ts,code:web/src/features/pdd/queries.ts,code:web/src/features/sources/queries.ts,code:web/src/features/search/queries.ts,code:web/src/features/templates/queries.ts | A:NewChatDialog | S:-
 queries.ts[AA6S]: F:AI助手数据钩子：对话列表与详情、新建删除对话，发消息并逐段接收流式回复，完成后写入缓存并把对话挪到最前 | R:code:web/src/lib/api.ts | A:agentKeys,useAgentChats,useAgentChat,useCreateAgentChat,useDeleteAgentChat,useAgentReply | S:一轮出错或断开不算数（后台也没存），send返回原因好把话放回输入框；换对话或离开页面即中止接收
+icon-thumb.tsx[CU2T]: F:没有图的对象（直接对话、模板）占缩略图位置的灰底图标方块，尺寸与商品缩略图一致 | R:- | A:IconThumb | S:-
 
 ===/<repository>/web/src/features/auth/===
 login-page.tsx[EI5T]: F:后台登录页：用户名密码表单，没有注册入口（用户由管理员用xym users add建），登录后留在原网址 | R:code:web/src/lib/api.ts,code:web/src/components/brand.tsx | A:LoginPage | S:-
@@ -240,8 +242,8 @@ source-photo.tsx[CB3T]: F:第三方货源图片：按需鉴权读取本地副本
 sources-page.tsx[EB6M]: F:第三方货源页：导入的网页货源列表（含网站与解析方案列）与搜索，看详情、建草稿、开AI对话、删除 | R:code:web/src/features/sources/queries.ts,code:web/src/features/sources/source-detail-sheet.tsx,code:web/src/features/sources/import-dialog.tsx,code:web/src/features/agent/queries.ts | A:SourcesPage | S:-
 
 ===/<repository>/web/src/features/templates/===
-queries.ts[AA4T]: F:提示词模板数据钩子：列表、详情、新建或保存、删除 | R:code:web/src/lib/api.ts | A:usePromptTemplates,usePromptTemplate,useSavePromptTemplate,useDeletePromptTemplate | S:-
-template-detail.tsx[EA3T]: F:模板详情：显示名称和完整正文，可复制内容到剪贴板或去编辑 | R:code:web/src/features/templates/queries.ts | A:TemplateDetail | S:-
+queries.ts[AA4T]: F:提示词模板数据钩子：列表、详情、新建或保存、删除，改动后顺带刷新AI对话列表里的模板名 | R:code:web/src/lib/api.ts,code:web/src/features/agent/queries.ts | A:usePromptTemplates,usePromptTemplate,useSavePromptTemplate,useDeletePromptTemplate | S:-
+template-detail.tsx[EA3T]: F:模板详情：显示名称和完整正文，可复制内容、去编辑，或带着这个模板开AI对话 | R:code:web/src/features/templates/queries.ts,code:web/src/features/agent/queries.ts | A:TemplateDetail | S:-
 template-editor.tsx[EA4M]: F:模板编辑器：新建或编辑模板名称与正文，按Unicode字符计数校验长度后保存 | R:code:web/src/features/templates/queries.ts,code:app/prompt_templates.py | A:TemplateEditor | S:名称100字、正文20000字上限须与app/prompt_templates.py一致
 templates-page.tsx[EA5M]: F:模板管理页：按用户的模板列表（名称搜索、正文预览），查看、新建、编辑、复制、删除 | R:code:web/src/features/templates/queries.ts,code:web/src/features/templates/template-detail.tsx,code:web/src/features/templates/template-editor.tsx | A:TemplatesPage | S:-
 

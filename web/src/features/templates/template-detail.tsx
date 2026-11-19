@@ -1,4 +1,5 @@
-import { CopyIcon, SquarePenIcon } from "lucide-react"
+import { BotIcon, CopyIcon, Loader2Icon, SquarePenIcon } from "lucide-react"
+import { useNavigate } from "react-router"
 import { toast } from "sonner"
 
 import { LoadError, RowsSkeleton } from "@/components/states"
@@ -10,6 +11,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { useCreateAgentChat } from "@/features/agent/queries"
+import { errorMessage } from "@/lib/api"
 import { dateTime } from "@/lib/format"
 
 import { usePromptTemplate } from "./queries"
@@ -25,6 +28,18 @@ export function TemplateDetail({
 }) {
   const detail = usePromptTemplate(templateId)
   const template = detail.data
+  const navigate = useNavigate()
+  const createChat = useCreateAgentChat()
+  const chat = () => {
+    if (!template || createChat.isPending) return
+    createChat.mutate(
+      { template_id: template.id },
+      {
+        onSuccess: (result) => navigate(`/agent?c=${result.id}`),
+        onError: (error) => toast.error(`创建对话失败：${errorMessage(error)}`),
+      },
+    )
+  }
   const copy = async () => {
     if (!template) return
     try {
@@ -55,6 +70,10 @@ export function TemplateDetail({
               <Button variant="outline" onClick={() => void copy()}>
                 <CopyIcon aria-hidden />
                 复制内容
+              </Button>
+              <Button variant="outline" onClick={chat} disabled={createChat.isPending}>
+                {createChat.isPending ? <Loader2Icon className="animate-spin" aria-hidden /> : <BotIcon aria-hidden />}
+                开 AI 对话
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-sm leading-6 break-words whitespace-pre-wrap">

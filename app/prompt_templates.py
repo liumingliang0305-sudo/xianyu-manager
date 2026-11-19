@@ -81,6 +81,13 @@ class PromptTemplateService:
             raise PromptTemplateNotFoundError("找不到这个模板")
         return PromptTemplate.from_row(row)
 
+    def find(self, user_id: int, template_id: int) -> PromptTemplate | None:
+        """同 get，找不到是 None（AI 对话带的模板可能已经删掉了）。"""
+        try:
+            return self.get(user_id, template_id)
+        except PromptTemplateNotFoundError:
+            return None
+
     def create(self, user_id: int, *, name: str, content: str) -> PromptTemplate:
         name, content = _clean(name, content)
         now = time.time()

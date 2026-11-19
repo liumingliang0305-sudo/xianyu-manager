@@ -2,6 +2,7 @@ import {
   BotIcon,
   CopyIcon,
   EllipsisIcon,
+  FileTextIcon,
   Loader2Icon,
   PlusIcon,
   SendHorizontalIcon,
@@ -39,9 +40,10 @@ import { PddThumb } from "@/features/pdd/pdd-bits"
 import { priceRange } from "@/features/pdd/pdd-format"
 import { SourcePhoto } from "@/features/sources/source-photo"
 import { errorMessage, type AgentChat, type AgentChatSummary, type AgentMessage } from "@/lib/api"
-import { chatTime, timeAgo, yuan } from "@/lib/format"
+import { chatTime, count, timeAgo, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+import { IconThumb } from "./icon-thumb"
 import { NewChatDialog } from "./new-chat-dialog"
 import { useAgentChat, useAgentChats, useAgentReply, useDeleteAgentChat, type PendingTurn } from "./queries"
 
@@ -56,6 +58,7 @@ function attachedLabel(chat: AgentChatSummary): string {
   if (chat.pdd_goods_id) parts.push(chat.pdd_goods?.title ?? "货源已删除")
   if (chat.source_id) parts.push(chat.source?.title ?? "第三方货源已删除")
   if (chat.stash_item_id) parts.push(chat.stash_item?.title ?? "暂存已移出")
+  if (chat.template_id != null) parts.push(chat.template ? `模板「${chat.template.name}」` : "模板已删除")
   return parts.join(" ＋ ") || "未附带商品"
 }
 
@@ -63,6 +66,16 @@ function attachedLabel(chat: AgentChatSummary): string {
 function starters(chat: AgentChatSummary): string[] {
   const goods = chat.pdd_goods_id != null || chat.source_id != null
   const peer = chat.stash_item_id != null
+  if (chat.template_id != null) {
+    if (goods)
+      return [
+        "按模板给这件货写一段闲鱼描述",
+        "按模板起 3 个闲鱼标题",
+        peer ? "和同行比，这件货的卖点有什么不一样？" : "模板要的信息，这份资料里还缺哪些？",
+      ]
+    if (peer) return ["照模板，参考这件同行商品写一段描述", "这件商品的文案好在哪里？", "这个价格在闲鱼上算贵吗？"]
+    return ["按模板写一段闲鱼描述，缺什么资料先问我", "这个模板要我补充哪些资料？", "帮我把这个模板改得更好用"]
+  }
   if (goods && peer)
     return [
       "参考同行的写法，给这件货写一段闲鱼描述",
@@ -76,9 +89,7 @@ function starters(chat: AgentChatSummary): string[] {
 
 function ChatRow({ chat, active, onOpen }: { chat: AgentChatSummary; active: boolean; onOpen: () => void }) {
   const cover = !chat.pdd_goods_id && !chat.source_id && !chat.stash_item_id ? (
-    <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-      <BotIcon className="size-4" aria-hidden />
-    </div>
+    <IconThumb icon={chat.template_id != null ? FileTextIcon : BotIcon} />
   ) : chat.pdd_goods ? (
     <PddThumb url={chat.pdd_goods.cover} size={40} />
   ) : chat.source_id ? (
@@ -322,7 +333,7 @@ function DeleteChatDialog({ chat, onClose, onDeleted }: { chat: AgentChatSummary
           <AlertDialogTitle>删除这个对话？</AlertDialogTitle>
           <AlertDialogDescription>
             {chat.title && <span className="mb-2 block font-medium text-foreground">{chat.title}</span>}
-            聊天记录删掉就找不回来了。带的货源和暂存不受影响。
+            聊天记录删掉就找不回来了。带的货源、暂存和模板不受影响。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -399,7 +410,7 @@ function ChatPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {!summary.pdd_goods_id && !summary.source_id && !summary.stash_item_id && (
+          {!summary.pdd_goods_id && !summary.source_id && !summary.stash_item_id && summary.template_id == null && (
             <span className="text-sm text-muted-foreground">直接对话</span>
           )}
           {summary.pdd_goods_id && (
@@ -427,6 +438,15 @@ function ChatPanel({
               price={summary.stash_item ? yuan(summary.stash_item.price_cent) : ""}
               thumb={<ItemThumb url={summary.stash_item?.pic_url ?? ""} size={36} />}
               to={`/search?view=stash&item=${encodeURIComponent(summary.stash_item_id)}`}
+            />
+          )}
+          {summary.template_id != null && (
+            <Attachment
+              kind="模板"
+              title={summary.template?.name ?? null}
+              price={summary.template ? `${count(summary.template.content_length)} 字` : ""}
+              thumb={<IconThumb icon={FileTextIcon} size={36} />}
+              to={`/templates?template=${summary.template_id}`}
             />
           )}
         </div>
@@ -474,7 +494,7 @@ export function AgentPage() {
       return p
     })
 
-  let description = "和大模型聊文案、标题、定价，可附带拼多多、第三方货源和同行商品"
+  let description = "和大模型聊文案、标题、定价，可附带拼多多、第三方货源、同行商品和模板"
   if (query.data) {
     const model = query.data.model ? ` · 模型 ${query.data.model}` : ""
     description = `${chats.length} 个对话${model}`
@@ -486,7 +506,7 @@ export function AgentPage() {
     list = <LoadError what="读取对话" error={query.error} onRetry={() => void query.refetch()} />
   else if (chats.length === 0)
     list = (
-      <EmptyState title="还没有对话">直接和 AI 聊聊文案、标题、定价，也可以带上拼多多、第三方货源或暂存的同行商品。</EmptyState>
+      <EmptyState title="还没有对话">直接和 AI 聊聊文案、标题、定价，也可以带上拼多多、第三方货源或暂存的同行商品，再选一个模板让它照着写。</EmptyState>
     )
   else
     list = (

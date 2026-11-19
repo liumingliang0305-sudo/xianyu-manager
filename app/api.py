@@ -42,7 +42,8 @@
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
-- AI 助手（app/agent.py）：/api/agent/chats 开对话时可选带上一个拼多多货源、一件暂存，
+- AI 助手（app/agent.py）：/api/agent/chats 开对话时可选带上一个拼多多货源、一个第三方货源、
+  一件暂存和一个提示词模板，
   POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
 - 提示词模板（app/prompt_templates.py）：/api/prompt-templates 增删改查，按用户保存。
@@ -119,7 +120,11 @@ from app.messages import CLOSING, ImOfflineError, MessageHub, MessageStore
 from app.orders import OrderFeed, OrderRecord, OrderService
 from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft_text
 from app.places import PlaceSearch, PlacesUnavailableError
-from app.prompt_templates import PromptTemplateNotFoundError, PromptTemplateService
+from app.prompt_templates import (
+    PromptTemplate,
+    PromptTemplateNotFoundError,
+    PromptTemplateService,
+)
 from app.search import SearchService
 from app.source_parsers import PARSERS, parser_info
 from app.sources import Source, SourceNotFoundError, SourceService
@@ -320,7 +325,8 @@ class ItemStatsIn(BaseModel):
 class AgentChatIn(BaseModel):
     pdd_goods_id: str | None = None  # 带哪个拼多多货源
     source_id: str | None = None  # 带哪个第三方货源
-    stash_item_id: str | None = None  # 带哪件暂存，两个都可不带
+    stash_item_id: str | None = None  # 带哪件暂存
+    template_id: int | None = None  # 带哪个提示词模板，都可不带
 
 
 class AgentMessageIn(BaseModel):
@@ -459,7 +465,12 @@ def create_app(
             revision=revision,
         )
         app.state.agent = AgentService(
-            conn, app.state.pdd, app.state.stash, agent_model, sources=app.state.sources
+            conn,
+            app.state.pdd,
+            app.state.stash,
+            agent_model,
+            sources=app.state.sources,
+            templates=app.state.prompt_templates,
         )
         # 同步开始、结束推给页面（hub 在下面建，回调时才用到）
         autosync = AutoSync(
@@ -570,7 +581,7 @@ def create_app(
         return request.app.state.agent
 
     def agent_chat(request: Request, chat: AgentChat) -> dict[str, Any]:
-        """对话给页面的样子：带的货源、暂存的概况（删掉了是 null，id 还在）。"""
+        """对话给页面的样子：带的货源、暂存、模板的概况（删掉了是 null，id 还在）。"""
         user_id = request.state.user.id
         goods = stash_item = None
         if chat.pdd_goods_id:
@@ -579,7 +590,12 @@ def create_app(
         if chat.stash_item_id:
             stash_item = stash(request).find(user_id, chat.stash_item_id)
         source = sources(request).find(user_id, chat.source_id) if chat.source_id else None
-        return _agent_chat(chat, goods, stash_item, source)
+        template = (
+            prompt_templates(request).find(user_id, chat.template_id)
+            if chat.template_id is not None
+            else None
+        )
+        return _agent_chat(chat, goods, stash_item, source, template)
 
     def matrix(request: Request) -> AccountMatrix:
         return request.app.state.matrix
@@ -1249,12 +1265,13 @@ def create_app(
 
     @authed.post("/api/agent/chats")
     async def create_agent_chat(request: Request, body: AgentChatIn) -> dict[str, Any]:
-        """开一个对话，拼多多、第三方货源和暂存都可选。不调模型。"""
+        """开一个对话，拼多多、第三方货源、暂存和模板都可选。不调模型。"""
         chat = agent(request).create(
             request.state.user.id,
             pdd_goods_id=body.pdd_goods_id,
             stash_item_id=body.stash_item_id,
             source_id=body.source_id,
+            template_id=body.template_id,
         )
         return {**agent_chat(request, chat), "messages": []}
 
@@ -1773,7 +1790,11 @@ def _source(source: Source, *, detail: bool = False) -> dict[str, Any]:
 
 
 def _agent_chat(
-    chat: AgentChat, goods: PddGoods | None, item: StashedItem | None, source: Source | None = None
+    chat: AgentChat,
+    goods: PddGoods | None,
+    item: StashedItem | None,
+    source: Source | None = None,
+    template: PromptTemplate | None = None,
 ) -> dict[str, Any]:
     pdd_goods = stash_item = None
     if goods:
@@ -1800,6 +1821,14 @@ def _agent_chat(
         "source": _source(source) if source else None,
         "stash_item_id": chat.stash_item_id,
         "stash_item": stash_item,
+        "template_id": chat.template_id,
+        "template": {
+            "id": template.id,
+            "name": template.name,
+            "content_length": len(template.content),
+        }
+        if template
+        else None,
         "created_at": chat.created_at,
         "updated_at": chat.updated_at,
     }

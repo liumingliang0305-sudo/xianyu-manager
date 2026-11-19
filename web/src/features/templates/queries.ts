@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
+import { agentKeys } from "@/features/agent/queries"
 import { api, type PromptTemplateInput } from "@/lib/api"
 
 const templateKeys = {
@@ -31,6 +32,8 @@ export function useSavePromptTemplate(id: number | null) {
     onSuccess: (template) => {
       client.setQueryData(templateKeys.detail(template.id), template)
       void client.invalidateQueries({ queryKey: templateKeys.list, exact: true })
+      // AI 对话列表里显示带的模板名字
+      void client.invalidateQueries({ queryKey: agentKeys.list, exact: true })
     },
   })
 }
@@ -42,6 +45,7 @@ export function useDeletePromptTemplate() {
     onSuccess: (_, id) => {
       client.removeQueries({ queryKey: templateKeys.detail(id) })
       void client.invalidateQueries({ queryKey: templateKeys.list, exact: true })
+      void client.invalidateQueries({ queryKey: agentKeys.list, exact: true })
     },
   })
 }
