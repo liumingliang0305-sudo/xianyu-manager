@@ -1,7 +1,8 @@
 """拼多多货源：浏览器插件在拼多多商品页上读出商品数据推过来，存进本地库，图片下载到本机。
 
-数据来源：商品页（mobile.yangkeduo.com/goods*.html）服务端渲染时写在页面里的
-`window.rawData.store.initDataObj.goods`（2026-11 实测，见 docs/protocol-notes.md#拼多多商品页）。
+数据来源：商品页（mobile.yangkeduo.com/goods*.html）的 `store.initDataObj.goods`：
+服务端渲染时写在 `window.rawData` 里，浏览器里渲染时在 React 根组件的 props 上，结构一样
+（见 docs/protocol-notes.md#拼多多商品页）。
 要在浏览器里登录拼多多才看得到商品页。插件只挑这里用到的字段发过来（不带页面里的登录用户、分享参数），
 这里再整理成固定的格式：标题、主图、详情图、视频、规格（SKU）、商品参数、价格区间、店铺。
 拼多多的详情全是图片，没有文字介绍。
@@ -161,7 +162,7 @@ def goods_url(goods_id: str) -> str:
 
 
 def parse(payload: dict[str, Any]) -> PddGoods:
-    """插件发来的 {"goods": rawData 里挑出来的字段, "mall": {...}} → PddGoods。
+    """插件发来的 {"goods": 页面 initDataObj.goods 里挑出来的字段, "mall": {...}} → PddGoods。
 
     缺商品 ID、标题时抛 ValueError；别的字段缺了、格式不对的跳过。
     """

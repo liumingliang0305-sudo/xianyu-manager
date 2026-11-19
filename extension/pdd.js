@@ -2,7 +2,10 @@
 // readPddGoods 由弹窗用 chrome.scripting.executeScript 注入到页面里跑（world: "MAIN"，才读得到页面的 window），
 // 所以函数里不能用外面的变量，要用的都写在函数里面。
 //
-// 数据在商品页服务端渲染时写进页面的 window.rawData.store.initDataObj（2026-11 实测）。
+// 商品数据是一个 store 里的 initDataObj（goods、mall），页面有两种渲染法，放的地方不一样：
+// - 服务端渲染（2026-11-05 实测）：写进网页的 window.rawData.store；
+// - 浏览器里渲染（2026-11-19 实测，拼多多在分组实验）：网页里只有 window.rawData=null，页面脚本自己向接口取数据，
+//   交给 React 根组件的 props.store，结构和上面一样。插件只读页面已经取到的，不自己请求拼多多。
 // 只挑管理后台用得到的字段发过去：页面里还有登录用户、分享参数这些，不带走。
 
 /**
@@ -32,7 +35,23 @@ export function readPddGoods() {
   if (location.pathname.startsWith("/login")) {
     return { error: "login", message: "拼多多要先登录：在这个页面登录以后，回到商品页再导入" }
   }
-  const init = window.rawData?.store?.initDataObj
+  // 浏览器里渲染时 store 在 React 根组件的 props 上（#main 下面第二层）：从根往下找，限个数免得卡住页面
+  const fromReact = () => {
+    for (const el of document.body?.children ?? []) {
+      const key = Object.keys(el).find((name) => name.startsWith("__reactContainer$"))
+      const queue = key ? [el[key]] : []
+      for (let seen = 0; queue.length && seen < 500; seen++) {
+        const fiber = queue.shift()
+        const found = fiber?.memoizedProps?.store?.initDataObj
+        if (found?.goods) return found
+        if (fiber?.child) queue.push(fiber.child)
+        if (fiber?.sibling) queue.push(fiber.sibling)
+      }
+    }
+    return null
+  }
+  const rendered = window.rawData?.store?.initDataObj
+  const init = rendered?.goods ? rendered : fromReact()
   const goods = init?.goods
   if (!goods?.goodsID) {
     return {

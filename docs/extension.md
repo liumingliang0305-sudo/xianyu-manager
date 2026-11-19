@@ -62,7 +62,7 @@ background.js    cookie 变化和每 10 分钟时推给 /api/login/import（带�
                  弹窗读出来的拼多多商品推给 /api/pdd/goods；管理后台页面要的商品详情排队在后台标签页里拿
 bridge.js        注入到管理后台页面里的传话脚本：页面 postMessage 要详情，转给 background.js，结果交回页面
 goofish.js       注入到闲鱼商品页里跑的函数：用页面自己的 lib.mtop 调商品详情，挑出描述、图片、价格、计数
-pdd.js           注入到拼多多商品页里跑的函数：从 window.rawData 里挑出商品数据
+pdd.js           注入到拼多多商品页里跑的函数：从 window.rawData（服务端渲染）或 React 根组件的 store（浏览器里渲染）挑出商品数据
 lib.js           纯函数（拼 cookie、登录指纹、只允许本机地址、认拼多多商品页、传话脚本注入到哪），可以直接用 node 测
 popup.html/js    弹窗：导入拼多多商品，同步结果、立即同步、管理后台地址、插件令牌
 icons/           插件图标（奶蛙回眸）；16px 的只取头部，小了也看得出眼睛

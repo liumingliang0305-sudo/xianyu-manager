@@ -116,7 +116,7 @@ $("pdd-import").addEventListener("click", async () => {
   try {
     let result
     try {
-      // 在页面自己的环境里跑才读得到 window.rawData；只读，不改页面
+      // 在页面自己的环境里跑才读得到页面的 window.rawData 和 React 组件；只读，不改页面
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         world: "MAIN",

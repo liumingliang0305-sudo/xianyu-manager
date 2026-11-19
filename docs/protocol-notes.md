@@ -657,7 +657,12 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
   App 里分享出来的链接（`goods2.html?ps=…`）打开以后跳到带 `goods_id` 的地址。
 - **要登录**：没登录直接跳到 `login.html`（手机号验证码或扫码）。登录以后页面是服务端渲染的，
   一个内联 `<script>` 里写着 `window.rawData`（这个商品约 28 万字符）。
-- 商品数据在 `window.rawData.store.initDataObj.goods`：
+- ⚠️ 2026-11-19 同一个商品页改成了**浏览器里渲染**（`store.isServerRendered` 为 `false`，`window.leo.data.goods_prerender_oc`
+  是 `"A"`，看着是分组实验）：网页里只有一句 `window.rawData=null`，页面脚本自己调
+  `/proxy/api/api/oak/integration/render` 取数据，再交给 React 根组件——`#main` 上 `__reactContainer$…` 那个 fiber
+  往下第二层的 `memoizedProps.store`。这个 `store.initDataObj` 和下面说的结构完全一样（`goods`、`mall` 字段都没变）。
+  插件两处都找：先 `window.rawData`，没有再从 React 根往下找；只读页面已经取到的，不自己调那个接口。
+- 商品数据在 `store.initDataObj.goods`（服务端渲染时 `store` 就是 `window.rawData.store`）：
   - `goodsID`（数字）、`goodsName` 标题、`sideSalesTip`（"热卖12.4万+件"）；
   - `topGallery[]`：主图，`{url, id, aspectRatio}`，`url` 带 `?imageMogr2/quality/90/thumbnail/1300x9999>`，去掉就是原图；
   - `detailGallery[]`：详情图，`{url, width, height}`，本来就是原图（这个商品 22 张，宽 669–800、高到 1500）。
@@ -670,6 +675,6 @@ templateId: "0", postPriceInCent}`（最多 1000 元）；无需邮寄 `{canFree
   - `minGroupPrice` / `maxGroupPrice`、`minNormalPrice` / `maxNormalPrice`：价格区间（元的字符串）。
 - 店铺在 `initDataObj.mall`：`mallId`、`mallName`。
 - 同一个对象里还有登录用户的 `uin`、带 `pxq_secret_key` 的分享链接这些，插件不带走。
-- 在页面里点到别的商品时可能不刷新整页，`rawData` 还是原来那个商品的；插件比一下网址里的 `goods_id`，对不上就让刷新。
+- 在页面里点到别的商品时可能不刷新整页，读到的还是原来那个商品的；插件比一下网址里的 `goods_id`，对不上就让刷新。
 - 图片（`img.pddpic.com`）和视频（`video5.pddpic.com`）不带 cookie、不带 Referer 也能下载。
   缩略图在原图地址后面加 `?imageMogr2/thumbnail/96x96`（130 KB 的原图变 10 KB）；`thumbnail/960x` 会把小图放大，别用。

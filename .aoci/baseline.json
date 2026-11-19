@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-18T17:15:32Z",
-  "updated_at": "2026-11-19T13:46:55Z",
+  "updated_at": "2026-11-19T15:41:09Z",
   "files": {
     ".claude/launch.json": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "d2b731ee6e252bd52b258494b144678e512ae512a4fbf7c2f85af513ce3e3012",
-      "size": 74301,
-      "normalized_sha256": "d2b731ee6e252bd52b258494b144678e512ae512a4fbf7c2f85af513ce3e3012"
+      "sha256": "564aeaadbb8c6efb39a483b5e2edfef57bf55c0896c8154ab4588de0a1bec0b4",
+      "size": 74497,
+      "normalized_sha256": "564aeaadbb8c6efb39a483b5e2edfef57bf55c0896c8154ab4588de0a1bec0b4"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -95,9 +95,9 @@
     },
     "app/api.py": {
       "role": "index",
-      "sha256": "24d31d1fbec654fa1e86c4b8e84d93e539ac0d608d8cdd972a180cf65be92e04",
-      "size": 83194,
-      "normalized_sha256": "24d31d1fbec654fa1e86c4b8e84d93e539ac0d608d8cdd972a180cf65be92e04"
+      "sha256": "faea32034a3cfc71f84e2d651c19a3e3378667f021fbfe235a5232449b665e39",
+      "size": 83179,
+      "normalized_sha256": "faea32034a3cfc71f84e2d651c19a3e3378667f021fbfe235a5232449b665e39"
     },
     "app/auth.py": {
       "role": "index",
@@ -179,9 +179,9 @@
     },
     "app/pdd.py": {
       "role": "index",
-      "sha256": "e335fbfbbb43f2330366e3c7296edc944a2c3f858c244deab0a0bbd1d287c7be",
-      "size": 18431,
-      "normalized_sha256": "e335fbfbbb43f2330366e3c7296edc944a2c3f858c244deab0a0bbd1d287c7be"
+      "sha256": "0039c0b3b1ae02704bf93172c9132f5226943f18c3adc9652d83f8dd08d97f2a",
+      "size": 18504,
+      "normalized_sha256": "0039c0b3b1ae02704bf93172c9132f5226943f18c3adc9652d83f8dd08d97f2a"
     },
     "app/places.py": {
       "role": "index",
@@ -311,9 +311,9 @@
     },
     "docs/extension.md": {
       "role": "index",
-      "sha256": "f9747985622f5a4fae03241a39e5537cbfdc32f98c9c64f6c98c39168a1d8d2a",
-      "size": 4851,
-      "normalized_sha256": "f9747985622f5a4fae03241a39e5537cbfdc32f98c9c64f6c98c39168a1d8d2a"
+      "sha256": "28c2463b5b12a8dca206d7cb35a08b60df8d9d029e5662749e0cd5fd8efda37f",
+      "size": 4920,
+      "normalized_sha256": "28c2463b5b12a8dca206d7cb35a08b60df8d9d029e5662749e0cd5fd8efda37f"
     },
     "docs/features.md": {
       "role": "index",
@@ -347,9 +347,9 @@
     },
     "docs/protocol-notes.md": {
       "role": "index",
-      "sha256": "d4e53c65d7eca10333756f7b36f844320a5b2dc2f60470ecf969c4aa1f9bc4d8",
-      "size": 70286,
-      "normalized_sha256": "d4e53c65d7eca10333756f7b36f844320a5b2dc2f60470ecf969c4aa1f9bc4d8"
+      "sha256": "4a20c9846b89e6a42cec857f7d0709b8c098bdb03dfd375eb9cc9d9afbbf5d72",
+      "size": 71007,
+      "normalized_sha256": "4a20c9846b89e6a42cec857f7d0709b8c098bdb03dfd375eb9cc9d9afbbf5d72"
     },
     "docs/todo.md": {
       "role": "index",
@@ -403,15 +403,15 @@
     },
     "extension/manifest.json": {
       "role": "index",
-      "sha256": "e0302a060ca67f83107447bfd43797b6c3d36a3aa085730613fd06a30fd024fe",
+      "sha256": "60c8d819512b7dba2308f464986525cb0eec6553a61054c0f099cd6b9845dddd",
       "size": 1078,
-      "normalized_sha256": "e0302a060ca67f83107447bfd43797b6c3d36a3aa085730613fd06a30fd024fe"
+      "normalized_sha256": "60c8d819512b7dba2308f464986525cb0eec6553a61054c0f099cd6b9845dddd"
     },
     "extension/pdd.js": {
       "role": "index",
-      "sha256": "f859e775aa9793daaa3721e64dfeac383e32f71379371b8a5a2dcd979086d6b9",
-      "size": 2129,
-      "normalized_sha256": "f859e775aa9793daaa3721e64dfeac383e32f71379371b8a5a2dcd979086d6b9"
+      "sha256": "d64b21094cc3bd63798b2d0550389e336d7e2c4acd0ebbab7a3aa9781fc3cfad",
+      "size": 3263,
+      "normalized_sha256": "d64b21094cc3bd63798b2d0550389e336d7e2c4acd0ebbab7a3aa9781fc3cfad"
     },
     "extension/popup.html": {
       "role": "index",
@@ -421,9 +421,9 @@
     },
     "extension/popup.js": {
       "role": "index",
-      "sha256": "5e738246054fbaf21ad906b8d01690593a835756715d4896ea90c2ced97a49a8",
-      "size": 5977,
-      "normalized_sha256": "5e738246054fbaf21ad906b8d01690593a835756715d4896ea90c2ced97a49a8"
+      "sha256": "f64bc98237975b971152e347b92f8868f26dcb09c31a0e3e956e3cda4aa06169",
+      "size": 6003,
+      "normalized_sha256": "f64bc98237975b971152e347b92f8868f26dcb09c31a0e3e956e3cda4aa06169"
     },
     "migrations/env.py": {
       "role": "index",

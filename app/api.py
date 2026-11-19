@@ -262,7 +262,7 @@ class CookieImportIn(BaseModel):
 
 
 class PddImportIn(BaseModel):
-    # 拼多多商品页 window.rawData.store.initDataObj 里插件挑出来的字段（见 extension/pdd.js）
+    # 拼多多商品页 store.initDataObj 里插件挑出来的字段（见 extension/pdd.js）
     goods: dict[str, Any]
     mall: dict[str, Any] | None = None
 
