@@ -632,8 +632,8 @@ export function MessagesPage() {
         actions={<ImStatusBar account={account} im={im} />}
       />
 
-      {/* 高度撑满一屏：减掉顶栏、标题行和上下留白，会话列表和聊天记录各自滚动 */}
-      <Card className="grid h-[calc(100svh-12rem)] min-h-[28rem] grid-cols-1 gap-0 py-0 md:grid-cols-[20rem_1fr] lg:h-[calc(100svh-10rem)]">
+      {/* 高度撑满一屏：减掉白纸上下的边距、标题行和上下留白，会话列表和聊天记录各自滚动 */}
+      <Card className="grid h-[calc(100svh-10rem)] min-h-[28rem] grid-cols-1 gap-0 py-0 md:grid-cols-[20rem_1fr]">
         <div className={cn("flex min-h-0 flex-col md:border-r", selected && "hidden md:flex")}>
           <div className="flex flex-col gap-3 border-b px-4 pt-3">
             <SearchInput

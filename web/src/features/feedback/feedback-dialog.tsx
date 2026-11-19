@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils"
 
 import { KIND_LABEL, useCreateFeedback } from "./queries"
 import { ScreenshotPicker } from "./screenshot-picker"
-import { hasFiles, useScreenshots } from "./use-screenshots"
+import { clipboardFiles, pastedNothing, useFileDrop, useScreenshots } from "./use-screenshots"
 
 // 和 app/feedback.py 的限制一致，按 Unicode 字符计数
 const MAX_TITLE = 100
@@ -61,8 +61,8 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
   const [content, setContent] = useState("")
   const [submitted, setSubmitted] = useState(false)
   const [discarding, setDiscarding] = useState(false)
-  const [dragging, setDragging] = useState(false)
   const screenshots = useScreenshots()
+  const dragging = useFileDrop(screenshots.add, create.isPending)
   const titleInput = useRef<HTMLInputElement>(null)
   const contentInput = useRef<HTMLTextAreaElement>(null)
   const body = {
@@ -141,26 +141,16 @@ export function FeedbackDialog({ page, onClose }: { page: string; onClose: () =>
           className="sm:max-w-2xl"
           showCloseButton={!create.isPending}
           onInteractOutside={(event) => event.preventDefault()}
-          // 截图在这个窗口里任何地方粘贴、拖进来都行
+          // 截图在这个窗口里任何地方粘贴都行；拖进来由 useFileDrop 在整个页面上接
           onPaste={(event) => {
-            const files = [...event.clipboardData.files]
-            if (!files.length || create.isPending) return
+            if (create.isPending) return
+            const files = clipboardFiles(event.clipboardData)
+            if (!files.length) {
+              pastedNothing(event.target)
+              return
+            }
             event.preventDefault()
             screenshots.add(files)
-          }}
-          onDragOver={(event) => {
-            if (!hasFiles(event) || create.isPending) return
-            event.preventDefault()
-            setDragging(true)
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
-          }}
-          onDrop={(event) => {
-            if (!hasFiles(event)) return
-            event.preventDefault()
-            setDragging(false)
-            if (!create.isPending) screenshots.add([...event.dataTransfer.files])
           }}
         >
           <DialogHeader>

@@ -1,10 +1,26 @@
-import { ImageOffIcon, ImagePlusIcon, Loader2Icon, RotateCwIcon, XIcon } from "lucide-react"
-import { useRef } from "react"
+import {
+  ClipboardPasteIcon,
+  ImageOffIcon,
+  ImagePlusIcon,
+  Loader2Icon,
+  RotateCwIcon,
+  XIcon,
+} from "lucide-react"
+import { useEffect, useRef } from "react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-import { ACCEPT, MAX_SCREENSHOTS, type Screenshots } from "./use-screenshots"
+import {
+  ACCEPT,
+  CLIPBOARD_SHOT,
+  MAX_SCREENSHOTS,
+  PASTE_KEY,
+  type Screenshots,
+} from "./use-screenshots"
+
+const TILE =
+  "flex size-20 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-input text-xs text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
 
 export function ScreenshotPicker({
   screenshots,
@@ -18,7 +34,14 @@ export function ScreenshotPicker({
   error: string
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
-  const { shots, add, remove, retry } = screenshots
+  const list = useRef<HTMLUListElement>(null)
+  const { shots, add, paste, remove, retry } = screenshots
+  const added = useRef(shots.length)
+  // 在输入框里粘贴、拖进来时截图区可能在弹窗下面没露出来，加了就滚过去，看得到确实加上了
+  useEffect(() => {
+    if (shots.length > added.current) list.current?.scrollIntoView({ block: "nearest" })
+    added.current = shots.length
+  }, [shots.length])
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-4">
@@ -30,6 +53,7 @@ export function ScreenshotPicker({
         </span>
       </div>
       <ul
+        ref={list}
         aria-labelledby="feedback-shots-label"
         aria-describedby="feedback-shots-hint"
         className={cn(
@@ -86,11 +110,27 @@ export function ScreenshotPicker({
             <button
               type="button"
               disabled={disabled}
+              onClick={() => void paste()}
+              aria-label="粘贴剪贴板里的截图"
+              className={TILE}
+            >
+              <ClipboardPasteIcon className="size-5" aria-hidden />
+              粘贴
+            </button>
+          </li>
+        )}
+        {shots.length < MAX_SCREENSHOTS && (
+          // 选文件和粘贴分开两块，看得出截图可以直接粘贴
+          <li>
+            <button
+              type="button"
+              disabled={disabled}
               onClick={() => fileInput.current?.click()}
-              className="flex size-20 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-input text-xs text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+              aria-label="选择截图文件"
+              className={TILE}
             >
               <ImagePlusIcon className="size-5" aria-hidden />
-              加截图
+              选文件
             </button>
             <input
               ref={fileInput}
@@ -113,7 +153,7 @@ export function ScreenshotPicker({
         className={error ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
       >
         {error ||
-          `截好图可以直接在这个窗口里粘贴，也可以拖进来。最多 ${MAX_SCREENSHOTS} 张，每张不超过 20 MB。`}
+          `截好的图在这个窗口里按 ${PASTE_KEY} 或点「粘贴」加进来，存成文件的拖进来或点「选文件」。${CLIPBOARD_SHOT}。最多 ${MAX_SCREENSHOTS} 张，每张不超过 20 MB。`}
       </p>
     </div>
   )

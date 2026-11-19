@@ -24,7 +24,7 @@ import {
   WarehouseIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useState, type ComponentType } from "react"
+import { useState, type ComponentType, type ReactNode } from "react"
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router"
 import { toast } from "sonner"
 
@@ -44,6 +44,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { PasswordDialog } from "@/features/auth/password-dialog"
 import { PluginTokenDialog } from "@/features/auth/plugin-token-dialog"
 import { FeedbackDialog } from "@/features/feedback/feedback-dialog"
@@ -84,53 +85,57 @@ const NAV_ITEM =
 const NAV_ACTIVE = "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
 const NAV_IDLE = "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
 
-function SideNavLink({ to, label, icon: Icon }: NavEntry) {
+/** 窄栏里只剩图标，悬停或键盘移过来时在右边显示名字 */
+function RailTip({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <NavLink
-      to={to}
-      className={({ isActive }) => cn(NAV_ITEM, "h-8 px-2.5", isActive ? NAV_ACTIVE : NAV_IDLE)}
-    >
-      <Icon className="size-4" />
-      {label}
-    </NavLink>
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      {/* 悬停时把窗口拉宽到 1024px 以上，窄栏藏起来了，提示也跟着藏 */}
+      <TooltipContent side="right" sideOffset={6} className="lg:hidden">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
-/** 宽屏：侧栏里竖着排，带图标。当前账号的几页在上，账号矩阵、拼多多货源、AI 助手隔开放在下面 */
-function SideNav() {
+function SideNavLink({ to, label, icon: Icon, compact }: NavEntry & { compact: boolean }) {
+  // 选中状态自己算：套在提示里时 className 不能传函数（Radix 合并 className 会把函数拼成字符串）
+  const active = !!useMatch({ path: to, end: false })
+  const link = (
+    <NavLink
+      to={to}
+      aria-label={compact ? label : undefined}
+      className={cn(NAV_ITEM, compact ? "size-8 justify-center" : "h-8 px-2.5", active ? NAV_ACTIVE : NAV_IDLE)}
+    >
+      <Icon className="size-4" />
+      {!compact && label}
+    </NavLink>
+  )
+  return compact ? <RailTip label={label}>{link}</RailTip> : link
+}
+
+/**
+ * 侧栏里竖着排。当前账号的几页在上，不分账号的隔开放在下面。
+ * `compact`：1024px 以下的窄栏，只有图标，名字悬停时显示。
+ */
+function SideNav({ compact = false }: { compact?: boolean }) {
+  const column = cn("flex flex-col gap-0.5", compact && "items-center")
   return (
-    <nav aria-label="主导航" className="flex flex-col gap-0.5">
+    <nav aria-label="主导航" className={column}>
       {NAV.map((entry) => (
-        <SideNavLink key={entry.to} {...entry} />
+        <SideNavLink key={entry.to} {...entry} compact={compact} />
       ))}
-      <div className="mt-3 flex flex-col gap-0.5">
+      <div className={cn(column, "mt-3")}>
         {SHARED_NAV.map((entry) => (
-          <SideNavLink key={entry.to} {...entry} />
+          <SideNavLink key={entry.to} {...entry} compact={compact} />
         ))}
       </div>
     </nav>
   )
 }
 
-/** 窄屏：去处不多，直接横着放在顶栏里，不藏进菜单 */
-function TopNav() {
-  return (
-    <nav aria-label="主导航" className="flex items-center gap-0.5">
-      {[...NAV, ...SHARED_NAV].map(({ to, label }) => (
-        <NavLink
-          key={to}
-          to={to}
-          className={({ isActive }) => cn(NAV_ITEM, "h-8 px-2.5", isActive ? NAV_ACTIVE : NAV_IDLE)}
-        >
-          {label}
-        </NavLink>
-      ))}
-    </nav>
-  )
-}
-
 /**
- * 当前账号和登录态。宽屏放在侧栏顶上（这个后台管的是哪个账号），窄屏放在顶栏右边。
+ * 当前账号和登录态，放在侧栏顶上（这个后台管的是哪个账号）；窄栏里只剩头像，登录态是右下角的圆点。
  * 菜单里能切到别的账号、添加账号、去账号矩阵管所有账号。
  */
 function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; compact?: boolean }) {
@@ -159,10 +164,16 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {compact ? (
-          <Button variant="ghost" size="sm" aria-label={`闲鱼账号 ${name}，登录${LOGIN_LABEL[state]}`}>
-            <span className="max-w-32 truncate">{name}</span>
-            <LoginDot state={state} />
-          </Button>
+          <button
+            type="button"
+            aria-label={`闲鱼账号 ${name}，登录${LOGIN_LABEL[state]}，点开切换`}
+            className="relative shrink-0 rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50 aria-expanded:ring-2 aria-expanded:ring-input"
+          >
+            <AccountAvatar account={current} size={32} />
+            <span className="absolute right-0 bottom-0 flex rounded-full ring-2 ring-frame">
+              <LoginDot state={state} />
+            </span>
+          </button>
         ) : (
           <button
             type="button"
@@ -184,7 +195,7 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
           </button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={compact ? "end" : "start"} className="w-72">
+      <DropdownMenuContent side={compact ? "right" : "bottom"} align="start" className="w-72">
         <DropdownMenuLabel>切换账号</DropdownMenuLabel>
         {accounts.map((a) => (
           <DropdownMenuItem key={a.id} onSelect={() => setAccount(a.id)} className="gap-2.5">
@@ -234,7 +245,7 @@ function AccountSwitcher({ onLogin, compact = false }: { onLogin: () => void; co
   )
 }
 
-/** 登录的用户：改密码、插件令牌、反馈问题、退出登录。宽屏放在侧栏底下，窄屏是顶栏右边一个图标。 */
+/** 登录的用户：改密码、插件令牌、反馈问题、退出登录。放在侧栏底下，窄栏里是一个图标。 */
 function UserMenu({ compact = false }: { compact?: boolean }) {
   const { username, is_admin: isAdmin } = useUser()
   const [dialog, setDialog] = useState<"password" | "plugin" | "feedback" | null>(null)
@@ -247,7 +258,12 @@ function UserMenu({ compact = false }: { compact?: boolean }) {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           {compact ? (
-            <Button variant="ghost" size="icon-sm" aria-label={`用户 ${username}`}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`用户 ${username}`}
+              className="text-muted-foreground aria-expanded:bg-sidebar-accent"
+            >
               <UserIcon />
             </Button>
           ) : (
@@ -261,7 +277,11 @@ function UserMenu({ compact = false }: { compact?: boolean }) {
             </button>
           )}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align={compact ? "end" : "start"} side={compact ? "bottom" : "top"} className="w-56">
+        <DropdownMenuContent
+          side={compact ? "right" : "top"}
+          align={compact ? "end" : "start"}
+          className="w-56"
+        >
           <DropdownMenuLabel>
             <span className="block text-xs font-normal text-muted-foreground">
               {isAdmin ? "已登录 · 管理员" : "已登录"}
@@ -318,9 +338,17 @@ function ThemeToggle({ labelled = false }: { labelled?: boolean }) {
     )
   }
   return (
-    <Button variant="ghost" size="icon-sm" onClick={() => setTheme(dark ? "light" : "dark")} aria-label={label}>
-      <Icon />
-    </Button>
+    <RailTip label={label}>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setTheme(dark ? "light" : "dark")}
+        aria-label={label}
+        className="text-muted-foreground"
+      >
+        <Icon />
+      </Button>
+    </RailTip>
   )
 }
 
@@ -423,14 +451,14 @@ function Content({ onLogin }: { onLogin: () => void }) {
 }
 
 /**
- * 整体框架：侧栏和窄屏顶栏在一块浅石色的外框上，内容放在外框里的一张白纸上（右、下各留 8px，16px 圆角，1px 边，没有阴影）。
- * 1024px 以下外框只剩一条 48px 的顶栏，白纸铺满。
+ * 整体框架：侧栏在一块浅石色的外框上，内容放在外框里的一张白纸上（上、右、下各留 8px，16px 圆角，1px 边，没有阴影）。
+ * 1024px 以下侧栏收成 56px 宽、只有图标的窄栏，名字悬停时显示；导航的字不会被挤成竖排或挤出窗口。
  */
 export function AppShell() {
   const [loginOpen, setLoginOpen] = useState(false)
   const openLogin = () => setLoginOpen(true)
   return (
-    <div className="min-h-svh bg-frame lg:flex">
+    <div className="flex min-h-svh bg-frame">
       <a
         href="#main"
         className="sr-only z-50 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
@@ -448,16 +476,21 @@ export function AppShell() {
           <ThemeToggle labelled />
         </div>
       </aside>
-      <header className="sticky top-0 z-20 flex h-12 items-center gap-2 bg-frame px-4 lg:hidden">
+      <aside className="sticky top-0 flex h-svh w-14 shrink-0 flex-col items-center gap-4 overflow-y-auto pt-4 pb-3 lg:hidden">
         <Brand compact />
-        <TopNav />
-        <div className="flex-1" />
         <AccountSwitcher onLogin={openLogin} compact />
-        <ThemeToggle />
-        <UserMenu compact />
-      </header>
-      <main id="main" tabIndex={-1} className="min-h-[calc(100svh-3rem)] outline-none min-w-0 flex-1 bg-background lg:my-2 lg:mr-2 lg:min-h-[calc(100svh-1rem)] lg:rounded-2xl lg:border">
-        <div className="mx-auto max-w-[1200px] px-4 pt-5 pb-10 sm:px-6 lg:pt-6">
+        <SideNav compact />
+        <div className="mt-auto flex flex-col items-center gap-0.5">
+          <UserMenu compact />
+          <ThemeToggle />
+        </div>
+      </aside>
+      <main
+        id="main"
+        tabIndex={-1}
+        className="my-2 mr-2 min-h-[calc(100svh-1rem)] min-w-0 flex-1 rounded-2xl border bg-background outline-none"
+      >
+        <div className="mx-auto max-w-[1200px] px-4 pt-6 pb-10 sm:px-6">
           <Content onLogin={openLogin} />
         </div>
       </main>

@@ -57,10 +57,10 @@ xym.sh[OI4T]: F:在本机经SSH以xym用户、带/etc/xym.env在服务器上运�
 auth.md[SI5T]: F:用户和登录文档：后台用户与闲鱼账号的归属规则、xym users管理命令、访问令牌、刷新令牌与输错限次等鉴权设计 | R:code:app/users.py,code:app/auth.py | A:- | S:-
 configuration.md[SC5T]: F:配置文档：环境变量清单与写在哪、数据库、高德key、AI助手模型（魔搭）、问题反馈的GitHub token、data目录内容 | R:code:.env.example,code:app/agent.py,code:app/places.py,code:app/feedback.py | A:- | S:-
 deployment.md[SV5S]: F:部署文档：应用与数据库两台服务器经SSH隧道的架构、首次安装、发版、HTTPS入口、访问后台与日常维护 | R:code:deploy/deploy.sh,code:deploy/xym.service,code:deploy/pg-tunnel.service,code:deploy/Caddyfile | A:- | S:-
-design.md[SU6S]: F:管理后台前端设计规范：Framed sheet框架、颜色字号圆角、列表页与表格、状态标签、空和出错状态、弹窗抽屉与新页面检查清单 | R:code:web/src/index.css | A:- | S:只适配PC（1280–1920px），旧的窄屏处理不再维护，新页面不做手机布局
+design.md[SU6S]: F:管理后台前端设计规范：Framed sheet框架与窄窗口的图标栏、颜色字号圆角、列表页与表格、状态标签、空和出错状态、弹窗抽屉与新页面检查清单 | R:code:web/src/index.css,code:web/src/components/app-shell.tsx | A:- | S:只适配PC（1280–1920px）；1024px以下侧栏收成图标栏，其余旧窄屏处理不再维护，新页面不做手机布局
 development.md[SQ5S]: F:开发文档：前后端本地开发、测试和检查命令与CI、改表结构步骤、在代码里使用xianyu_core、目录结构 | R:code:.github/workflows/ci.yml,code:app/schema.py | A:- | S:-
 extension.md[SE5T]: F:浏览器插件文档：安装与插件令牌、同步闲鱼登录、导入拼多多商品、代拿闲鱼商品详情、权限安全和文件清单 | R:code:extension/manifest.json,code:extension/background.js | A:- | S:-
-features.md[SG6S]: F:功能说明：管理后台每一页能做什么、怎么实现、有什么限制，并标出线上还没走通的功能 | R:code:docs/auth.md,code:docs/extension.md | A:- | S:标了线上还没走通的功能只是代码和测试齐全，未在真实账号完整跑通，不能当已验证
+features.md[SG6M]: F:功能说明：管理后台每一页能做什么、怎么实现、有什么限制，并标出线上还没走通的功能 | R:code:docs/auth.md,code:docs/extension.md | A:- | S:标了线上还没走通的功能只是代码和测试齐全，未在真实账号完整跑通，不能当已验证
 frontend-skills-workflow.md[SU4S]: F:前端Skills使用指南：design-taste-frontend定设计、vercel-react-best-practices做实现、web-design-guidelines审查、浏览器验收的流程和提示词 | R:code:docs/design.md | A:- | S:-
 guard.md[SR5T]: F:限流和风控熔断文档：每账号改动、发消息、读三类每分钟额度与最长等待，熔断30分钟的规则及取值理由 | R:code:xianyu_core/guard.py,code:app/accounts.py | A:- | S:-
 open-source-research.md[SG4S]: F:闲鱼开源项目调研：对比11个候选仓库的协议实现、功能和许可证，结论是自建Python底座xianyu_core、业务全部自研 | R:code:docs/protocol-notes.md | A:- | S:cv-cat/XianYuApis的签名JS没有许可证却被多个项目原样拷贝，不得引入
@@ -122,8 +122,8 @@ main.tsx[EU7T]: F:前端启动：建QueryClient（登录失效、风控、熔断
 
 ===/<repository>/web/src/components/===
 account-bits.tsx[CU3T]: F:账号小组件：登录态圆点和账号头像（没有头像或加载失败时显示昵称首字） | R:code:web/src/lib/api.ts,code:web/src/lib/format.ts | A:LoginDot,AccountAvatar | S:图床缺图时返回1×1空图不报错，按naturalWidth≤1当失败
-app-shell.tsx[EU7L]: F:后台整体框架：侧栏导航、账号切换器、用户菜单（改密、插件令牌、反馈、退出）、深浅色切换，以及登录失效、风控、保持登录到期提示和内容区 | R:code:web/src/hooks/use-account.tsx,code:web/src/components/guard-banner.tsx,code:web/src/components/login-dialog.tsx,code:web/src/features/feedback/feedback-dialog.tsx | A:AppShell | S:账号矩阵、货源、AI助手、模板、反馈页不依赖当前账号，也不显示登录和熔断提示；内容区以账号为key重挂防跨账号串状态；保持登录剩3天起提醒
-brand.tsx[CU1T]: F:标志和“闲鱼管理”字样，紧凑模式只留标志 | R:- | A:Brand | S:-
+app-shell.tsx[EU7L]: F:后台整体框架：侧栏导航（1024px以下收成只有图标、悬停显示名字的窄栏）、账号切换器、用户菜单（改密、插件令牌、反馈、退出）、深浅色切换，以及登录失效、风控、保持登录到期提示和内容区 | R:code:web/src/hooks/use-account.tsx,code:web/src/components/guard-banner.tsx,code:web/src/components/login-dialog.tsx,code:web/src/features/feedback/feedback-dialog.tsx | A:AppShell | S:账号矩阵、货源、AI助手、模板、反馈页不依赖当前账号，无登录熔断提示；内容区以账号为key重挂防串号；套进Tooltip的NavLink不能传函数className（Radix合并会拼成字符串）
+brand.tsx[CU1T]: F:标志和“闲鱼管理”字样，紧凑模式（窄屏图标栏）只露标志，字样只留给读屏 | R:- | A:Brand | S:-
 callout.tsx[CU3T]: F:页面顶部提示条组件：negative和warning两种语气的浅底细边样式，带图标、标题和操作 | R:- | A:Callout | S:-
 count-filter.tsx[CU3T]: F:列表上方的计数卡片兼筛选：基于Radix Tabs，选中项填品牌色，count为null时显示加载灰条 | R:- | A:CountFilter,CountOption | S:-
 guard-banner.tsx[CR5T]: F:当前账号风控熔断期间的顶部提示，显示剩余时间与原因，确认已完成验证后可提前解除熔断 | R:code:web/src/hooks/use-account.tsx,code:web/src/lib/api.ts | A:GuardBanner | S:提前解除前必须二次确认已完成验证，否则再触发风控可能被限号
@@ -172,14 +172,14 @@ queries.ts[AW6T]: F:自动同步数据钩子：读设置与状态、打开页面
 
 ===/<repository>/web/src/features/feedback/===
 feedback-detail.tsx[EQ4S]: F:问题反馈详情：种类、页面、内容、截图和时间，管理员可标记处理、重新打开并推到GitHub，推过的显示issue链接 | R:code:web/src/features/feedback/queries.ts,code:web/src/features/feedback/feedback-image.tsx | A:FeedbackDetail | S:-
-feedback-dialog.tsx[EQ5M]: F:提交问题反馈弹窗：选种类、填标题与内容，截图可粘贴、拖入或选择，附带打开时所在的页面 | R:code:web/src/features/feedback/use-screenshots.ts,code:web/src/features/feedback/screenshot-picker.tsx,code:web/src/features/feedback/queries.ts | A:FeedbackDialog | S:标题内容长度上限与app/feedback.py一致且按Unicode字符计；截图上传中或失败时不能提交
+feedback-dialog.tsx[EQ5M]: F:提交问题反馈弹窗：选种类、填标题与内容，截图可粘贴、拖入或选择，粘贴没有图片时说明原因，附带打开时所在的页面 | R:code:web/src/features/feedback/use-screenshots.ts,code:web/src/features/feedback/screenshot-picker.tsx,code:web/src/features/feedback/queries.ts | A:FeedbackDialog | S:标题内容长度上限与app/feedback.py一致且按Unicode字符计；截图上传中或失败时不能提交；拖放只由useFileDrop在window上接，弹窗上再挂onDrop会重复加图
 feedback-image.tsx[CQ3T]: F:反馈截图缩略图（方形裁切、加载占位、取不到显示坏图标）和在新标签页看原图的链接 | R:code:web/src/features/feedback/queries.ts | A:FeedbackImage,FeedbackImageLink | S:-
 feedback-page.tsx[EQ5M]: F:问题反馈页：普通用户看自己提交的，管理员看所有人的；按状态筛选、搜索、看详情、提交新反馈、标记处理并推成GitHub issue | R:code:web/src/features/feedback/queries.ts,code:web/src/features/feedback/feedback-detail.tsx,code:web/src/features/feedback/issue-dialog.tsx,code:web/src/features/feedback/feedback-dialog.tsx | A:FeedbackPage | S:不分闲鱼账号，没有账号也能进
 feedback-status.tsx[CQ2T]: F:反馈状态标签：已处理是positive，待处理对管理员是action、对提交人是warning | R:code:web/src/components/status-pill.tsx | A:FeedbackStatusPill | S:-
 issue-dialog.tsx[EQ5M]: F:管理员推GitHub issue弹窗：加载默认标题与正文供修改，勾选一起上传的截图（默认全勾），再推送 | R:code:web/src/features/feedback/queries.ts,code:app/feedback.py | A:IssueDialog | S:公开仓库的issue谁都看得到，推前要删掉手机号、订单号、闲鱼账号一类信息
 queries.ts[AQ5S]: F:问题反馈数据钩子：按mine或all取列表、提交、删除、改状态、取issue默认草稿、推送，以及按sha取截图blob地址 | R:code:web/src/lib/api.ts | A:useFeedbackList,useCreateFeedback,useSetFeedbackStatus,useIssueDraft,usePushIssue,useFeedbackImage | S:截图blob地址按哈希永久缓存不释放；issue草稿gcTime为0，每次打开按最新内容重新生成
-screenshot-picker.tsx[CQ3S]: F:反馈截图选择区：缩略图显示上传中、失败可重试、可删除，加图按钮和拖入提示，最多6张 | R:code:web/src/features/feedback/use-screenshots.ts | A:ScreenshotPicker | S:-
-use-screenshots.ts[AQ4T]: F:反馈截图状态钩子：加入即上传到后台换sha，校验格式、20MB和6张上限，支持删除、重试并管理本地预览地址 | R:code:web/src/lib/api.ts,code:app/images.py | A:useScreenshots,hasFiles,MAX_SCREENSHOTS,ACCEPT | S:格式、大小、张数上限须与app/images.py和app/feedback.py保持一致
+screenshot-picker.tsx[CQ3S]: F:反馈截图选择区：缩略图显示上传中、失败可重试、可删除，粘贴与选文件两格，按系统提示截图怎么进剪贴板，新加时滚到可见，最多6张 | R:code:web/src/features/feedback/use-screenshots.ts | A:ScreenshotPicker | S:-
+use-screenshots.ts[AQ4S]: F:反馈截图状态钩子：加入即上传到后台换sha，校验格式、20MB和6张上限，删除、重试、点按钮读剪贴板，另有整窗拖放接收与粘贴取图工具 | R:code:web/src/lib/api.ts,code:app/images.py | A:useScreenshots,useFileDrop,clipboardFiles,pastedNothing,MAX_SCREENSHOTS,ACCEPT | S:格式、大小、张数上限须与app/images.py和app/feedback.py保持一致
 
 ===/<repository>/web/src/features/items/===
 confirm-dialog.tsx[EB4T]: F:商品下架、删除的二次确认弹窗，说明后果并等请求结束再关闭 | R:code:web/src/features/items/queries.ts | A:ConfirmItemDialog | S:下架后想让原商品回来只能在闲鱼App里上架，本系统重新上架会发新商品ID
