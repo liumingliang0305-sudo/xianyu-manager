@@ -8,6 +8,24 @@ export const sourceKeys = {
   list: ["third-party-sources"] as const,
   detail: (id: string) => ["third-party-sources", id] as const,
   image: (id: string, sha: string | null) => ["source-image", id, sha] as const,
+  parsers: ["source-parsers"] as const,
+  detect: (url: string) => ["source-detect", url] as const,
+}
+
+/** 解析方案列表是写死在后台的，取一次就够 */
+export function useSourceParsers() {
+  return useQuery({ queryKey: sourceKeys.parsers, queryFn: api.sourceParsers, staleTime: Infinity })
+}
+
+/** 识别链接：短链接要跟一次跳转，结果几分钟内复用；识别失败不自动重试 */
+export function useDetectSource(url: string) {
+  return useQuery({
+    queryKey: sourceKeys.detect(url),
+    queryFn: () => api.detectSource(url),
+    enabled: !!url,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
 }
 
 export function useSources() {

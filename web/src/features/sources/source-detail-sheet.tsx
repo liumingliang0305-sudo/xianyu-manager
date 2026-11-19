@@ -6,7 +6,7 @@ import {
   Loader2Icon,
   SquarePenIcon,
 } from "lucide-react"
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { Callout } from "@/components/callout"
@@ -33,6 +33,15 @@ import { count, dateTime } from "@/lib/format"
 
 import { useSource } from "./queries"
 import { SourcePhoto } from "./source-photo"
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[4.5rem_1fr] gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 wrap-anywhere">{children}</dd>
+    </div>
+  )
+}
 
 export function SourceDetailSheet({
   sourceId,
@@ -109,6 +118,27 @@ export function SourceDetailSheet({
                 添加闲鱼账号后可建发布草稿，保存货源和 AI 对话可以直接使用。
               </p>
             )}
+            <dl
+              aria-label="货源来源"
+              className="flex flex-col gap-2 rounded-lg border p-3 text-[13px]"
+            >
+              <Field label="网站">
+                {source.platform}
+                <span className="ml-2 text-muted-foreground">{source.host}</span>
+              </Field>
+              <Field label="解析方案">{source.parser_name}</Field>
+              {source.author && <Field label="作者">{source.author}</Field>}
+              <Field label="原网页">
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  {source.url}
+                </a>
+              </Field>
+            </dl>
             {source.missing_images > 0 && (
               <Callout
                 tone="warning"

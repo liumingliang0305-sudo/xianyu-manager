@@ -289,9 +289,11 @@ third_party_sources = Table(
     Column("url", Text, nullable=False),
     Column("title", Text, nullable=False),
     Column("content", Text, nullable=False),
-    Column("platform", Text, nullable=False),
+    Column("platform", Text, nullable=False),  # 哪个网站：简篇、秀米、自我游分销商城……
     Column("author", Text, nullable=False, server_default=""),
     Column("images", Text, nullable=False, server_default="[]"),  # JSON：原地址、本地 sha、宽高
+    # 用哪个解析方案取的（app/source_parsers.py 的方案 id）
+    Column("parser", Text, nullable=False, server_default="generic"),
     Column("imported_at", Double, nullable=False),
     Column("updated_at", Double, nullable=False),
     Index("third_party_sources_user", "user_id", "updated_at"),

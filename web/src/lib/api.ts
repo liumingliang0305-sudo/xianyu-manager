@@ -589,7 +589,12 @@ export interface SourceSummary {
   source_id: string
   url: string
   title: string
+  /** 哪个网站：简篇、秀米、自我游分销商城…… */
   platform: string
+  host: string
+  /** 用哪个解析方案取的 */
+  parser: string
+  parser_name: string
   author: string
   preview: string
   content_length: number
@@ -610,6 +615,31 @@ export interface SourceImage {
 export interface ThirdPartySource extends SourceSummary {
   content: string
   images: SourceImage[]
+}
+
+/** 第三方货源的解析方案：auto 之外可以手动选的 */
+export interface SourceParser {
+  id: string
+  name: string
+  /** 适用的网站 */
+  sites: string
+  /** 怎么取的 */
+  summary: string
+}
+
+/** 粘贴链接后的识别结果：哪个网站、什么链接、该用哪个解析方案 */
+export interface SourceDetection {
+  input_url: string
+  /** 识别用的地址：短链接跳转后的 */
+  url: string
+  host: string
+  site: string
+  /** 链接是什么，如「秀米图文作品」「商城商品页（商品号 1）」 */
+  link: string
+  parser: string
+  /** url 按网址；redirect 短链接跳转后按网址；page 按网页特征；fallback 没认出，按普通网页 */
+  matched_by: "url" | "redirect" | "page" | "fallback"
+  reason: string
 }
 
 /** 提示词模板列表只带正文开头，完整内容在查看、编辑时读取 */
@@ -1271,9 +1301,16 @@ export const api = {
 
   source: (sourceId: string) => request<ThirdPartySource>(`/sources/${encodeURIComponent(sourceId)}`),
 
-  importSource: (url: string) =>
+  sourceParsers: () =>
+    request<{ parsers: SourceParser[] }>("/sources/parsers").then((r) => r.parsers),
+
+  detectSource: (url: string) =>
+    request<SourceDetection>("/sources/detect", { method: "POST", body: JSON.stringify({ url }) }),
+
+  /** parser 为 auto 时后台按识别结果选方案 */
+  importSource: ({ url, parser }: { url: string; parser: string }) =>
     request<{ source: ThirdPartySource; added: boolean }>("/sources", {
-      method: "POST", body: JSON.stringify({ url }),
+      method: "POST", body: JSON.stringify({ url, parser }),
     }),
 
   fetchSourceImages: (sourceId: string) =>

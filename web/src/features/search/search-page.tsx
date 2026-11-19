@@ -1,8 +1,9 @@
 import { CheckIcon, Loader2Icon, SearchIcon } from "lucide-react"
-import { useMemo, useState, type ComponentProps } from "react"
+import { useMemo, useState } from "react"
 import { useSearchParams } from "react-router"
 import { toast } from "sonner"
 
+import { NativeSelect } from "@/components/native-select"
 import { PageHeader } from "@/components/page-header"
 import { EmptyState, LoadError, RowsSkeleton, SearchInput } from "@/components/states"
 import { Button } from "@/components/ui/button"
@@ -20,7 +21,6 @@ import {
   type SearchSort,
 } from "@/lib/api"
 import { count, parseYuan, timeAgo } from "@/lib/format"
-import { cn } from "@/lib/utils"
 
 import {
   useFetchStashDetail,
@@ -100,18 +100,6 @@ function priceError(min: string, max: string): string | null {
   if (low == null || high == null) return "价格填数字，最多两位小数"
   if (low && high && low > high) return "最低价不能高于最高价"
   return null
-}
-
-function NativeSelect({ className, ...props }: ComponentProps<"select">) {
-  return (
-    <select
-      className={cn(
-        "h-8 rounded-lg border border-input bg-transparent px-2 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30",
-        className,
-      )}
-      {...props}
-    />
-  )
 }
 
 /**

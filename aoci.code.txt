@@ -22,7 +22,7 @@ ci.yml[OQ6T]: F:GitHub Actions CI：推main和PR时跑后端ruff检查、格式�
 __init__.py[AG2T]: F:业务层包标记，声明app只通过xianyu_core和闲鱼通信 | R:- | A:- | S:-
 accounts.py[AI8M]: F:闲鱼账号凭证与登录态：按unb读写data/accounts凭证，提供带限流熔断的MtopClient上下文、登录态确认、导入凭证的账号识别与校验 | R:code:xianyu_core/mtop.py,code:xianyu_core/credential.py,code:xianyu_core/guard.py,code:xianyu_core/im.py | A:Accounts,Accounts.mtop,Accounts.check,Accounts.identify,Accounts.verify,LoginState | S:登录态只存内存，EXPIRED和RISK不随max_age自动重查；mtop()退出时无论成败都把client.credential写回文件；verify与identify禁用自动续期，防插件反复推过期cookie绕过sdkSilent限频；remove保留<unb>.im.json设备ID
 agent.py[AA7L]: F:AI助手对话服务：按后台用户存对话，带拼多多、第三方货源和搜索暂存的文字资料用PydanticAI流式调模型，回复完整收到才落库 | R:code:app/pdd.py,code:app/sources.py,code:app/stash.py,code:app/db.py | A:AgentService,AgentService.reply,model_name,qualified,visible_messages,INSTRUCTIONS | S:无provider前缀的模型名补openai-chat:走Chat Completions；模型建不起来只标unavailable不阻断启动；同一对话同时只回一条；出错或中断整轮不落库
-api.py[EG9L]: F:管理后台FastAPI应用工厂：装配全部业务服务和生命周期后台任务，提供鉴权、账号隔离、错误码映射、SSE推送、安全响应头与前端托管的全部HTTP接口 | R:code:app/accounts.py,code:app/users.py,code:app/auth.py,code:app/messages.py,code:app/autosync.py,code:app/drafts.py,code:app/orders.py,code:app/items.py | A:create_app,sse_events,ERRORS,SecurityHeaders,CONTENT_SECURITY_POLICY,REFRESH_COOKIE | S:除health和auth登录、刷新、登出外全挂authed；插件令牌(xymp_)只认/api/login/import与POST /api/pdd/goods；他人账号一律按不存在返回404；同账号平台请求必须持locks[account_id]串行，防凭证文件互相覆盖；ERRORS按序匹配，子类须在父类前；响应金额为分、请求价格为元字符串；REVISION启动时读一次供发版健康检查比对；SSE每次ping前重验用户与账号归属
+api.py[EG9L]: F:管理后台FastAPI应用工厂：装配全部业务服务和生命周期后台任务，提供鉴权、账号隔离、错误码映射、SSE推送、安全响应头与前端托管的全部HTTP接口 | R:code:app/accounts.py,code:app/users.py,code:app/auth.py,code:app/messages.py,code:app/autosync.py,code:app/drafts.py,code:app/orders.py,code:app/items.py | A:create_app,sse_events,ERRORS,SecurityHeaders,CONTENT_SECURITY_POLICY,REFRESH_COOKIE | S:除health和auth登录、刷新、登出外全挂authed；插件令牌(xymp_)只认/api/login/import与POST /api/pdd/goods；他人账号一律按不存在返回404；同账号平台请求必须持locks[account_id]串行，防凭证文件互相覆盖；ERRORS按序匹配，子类须在父类前；响应金额为分、请求价格为元字符串；REVISION启动时读一次供发版健康检查比对；SSE每次ping前重验用户与账号归属；/api/sources/parsers这类静态子路径须注册在同前缀{id}路由之前
 auth.py[DI8S]: F:后台登录鉴权基础：HS256 JWT访问令牌签发与校验、签名密钥文件生成、按用户名和IP的输错限次及限次用来源IP判定 | R:code:app/users.py,code:app/api.py | A:AccessTokens,LoginLimiter,load_key,client_ip,NotSignedInError,TooManyAttemptsError | S:令牌载荷带token_version，作废靠调用方每个请求查用户比对；删data/auth.key即令全部访问令牌失效；限次只在内存、重启清零；回环地址不按IP限次（隧道和本机都是127.0.0.1），真实IP依赖uvicorn只信本机代理的X-Forwarded-For
 autosync.py[AW7M]: F:商品与订单自动同步调度：交易消息触发、打开页面时过期触发、按账号可配间隔定时兜底，结果记sync_jobs并推送同步事件 | R:code:app/items.py,code:app/orders.py,code:app/accounts.py,code:app/db.py | A:AutoSync,AutoSync.visit,AutoSync.later,AutoSync.configure,INTERVAL_CHOICES,JobStatus | S:须在xym serve进程内运行以共享账号锁与限流计数（另起进程限流翻倍）；熔断、失效或风控过的账号不发请求，风控后待人工确认才恢复；自动只翻前3页
 cli.py[EG7M]: F:xym命令行入口：serve启动全功能后台（即时消息、自动同步、登录保活），users管理后台用户（建、列、改密、停用恢复、管理员） | R:code:app/api.py,code:app/users.py,code:app/db.py,code:app/accounts.py,code:app/keepalive.py | A:entry,main,serve,run_users,run_server | S:只承载serve与users，新功能不加命令；entry读.env不覆盖已设变量；首个用户自动成管理员并接手无主账号；退出先关SSE流防uvicorn挂等
@@ -41,9 +41,11 @@ places.py[IB5T]: F:发货地搜索：用自有高德Web服务key调关键字搜�
 prompt_templates.py[AA4S]: F:提示词模板服务：按后台用户增删改查模板名称与正文，列表只返回正文开头的预览 | R:code:app/db.py | A:PromptTemplateService,PromptTemplate,PromptTemplateSummary | S:-
 schema.py[PD8M]: F:全部数据库表结构（SQLAlchemy Core），只供Alembic自动生成和核对迁移，业务代码直接写SQL | R:code:migrations/env.py,code:app/db.py | A:metadata,users,account_owners,items,drafts,orders | S:改表先改这里再alembic --autogenerate并人工检查；命名约定让主键外键名与PostgreSQL默认一致，否则自动生成会出差异；金额存分、时间存秒级double；令牌只存SHA-256、密码只存argon2id哈希
 search.py[AB4T]: F:闲鱼全站商品搜索服务：用指定账号转发一次平台搜索，结果不入库 | R:code:xianyu_core/search.py,code:app/accounts.py | A:SearchService | S:用哪个账号搜就占它的限流，被风控熔断的也是它
-sources.py[IB7L]: F:第三方货源：抓取公开网页（简篇、美篇读__INITIAL_STATE__，普通页取正文容器）的标题、正文与图片，按后台用户存并把图片存到本地 | R:code:app/images.py,code:app/db.py | A:SourceService,SourceService.ingest,extract,public_url,PublicTransport,canonical_url | S:防SSRF：每跳都重解析并要求全部IP为公网，连接钉到校验过的IP并保留SNI防DNS重绑定；仅已知平台HTTPS域名放行Fake-IP段198.18/15；不执行网页脚本
+sources.py[AB7M]: F:第三方货源服务：识别链接并按自动或手动选的解析方案提取，按后台用户存标题、正文、网站、方案和图片，图片下载到本地并可补下 | R:code:app/source_parsers.py,code:app/webpage.py,code:app/images.py,code:app/db.py | A:SourceService,SourceService.detect,SourceService.ingest,SourceService.fetch_images,Source,SourceNotFoundError | S:source_id是方案给出的规范链接的sha256前32位：改规范化规则会让旧货源再导入变成新条目
 stash.py[AB5M]: F:搜索暂存：校验并按后台用户保存搜索结果里的同行商品，以及插件转交的pc.detail完整描述、图片与计数 | R:code:xianyu_core/item.py,code:app/db.py,code:extension/goofish.js | A:StashService,StashedItem,StashService.save_detail,detail_images | S:后台不请求闲鱼，详情只能由插件在用户Chrome里取；再次暂存更新内容但保留首次暂存时间
 users.py[DI8M]: F:后台用户与账号归属：argon2id密码、刷新令牌与插件令牌（库里只存SHA-256）、停用与管理员、闲鱼账号的认领与转移 | R:code:app/db.py,code:app/auth.py | A:Users,User,Users.claim,Users.authenticate,Users.by_plugin_token,AccountTakenError | S:用户名不分大小写；用户不存在也拿假哈希算一遍防计时探测；刷新令牌闲置7天或满30天失效，每用一次顺延；改密或停用使token_version加一，旧访问令牌立即作废；claim遇他人已归属抛AccountTakenError，只有assign会强制转移
+source_parsers.py[IB7L]: F:第三方货源解析方案：按网址、短链接跳转和网页特征识别网站，再用简篇美篇、秀米、自我游商城、135编辑器或通用正文方案提取标题、正文与图片 | R:code:app/webpage.py | A:detect,parse,PARSERS,Detection,Parsed,PageMismatchError | S:手动方案取不到数据即报错不回退；自我游令牌取自登录响应头authtoken，正文不写结算价price；短链跳到认识的网址就停，不请求单页应用
+webpage.py[CS7M]: F:读公开网页的基础：链接规范化、只连公网并钉住校验IP的受限请求（每跳重查、限类型与大小、保留#路由）、不执行脚本的轻量HTML解析与纯文本工具 | R:- | A:fetch,public_url,PublicTransport,canonical_url,Document,plain_text | S:防SSRF：每跳重解析且全部IP须为公网，连接钉到校验过的IP并保留SNI防DNS重绑定；只有PROVIDER_HOSTS的HTTPS域名放行Fake-IP段198.18/15
 
 ===/<repository>/deploy/===
 Caddyfile[ON6T]: F:线上HTTPS入口：Caddy用Let's Encrypt短期IP证书反代到本机8000，加HSTS、请求体限1MB、去Server头、写访问日志 | R:code:deploy/caddy-xym.conf,code:deploy/xym.service | A:- | S:只能用http-01验证（禁tls-alpn-01，国内云会按未备案域名拦）；messages/stream不能压缩，否则SSE被攒住；公网IP来自/etc/caddy/caddy.env不进仓库
@@ -100,6 +102,7 @@ script.py.mako[XD2T]: F:Alembic新迁移文件模板：带类型注解的revisio
 20261116_a62280aa5c57_prompt_templates.py[PA3T]: F:迁移：建prompt_templates按后台用户存模板名称和正文 | R:code:app/schema.py,code:migrations/versions/20261106_c1f35680066f_agent_chats.py | A:upgrade,downgrade | S:-
 20261118_76caee8984cf_feedback.py[PQ4T]: F:迁移：建问题反馈表feedback，users加is_admin并把已有的最早用户设为管理员 | R:code:app/schema.py,code:migrations/versions/20261116_47fa824f061f_third_party_sources_and_chat_attachments.py | A:upgrade,downgrade | S:-
 20261119_5d0c3e9b71a4_feedback_images.py[PQ3T]: F:迁移：feedback加images列（截图sha的JSON文本，默认[]） | R:code:app/schema.py,code:migrations/versions/20261118_76caee8984cf_feedback.py | A:upgrade,downgrade | S:-
+20261119_b83e6d1f4a27_source_parsers.py[PB3T]: F:迁移：third_party_sources加parser记下用哪个解析方案，已有的简篇、美篇回填jianpian，其余默认generic | R:code:app/schema.py,code:migrations/versions/20261119_5d0c3e9b71a4_feedback_images.py | A:upgrade,downgrade | S:-
 
 ===/<repository>/web/===
 .gitignore[FV1T]: F:前端目录的忽略规则：日志、node_modules、dist和编辑器文件 | R:- | A:- | S:-
@@ -131,6 +134,7 @@ login-dialog.tsx[EI6M]: F:登录闲鱼弹窗：扫码登录（取码、轮询进
 page-header.tsx[CU3T]: F:每页顶部标题行（标题、说明、操作）和页内分块Section组件 | R:- | A:PageHeader,Section | S:-
 states.tsx[CU3T]: F:通用状态组件：空状态、空小块、加载失败带重试、列表骨架屏和带图标的搜索框 | R:code:web/src/lib/api.ts | A:EmptyState,EmptyNote,LoadError,RowsSkeleton,SearchInput | S:-
 status-pill.tsx[CU3T]: F:商品、订单、消息共用的状态标签，限定positive、negative、warning、action、neutral、outline六种语气 | R:- | A:StatusPill,Tone | S:action（近黑实心）只给真正轮到自己动手的状态
+native-select.tsx[CU2T]: F:原生下拉框组件，样式与输入框一致，选项少且不需要搜索时用 | R:- | A:NativeSelect | S:-
 
 ===/<repository>/web/src/components/ui/===
 alert-dialog.tsx[CU3S]: F:shadcn风格的警示确认弹窗基础组件（radix-ui AlertDialog）：遮罩、内容、标题描述、确认和取消按钮 | R:code:web/src/components/ui/button.tsx | A:AlertDialog,AlertDialogContent,AlertDialogTitle,AlertDialogDescription,AlertDialogAction,AlertDialogCancel | S:-
@@ -223,17 +227,17 @@ queries.ts[AB7S]: F:发布数据钩子：草稿列表与图片blob、常用地�
 ===/<repository>/web/src/features/search/===
 queries.ts[AB6S]: F:搜索数据钩子：分页加载搜索结果（同样条件十分钟内用缓存）、按用户的暂存列表、乐观暂存与移出、经插件拿暂存详情 | R:code:web/src/lib/api.ts,code:web/src/lib/extension.ts | A:useSearch,stashKey,useStash,useStashItem,useUnstashItem,useFetchStashDetail | S:每页搜索都算当前账号的平台请求；暂存键不含账号；暂存回调放在钩子层，因为连点多件时mutate回调只触发最后一次
 results-table.tsx[EB4S]: F:搜索结果表格：商品缩略图标题与标签、价格、发货地、卖家、想要数、发布时间和暂存开关 | R:code:web/src/features/search/queries.ts | A:ResultsTable | S:暂存列表还没拉下来时暂存按钮不可点，免得重复暂存
-search-page.tsx[EB6L]: F:搜索页：闲鱼全站搜索条件（关键词、排序、发布天数、价格区间、筛选项）写在网址里，翻页合并去重结果，可切到暂存面板 | R:code:web/src/features/search/queries.ts,code:web/src/features/search/results-table.tsx,code:web/src/features/search/stash-panel.tsx | A:SearchPage | S:不加筛选时平台报的总数是能翻到的上限1500（50页×30），实际不止
+search-page.tsx[EB6L]: F:搜索页：闲鱼全站搜索条件（关键词、排序、发布天数、价格区间、筛选项）写在网址里，翻页合并去重结果，可切到暂存面板 | R:code:web/src/features/search/queries.ts,code:web/src/features/search/results-table.tsx,code:web/src/features/search/stash-panel.tsx,code:web/src/components/native-select.tsx | A:SearchPage | S:不加筛选时平台报的总数是能翻到的上限1500（50页×30），实际不止
 stash-detail-sheet.tsx[EB5M]: F:暂存商品详情抽屉：图片画廊、价格、想要浏览收藏、描述与标签，全读本地；没有详情时说明能否经插件拉 | R:code:web/src/features/search/queries.ts,code:web/src/lib/extension.ts | A:StashDetailSheet | S:-
 stash-panel.tsx[EB5M]: F:暂存面板：按用户的暂存列表，标出有没有详情，拉详情、移出与撤销，打开的商品写在网址里 | R:code:web/src/features/search/queries.ts,code:web/src/features/search/stash-detail-sheet.tsx | A:StashPanel | S:看到的是暂存那一刻的样子，价格和想要数可能已经变了
 
 ===/<repository>/web/src/features/sources/===
 delete-dialog.tsx[EB3T]: F:删除第三方货源的确认弹窗 | R:code:web/src/features/sources/queries.ts | A:DeleteSourceDialog | S:-
-import-dialog.tsx[EB4S]: F:导入第三方货源弹窗：粘贴公开网页链接，由后台提取正文和图片 | R:code:web/src/features/sources/queries.ts,code:app/sources.py | A:ImportSourceDialog | S:-
-queries.ts[AB5T]: F:第三方货源数据钩子：列表、详情、本地图片、导入、补下载图片、删除和建发布草稿，货源变了顺带刷新AI对话列表 | R:code:web/src/lib/api.ts,code:web/src/features/agent/queries.ts,code:web/src/features/publish/queries.ts | A:sourceKeys,useSources,useSourceImage,useImportSource,useDeleteSource,useDraftFromSource | S:-
-source-detail-sheet.tsx[EB5M]: F:第三方货源详情抽屉：来源链接、正文和本地图片，可带入AI对话或建发布草稿（没有闲鱼账号时不能建草稿） | R:code:web/src/features/sources/source-photo.tsx,code:web/src/features/sources/queries.ts | A:SourceDetailSheet | S:-
+import-dialog.tsx[EB5M]: F:导入第三方货源弹窗：粘贴链接后防抖识别，展示网站、链接、识别方式与解析方案，可手动换方案，再由后台提取正文和图片 | R:code:web/src/features/sources/queries.ts,code:web/src/components/native-select.tsx,code:app/source_parsers.py | A:ImportSourceDialog | S:-
+queries.ts[AB5T]: F:第三方货源数据钩子：解析方案列表、链接识别、列表、详情、本地图片、导入、补下载图片、删除和建发布草稿，货源变了顺带刷新AI对话列表 | R:code:web/src/lib/api.ts,code:web/src/features/agent/queries.ts,code:web/src/features/publish/queries.ts | A:sourceKeys,useSourceParsers,useDetectSource,useSources,useImportSource,useDraftFromSource | S:-
+source-detail-sheet.tsx[EB5M]: F:第三方货源详情抽屉：网站、解析方案、作者与原网页，正文和本地图片，可带入AI对话或建发布草稿（没有闲鱼账号时不能建草稿） | R:code:web/src/features/sources/source-photo.tsx,code:web/src/features/sources/queries.ts | A:SourceDetailSheet | S:-
 source-photo.tsx[CB3T]: F:第三方货源图片：按需鉴权读取本地副本成blob，离开页面时释放，不向原站发查看请求 | R:code:web/src/features/sources/queries.ts | A:SourcePhoto | S:-
-sources-page.tsx[EB6M]: F:第三方货源页：导入的网页货源列表与搜索，看详情、建草稿、开AI对话、删除 | R:code:web/src/features/sources/queries.ts,code:web/src/features/sources/source-detail-sheet.tsx,code:web/src/features/agent/queries.ts | A:SourcesPage | S:-
+sources-page.tsx[EB6M]: F:第三方货源页：导入的网页货源列表（含网站与解析方案列）与搜索，看详情、建草稿、开AI对话、删除 | R:code:web/src/features/sources/queries.ts,code:web/src/features/sources/source-detail-sheet.tsx,code:web/src/features/sources/import-dialog.tsx,code:web/src/features/agent/queries.ts | A:SourcesPage | S:-
 
 ===/<repository>/web/src/features/templates/===
 queries.ts[AA4T]: F:提示词模板数据钩子：列表、详情、新建或保存、删除 | R:code:web/src/lib/api.ts | A:usePromptTemplates,usePromptTemplate,useSavePromptTemplate,useDeletePromptTemplate | S:-

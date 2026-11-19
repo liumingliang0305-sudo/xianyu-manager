@@ -72,9 +72,14 @@ export function SourcesPage() {
   const visible = all.filter(
     (source) =>
       !text ||
-      [source.title, source.author, source.platform, source.url, source.preview].some((part) =>
-        part.toLowerCase().includes(text),
-      ),
+      [
+        source.title,
+        source.author,
+        source.platform,
+        source.parser_name,
+        source.url,
+        source.preview,
+      ].some((part) => part.toLowerCase().includes(text)),
   )
   const incomplete = all.filter((source) => source.missing_images > 0).length
 
@@ -129,7 +134,8 @@ export function SourcesPage() {
           </Button>
         }
       >
-        保存简篇等公开网页的正文和图片，写文案时可在 AI 对话中选择。
+        粘贴简篇、秀米、135编辑器、自我游商城等网页链接，自动识别网站和解析方案，保存正文和图片，写文案时可在
+        AI 对话中选择。
       </EmptyState>
     )
   else if (visible.length === 0) body = <EmptyState>没有匹配「{search.trim()}」的货源</EmptyState>
@@ -139,6 +145,7 @@ export function SourcesPage() {
         <TableHeader>
           <TableRow>
             <TableHead className="w-full min-w-64">货源</TableHead>
+            <TableHead>网站 · 解析方案</TableHead>
             <TableHead className="text-right">正文</TableHead>
             <TableHead className="text-right">图片</TableHead>
             <TableHead>保存时间</TableHead>
@@ -162,10 +169,14 @@ export function SourcesPage() {
                       {source.title}
                     </span>
                     <span className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                      {source.platform} · {source.author || new URL(source.url).hostname}
+                      {[source.author, source.host].filter(Boolean).join(" · ")}
                     </span>
                   </span>
                 </button>
+              </TableCell>
+              <TableCell>
+                <span className="block text-sm">{source.platform}</span>
+                <span className="block text-xs text-muted-foreground">{source.parser_name}</span>
               </TableCell>
               <TableCell className="text-right text-muted-foreground tabular-nums">
                 {count(source.content_length)} 字
@@ -256,7 +267,7 @@ export function SourcesPage() {
         description={
           all.length
             ? `${count(all.length)} 条货源${incomplete ? ` · ${incomplete} 条图片未下全` : ""} · 最近保存 ${timeAgo(all[0].updated_at)}`
-            : "简篇等公开网页的正文与图片，名下所有闲鱼账号共用"
+            : "简篇、秀米、135编辑器、自我游商城等网页的正文与图片，名下所有闲鱼账号共用"
         }
         actions={
           <Button onClick={() => setAdding(true)}>
@@ -270,7 +281,7 @@ export function SourcesPage() {
           <SearchInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜标题、作者或来源…"
+            placeholder="搜标题、作者、网站或解析方案…"
             aria-label="搜索第三方货源"
             className="w-72"
           />

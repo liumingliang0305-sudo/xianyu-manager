@@ -35,8 +35,10 @@
 - 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
   按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
   照它在这个账号建一个发布草稿。
-- 第三方货源（app/sources.py）：POST /api/sources 提取公开网页正文和图片，按用户保存，
-  GET /api/sources/{source_id} 查看详情，本地图片鉴权后读取；可建草稿或带进 AI 对话。
+- 第三方货源（app/sources.py）：POST /api/sources/detect 识别链接属于哪个网站、该用哪个
+  解析方案，GET /api/sources/parsers 列出可手动选的方案；POST /api/sources 按识别或手动选的
+  方案提取正文和图片，按用户保存，GET /api/sources/{source_id} 查看详情，本地图片鉴权后读取；
+  可建草稿或带进 AI 对话。
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
@@ -63,6 +65,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import websockets
@@ -118,6 +121,7 @@ from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService, draft
 from app.places import PlaceSearch, PlacesUnavailableError
 from app.prompt_templates import PromptTemplateNotFoundError, PromptTemplateService
 from app.search import SearchService
+from app.source_parsers import PARSERS, parser_info
 from app.sources import Source, SourceNotFoundError, SourceService
 from app.stash import StashedItem, StashNotFoundError, StashService
 from app.users import PLUGIN_TOKEN_PREFIX, REFRESH_IDLE, AccountTakenError, User, Users
@@ -324,6 +328,11 @@ class AgentMessageIn(BaseModel):
 
 
 class SourceImportIn(BaseModel):
+    url: str
+    parser: str = "auto"  # auto：按识别结果；否则是手动选的方案 id
+
+
+class SourceDetectIn(BaseModel):
     url: str
 
 
@@ -916,9 +925,17 @@ def create_app(
         )
         return _draft(draft)
 
+    @authed.get("/api/sources/parsers")
+    async def source_parsers() -> dict[str, Any]:
+        return {"parsers": [asdict(parser) for parser in PARSERS]}
+
+    @authed.post("/api/sources/detect")
+    async def detect_source(request: Request, body: SourceDetectIn) -> dict[str, Any]:
+        return (await sources(request).detect(body.url)).public()
+
     @authed.post("/api/sources")
     async def import_source(request: Request, body: SourceImportIn) -> dict[str, Any]:
-        source, added = await sources(request).ingest(request.state.user.id, body.url)
+        source, added = await sources(request).ingest(request.state.user.id, body.url, body.parser)
         return {"source": _source(source, detail=True), "added": added}
 
     @authed.get("/api/sources")
@@ -1738,6 +1755,9 @@ def _source(source: Source, *, detail: bool = False) -> dict[str, Any]:
         "url": source.url,
         "title": source.title,
         "platform": source.platform,
+        "host": urlsplit(source.url).hostname or "",
+        "parser": source.parser,
+        "parser_name": parser_info(source.parser).name,
         "author": source.author,
         "preview": source.content[:180],
         "content_length": len(source.content),
