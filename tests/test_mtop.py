@@ -6,7 +6,13 @@ import httpx
 import pytest
 
 from xianyu_core.credential import Credential
-from xianyu_core.errors import AuthRequiredError, MtopError, RiskControlError
+from xianyu_core.errors import (
+    AuthRequiredError,
+    MtopError,
+    PublishBlockedError,
+    RiskControlError,
+    WebUnsupportedError,
+)
 from xianyu_core.mtop import MtopClient
 from xianyu_core.sign import mtop_sign
 
@@ -113,6 +119,10 @@ def test_token_expired_without_new_token_raises_instead_of_looping():
         (["FAIL_SYS_USER_VALIDATE::需要验证"], RiskControlError),
         (["FAIL_SYS_SESSION_EXPIRED::Session过期"], AuthRequiredError),
         (["FAIL_BIZ_ITEM_NOT_EXIST::宝贝不存在"], MtopError),
+        (
+            ["FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布"],
+            WebUnsupportedError,
+        ),
     ],
 )
 def test_error_codes_are_classified(ret, error):
@@ -126,6 +136,29 @@ def test_error_codes_are_classified(ret, error):
     with pytest.raises(error) as exc_info:
         run(go())
     assert exc_info.value.ret == [ret[0].split("::")[0]]
+
+
+@pytest.mark.parametrize("api", ["mtop.idle.pc.idleitem.publish", "mtop.idle.pc.idleitem.edit"])
+def test_web_unsupported_item_is_a_clear_publish_block(api):
+    """图书这类商品网页端发布、编辑都不让：给一句能看懂的话，算发布被拦的一种。
+
+    平台原文留在 raw 里。
+    """
+    ret = ["FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布"]
+
+    def handler(request):
+        return httpx.Response(200, json={"ret": ret})
+
+    async def go():
+        async with make_client(handler, {"_m_h5_tk": "tok_0"}) as mtop:
+            await mtop.call(api, {"itemId": "1"})
+
+    with pytest.raises(WebUnsupportedError) as exc_info:
+        run(go())
+    error = exc_info.value
+    assert isinstance(error, PublishBlockedError)
+    assert "FAIL_BIZ" not in str(error) and "闲鱼 App" in str(error)
+    assert error.raw == {"ret": ret}
 
 
 def test_punish_redirect_is_risk_control():

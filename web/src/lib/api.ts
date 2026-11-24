@@ -105,6 +105,11 @@ export interface Item {
   on_platform: boolean
   first_seen_at: number
   synced_at: number
+  /**
+   * 闲鱼说这个商品网页端发布、编辑不了（图书这类分类）时那次的原因，页面不再让点重新上架、编辑。
+   * 从改动记录里看，商品列表才有；没碰到过是 null
+   */
+  web_blocked?: string | null
 }
 
 /**
@@ -141,6 +146,8 @@ export interface ItemOp {
     from_item?: string
     /** 编辑：改了哪几块（"描述"、"图片"、"价格"……）；改了价格时 from、to 是新旧售价 */
     fields?: string[]
+    /** 失败是因为闲鱼说这个商品网页端发布、编辑不了 */
+    web_unsupported?: boolean
   }
   ok: boolean
   error: string | null

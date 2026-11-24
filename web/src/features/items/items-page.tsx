@@ -13,7 +13,7 @@ import { AutoSyncButton } from "@/features/autosync/auto-sync-dialog"
 import { useAutoSyncVisit, useSyncJob, useSyncStream } from "@/features/autosync/queries"
 import { useCurrentAccount } from "@/hooks/use-account"
 import { useUrlParam } from "@/hooks/use-url-param"
-import { errorMessage, type Item } from "@/lib/api"
+import { ApiError, errorMessage, type Item } from "@/lib/api"
 import { itemState, timeAgo, type ItemState } from "@/lib/format"
 
 import { ConfirmItemDialog } from "./confirm-dialog"
@@ -91,17 +91,22 @@ export function ItemsPage() {
       },
     )
   }
-  // 重新上架：照原样直接发一个新商品。发不出去时草稿留在发布页，可以去改了再发
+  // 重新上架：照原样直接发一个新商品。发不出去时草稿留在发布页，可以去改了再发。
+  // 闲鱼说网页端发不了的（图书这类分类）改了也发不了，不给"编辑后上架"
   const relistNow = (item: Item) => {
     if (relist.isPending) return
     relist.mutate(
       { itemId: item.item_id, publish: true },
       {
         onSuccess: (draft) => toast.success(`已重新上架，新商品 ID ${draft.item_id}`),
-        onError: (error) =>
-          toast.error(`重新上架失败：${errorMessage(error)}`, {
-            action: { label: "编辑后上架", onClick: () => editRelist(item) },
-          }),
+        onError: (error) => {
+          const message = `重新上架失败：${errorMessage(error)}`
+          if (error instanceof ApiError && error.code === "web_unsupported") toast.error(message)
+          else
+            toast.error(message, {
+              action: { label: "编辑后上架", onClick: () => editRelist(item) },
+            })
+        },
       },
     )
   }

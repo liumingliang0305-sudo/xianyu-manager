@@ -23,6 +23,8 @@
   .../drafts/{id}/... 改，.../drafts/{id}/publish 提交到闲鱼；
 - 重新上架：POST .../items/{id}/relist 照下架、卖掉的商品抄一个发新商品的草稿，在发布页改好了发；
   请求体 {"publish": true} 是抄完直接发；
+- 闲鱼说网页端发布、编辑不了的商品（图书这类分类）：重新上架、编辑、改价返回 409 web_unsupported，
+  商品列表里这件带上 `web_blocked`（原因），页面不再让点重新上架、编辑；
 - 账号矩阵（app/matrix.py）：GET /api/accounts 每个账号带上昵称头像、备注、
   在售 / 待发货 / 未读几个数和即时消息状态；PUT .../remark 改备注，
   DELETE /api/accounts/{id} 移除账号（删凭证和归属，本地数据留着）；
@@ -138,14 +140,16 @@ from xianyu_core.errors import (
     AuthRequiredError,
     CircuitOpenError,
     ImSendUncertainError,
+    PublishBlockedError,
     RateLimitedError,
     RiskControlError,
+    WebUnsupportedError,
     XianyuError,
 )
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.order import SOLD
-from xianyu_core.publish import PublishBlockedError, strip_emoji
+from xianyu_core.publish import strip_emoji
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -213,6 +217,7 @@ ERRORS: list[tuple[type[Exception], int, str]] = [
     (CircuitOpenError, 503, "circuit_open"),
     (RateLimitedError, 429, "rate_limited"),
     (ImSendUncertainError, 504, "send_uncertain"),
+    (WebUnsupportedError, 409, "web_unsupported"),
     (PublishBlockedError, 409, "publish_blocked"),
     (PlacesUnavailableError, 503, "places_unavailable"),
     (XianyuError, 502, "platform_error"),
@@ -1080,9 +1085,10 @@ def create_app(
     async def relist_item(
         request: Request, account_id: str, item_id: str, body: RelistIn | None = None
     ) -> dict[str, Any]:
-        """照这个商品抄一个发新商品的草稿（请求一次 editDetail），有没发的就接着用。
+        """照这个商品抄一个发新商品的草稿，有没发的就接着用。
 
-        `publish` 是抄完直接发；发失败了草稿留在发布页的列表里，原因记在上面。
+        新抄的请求一次 editDetail，再按类目推荐一次：分类网页端发不了的不建草稿，
+        409 web_unsupported。`publish` 是抄完直接发；发失败了草稿留在发布页的列表里，原因记在上面。
         """
         account_id = account(request, account_id)
         async with locks[account_id]:

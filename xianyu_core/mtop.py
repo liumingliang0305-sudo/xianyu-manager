@@ -3,7 +3,8 @@
 - 响应里的 Set-Cookie 会自动进 cookie jar，`credential` 属性随时拿到最新 cookie；
 - 平台说 token 过期并下发了新 `_m_h5_tk` 时，用新 token 重签一次；
 - 会话过期时先试一次免密续期（见 renew.py），成功就重签重试一次，不行再抛 AuthRequiredError；
-- 风控错误一律抛 RiskControlError，不重试，也不续期；传了 guard 时顺手熔断这个账号（见 guard.py）。
+- 风控错误一律抛 RiskControlError，不重试，也不续期；传了 guard 时顺手熔断这个账号（见 guard.py）；
+- 商品网页端发布、编辑不了（图书这类分类）抛 WebUnsupportedError，业务层不用认错误码。
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from xianyu_core.errors import (
     MtopError,
     RiskControlError,
     SignError,
+    WebUnsupportedError,
     XianyuError,
 )
 from xianyu_core.renew import RenewResult, silent_renew
@@ -43,6 +45,12 @@ TOKEN_CODES = frozenset(
 SESSION_CODES = frozenset({"FAIL_SYS_SESSION_EXPIRED", "FAIL_SYS_ILLEGAL_ACCESS"})
 RISK_CODES = frozenset({"RGV587_ERROR", "FAIL_SYS_USER_VALIDATE"})
 SIGN_CODES = frozenset({"FAIL_SYS_ILLEGAL_REQUEST", "FAIL_SYS_SIGN_ERROR"})
+# 这个商品网页端发布、编辑不了（图书这类分类），发布和编辑接口都会回。平台原话是
+# "该商品暂不支持网页发布，请到闲鱼APP发布"
+WEB_UNSUPPORTED_CODES = frozenset({"FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT"})
+WEB_UNSUPPORTED_TEXT = (
+    "闲鱼不让在网页端发布、编辑这个商品（图书这类分类只能在 App 里发），请到闲鱼 App 里操作"
+)
 
 MTOP_HEADERS = {
     "accept": "application/json",
@@ -302,4 +310,6 @@ def _classify(api: str, codes: list[str], raw: dict[str, Any]) -> XianyuError:
         return AuthRequiredError(f"[{api}] 登录态失效：{joined}", ret=codes, raw=raw)
     if SIGN_CODES & set(codes):
         return SignError(f"[{api}] 签名或参数非法：{joined}", ret=codes, raw=raw)
+    if WEB_UNSUPPORTED_CODES & set(codes):
+        return WebUnsupportedError(WEB_UNSUPPORTED_TEXT, ret=codes, raw=raw)
     return MtopError(f"[{api}] 调用失败：{joined or '没有返回 ret'}", ret=codes, raw=raw)

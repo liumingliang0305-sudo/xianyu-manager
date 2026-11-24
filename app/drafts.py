@@ -18,12 +18,18 @@ origin 改，表单里没有的（数量、服务……）原样带回。提交�
 请求体照 origin 拼，和编辑的一样（原来的图不重传，属性、服务、App 里设的运费模板原样带上），
 去掉 itemId、数量改成 1 件，调发布接口。发出去的商品 ID 是新的，原来的商品不动。
 记进 item_ops 的 action 是 relist。
+
+网页端发不了的商品（图书、要填证书编号之类的分类）：建重新上架的草稿前和发布页一样按类目推荐查一遍，
+发不了的不建草稿，直接报 WebUnsupportedError。没查出来、到发布或编辑时平台才说的，平台的错误也是
+WebUnsupportedError，草稿留着、原因记在上面（和别的发布失败一样）。这几种失败的改动记录都标上
+web_unsupported，商品页据此不再让点重新上架、编辑（见 app/items.py）。
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -32,7 +38,8 @@ from typing import Any, Protocol
 from app.accounts import Accounts
 from app.db import Database, Row
 from app.images import ImageStore, drop_unused
-from app.items import ONLINE, ItemService
+from app.items import ONLINE, WEB_UNSUPPORTED, ItemService
+from xianyu_core.errors import MtopError, WebUnsupportedError
 from xianyu_core.item import (
     ItemApi,
     ItemCard,
@@ -62,6 +69,8 @@ from xianyu_core.publish import (
     submit_payload,
     unsupported_cards,
 )
+
+log = logging.getLogger(__name__)
 
 ADDRESS_KEYS = ("area", "city", "divisionId", "gps", "poiId", "poiName", "prov")
 TITLE_LENGTH = 30  # 发布后先记进商品表的标题取描述的前多少个字，同步时换成平台截的
@@ -441,6 +450,8 @@ class DraftService:
 
         发布出去是一个新商品（新的商品 ID，想要、浏览从零算），原来的商品不动。
         这个商品有还没发的重新上架草稿就接着用，不请求平台；发过的留着，再上架就再抄一个。
+        抄之前按原商品的类目推荐一次（发布页、编辑页也是这样），网页端发不了的分类不建草稿，
+        记一条失败的重新上架，抛 WebUnsupportedError。
         """
         record = self._items.get(account_id, item_id)
         if record and record.on_platform and record.status == ONLINE:
@@ -454,8 +465,21 @@ class DraftService:
             return Draft.from_row(row)
         async with self._accounts.mtop(account_id) as mtop:
             detail = await ItemApi(mtop).edit_detail(item_id)
-        if detail.get("itemSkuList"):
-            raise ValueError("多规格商品网页端发不了，请在闲鱼 App 里重新上架")
+            if detail.get("itemSkuList"):
+                raise ValueError("多规格商品网页端发不了，请在闲鱼 App 里重新上架")
+            unsupported = await _web_unsupported(PublishApi(mtop), detail)
+        if unsupported:
+            cards = "、".join(unsupported)
+            message = f"这个商品的分类网页端发不了（要填{cards}），请到闲鱼 App 里重新上架"
+            price = _int_or_none((detail.get("itemPriceDTO") or {}).get("priceInCent"))
+            self._items.log_op(
+                account_id,
+                "",
+                "relist",
+                {"price": price, "from_item": item_id, WEB_UNSUPPORTED: True},
+                error=message,
+            )
+            raise WebUnsupportedError(message)
         return self._insert_from_detail(account_id, detail, relist_item_id=item_id)
 
     def _insert_from_detail(
@@ -537,6 +561,8 @@ class DraftService:
                 item_id = await api.publish(await self._publish_payload(api, draft))
         except Exception as exc:
             message = str(exc) or type(exc).__name__
+            if isinstance(exc, WebUnsupportedError):
+                detail[WEB_UNSUPPORTED] = True
             self._items.log_op(account_id, "", action, detail, error=message)
             self._db.execute("UPDATE drafts SET error = %s WHERE id = %s", (message, draft.id))
             raise
@@ -616,6 +642,8 @@ class DraftService:
                 await ItemApi(mtop).submit(payload)
         except Exception as exc:
             message = str(exc) or type(exc).__name__
+            if isinstance(exc, WebUnsupportedError):
+                detail[WEB_UNSUPPORTED] = True
             self._items.log_op(account_id, item_id, "edit", detail, error=message)
             self._db.execute("UPDATE drafts SET error = %s WHERE id = %s", (message, draft.id))
             raise
@@ -759,6 +787,27 @@ def address_option(poi: dict[str, Any]) -> dict[str, Any]:
         del parts[1]
     key = str(poi.get("poiId"))
     return {"key": key, "name": dto["poiName"], "detail": "".join(parts), "address": dto}
+
+
+async def _web_unsupported(api: PublishApi, detail: dict[str, Any]) -> list[str]:
+    """照商品现在的描述、标签和类目推荐一次，返回网页端发不了的卡片名（和发新商品一样按
+    `unsupported_cards` 查），能发是空列表。推荐出的结果不存，草稿还是照原商品的标签和类目。
+
+    推荐接口报一般的错不拦着：发布时平台还会再查（WebUnsupportedError）。
+    """
+    desc = strip_emoji((detail.get("itemTextDTO") or {}).get("desc") or "")
+    if not desc.strip():
+        return []
+    try:
+        result = await api.recommend(
+            desc,
+            labels=detail.get("itemLabelExtList") or [],
+            category=detail.get("itemCatDTO") or {},
+        )
+    except MtopError as exc:
+        log.warning("查分类网页端能不能发时推荐失败，先不拦：%s", exc)
+        return []
+    return unsupported_cards(result.cards)
 
 
 def _changed(origin: dict[str, Any], payload: dict[str, Any]) -> list[str]:

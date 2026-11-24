@@ -29,6 +29,16 @@ function change(op: ItemOp): string {
   return ""
 }
 
+/**
+ * 改的是哪件：商品 ID 换成标题。发布失败的还没有商品 ID，显示草稿；
+ * 网页端发不了、没建草稿的重新上架，显示照着抄的那件
+ */
+function target(op: ItemOp, titles: Map<string, string>): string {
+  const itemId = op.item_id || (op.detail.draft_id == null ? op.detail.from_item : undefined)
+  if (itemId) return titles.get(itemId) ?? itemId
+  return `草稿 #${op.detail.draft_id}`
+}
+
 /** 改动记录。`titles` 用来把商品 ID 换成标题，找不到时显示 ID。 */
 export function OpsList({ ops, titles }: { ops: ItemOp[]; titles?: Map<string, string> }) {
   if (ops.length === 0) {
@@ -50,9 +60,7 @@ export function OpsList({ ops, titles }: { ops: ItemOp[]; titles?: Map<string, s
               <span className="font-medium">{ACTION_LABEL[op.action] ?? op.action}</span>
               <span className="tabular-nums">{change(op)}</span>
               {titles && (
-                <span className="truncate text-muted-foreground">
-                  {op.item_id ? (titles.get(op.item_id) ?? op.item_id) : `草稿 #${op.detail.draft_id}`}
-                </span>
+                <span className="truncate text-muted-foreground">{target(op, titles)}</span>
               )}
             </div>
             {!op.ok && <p className="text-xs text-destructive">失败：{op.error}</p>}
