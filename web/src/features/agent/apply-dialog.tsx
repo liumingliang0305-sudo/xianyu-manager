@@ -3,6 +3,7 @@ import { useId, useState } from "react"
 import { Link, useNavigate } from "react-router"
 import { toast } from "sonner"
 
+import { ImagePickerDialog } from "@/components/image-picker-dialog"
 import { NativeSelect } from "@/components/native-select"
 import { EmptyNote, LoadError, RowsSkeleton } from "@/components/states"
 import { StatusPill } from "@/components/status-pill"
@@ -54,12 +55,24 @@ function draftPath(draft: Draft): string {
 }
 
 /**
- * 新草稿带哪些图：对话带的拼多多、第三方货源里下载好的，默认和照货源建草稿一样（主图，最多 9 张）。
- * 暂存的同行商品是别人在闲鱼上卖的，图不带。以后挑图的弹窗接在这一块里，挑好的作为 images 发给后台。
+ * 新草稿带哪些图：对话带的拼多多、第三方货源里下载好的，默认和照货源建草稿一样（主图，最多 9 张），
+ * 点「挑图」在全部能带的图里重新挑、排顺序。暂存的同行商品是别人在闲鱼上卖的，图不带。
+ * `picked` 是挑过的（按顺序），没挑过是 null，用后台给的默认。
  */
-function NewDraftImages({ chat }: { chat: AgentChatSummary }) {
+function NewDraftImages({
+  chat,
+  picked,
+  onPick,
+  disabled,
+}: {
+  chat: AgentChatSummary
+  picked: string[] | null
+  onPick: (shas: string[]) => void
+  disabled: boolean
+}) {
   const hasGoods = chat.pdd_goods_id != null || chat.source_id != null
   const found = useAgentChatImages(chat.id, hasGoods)
+  const [picking, setPicking] = useState(false)
   const peerNote = chat.stash_item_id ? "同行的商品是别人在闲鱼上卖的，图片不带过去。" : ""
 
   let body
@@ -74,9 +87,49 @@ function NewDraftImages({ chat }: { chat: AgentChatSummary }) {
   } else if (found.isError) {
     body = <LoadError what="读取货源的图片" error={found.error} onRetry={() => void found.refetch()} />
   } else {
-    const byId = new Map(found.data.images.map((img) => [img.sha, img]))
-    const chosen = found.data.selected.flatMap((sha) => byId.get(sha) ?? [])
-    if (chosen.length === 0) {
+    const all = found.data.images
+    const byId = new Map(all.map((img) => [img.sha, img]))
+    const chosen = (picked ?? found.data.selected).flatMap((sha) => byId.get(sha) ?? [])
+    const bothOrigins = new Set(all.map((img) => img.origin)).size > 1
+    const picker = picking && (
+      <ImagePickerDialog
+        title="挑草稿用的图"
+        description="图按这里的顺序带进新草稿，第一张是首图。"
+        images={all.map((img) => ({
+          ...img,
+          key: img.sha,
+          group: bothOrigins ? `${img.origin === "pdd" ? "拼多多" : "第三方货源"}${img.kind}` : img.kind,
+        }))}
+        renderImage={(img, size) =>
+          img.origin === "pdd" ? (
+            <PddThumb url={img.url} size={size} />
+          ) : (
+            <SourcePhoto sourceId={chat.source_id ?? ""} sha={img.sha} size={size} />
+          )
+        }
+        initial={chosen.map((img) => img.sha)}
+        confirmLabel="用这几张"
+        onConfirm={(shas) => {
+          onPick(shas)
+          setPicking(false)
+        }}
+        onClose={() => setPicking(false)}
+      />
+    )
+    const pickButton = all.length > 0 && (
+      <Button variant="outline" size="sm" disabled={disabled} onClick={() => setPicking(true)}>
+        挑图
+      </Button>
+    )
+    if (chosen.length === 0 && all.length > 0) {
+      body = (
+        <div className="flex items-center gap-3">
+          <EmptyNote>货源的主图还没下载下来，可以挑别的图，或者先到货源页重新下载。</EmptyNote>
+          {pickButton}
+          {picker}
+        </div>
+      )
+    } else if (chosen.length === 0) {
       const gone = chat.pdd_goods == null && chat.source == null
       body = (
         <EmptyNote>
@@ -85,7 +138,8 @@ function NewDraftImages({ chat }: { chat: AgentChatSummary }) {
         </EmptyNote>
       )
     } else {
-      const from = chosen[0].origin === "pdd" ? "拼多多货源的主图" : "第三方货源的图"
+      const from =
+        picked != null ? "挑的图" : chosen[0].origin === "pdd" ? "拼多多货源的主图" : "第三方货源的图"
       body = (
         <div className="flex flex-col gap-2">
           <ul className="flex flex-wrap gap-1.5" aria-label="草稿带的图">
@@ -99,9 +153,13 @@ function NewDraftImages({ chat }: { chat: AgentChatSummary }) {
               </li>
             ))}
           </ul>
-          <p className="text-xs text-muted-foreground">
-            带上{from}，共 {chosen.length} 张，建好后在发布页可以增删、调顺序。{peerNote}
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              带上{from}，共 {chosen.length} 张，建好后在发布页也能增删、调顺序。{peerNote}
+            </p>
+            {pickButton}
+          </div>
+          {picker}
         </div>
       )
     }
@@ -212,6 +270,7 @@ export function ApplyToDraftDialog({
   const [target, setTarget] = useState<Target>("new")
   const [picked, setPicked] = useState<string | null>(null)
   const [draftId, setDraftId] = useState<number | null>(null)
+  const [images, setImages] = useState<string[] | null>(null)
   const create = useDraftFromChat(chat.id)
   const replace = useReplaceDescription()
   const busy = create.isPending || replace.isPending
@@ -235,7 +294,7 @@ export function ApplyToDraftDialog({
     if (!ready || busy || !account) return
     if (target === "new") {
       create.mutate(
-        { account: account.id, description: text },
+        { account: account.id, description: text, images: images ?? undefined },
         {
           onSuccess: (draft) => opened(draft, `已在「${accountName(account)}」建好草稿，填上价格就能发`),
           onError: (error) => toast.error(`建草稿失败：${errorMessage(error)}`),
@@ -353,7 +412,7 @@ export function ApplyToDraftDialog({
           </fieldset>
 
           {target === "new" ? (
-            <NewDraftImages chat={chat} />
+            <NewDraftImages chat={chat} picked={images} onPick={setImages} disabled={busy} />
           ) : account ? (
             <DraftChoices account={account.id} value={draftId} onChange={setDraftId} />
           ) : null}
