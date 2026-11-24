@@ -39,7 +39,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
 import {
   api,
   ApiError,
@@ -51,10 +50,11 @@ import {
   type DraftProperty,
   type PostMode,
 } from "@/lib/api"
-import { dateTime, itemUrl, parseYuan, timeAgo, yuan } from "@/lib/format"
+import { countChars, dateTime, itemUrl, parseYuan, timeAgo, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { DraftImage } from "./draft-image"
+import { LimitTextarea } from "./limit-textarea"
 import {
   putDraft,
   useAddImage,
@@ -69,6 +69,7 @@ import {
 } from "./queries"
 
 const MAX_IMAGES = 9
+/** 闲鱼的描述最多多少字（和 xianyu_core/publish.py 一样按码点数）。超出的标红，不截，删到这么多才能发 */
 const MAX_DESC = 1500
 /** 停止输入多久以后自动保存 */
 const SAVE_DELAY_MS = 800
@@ -695,6 +696,9 @@ function EditableDraft({
 
   const errors = priceErrors(form)
   const invalid = Object.keys(errors).length > 0
+  // 描述超出字数照样自动保存，只是不让发
+  const descCount = countChars(form.description, MAX_DESC).count
+  const descOver = Math.max(descCount - MAX_DESC, 0)
   const order = draft.images.map((img) => img.sha)
 
   // 事件和定时器里用的最新表单。切到别的草稿（组件卸掉）时还有没保存的，直接存
@@ -783,6 +787,10 @@ function EditableDraft({
 
   const runPublish = async (force = false) => {
     setGuard(null)
+    if (descOver > 0) {
+      toast.error(`描述超出 ${descOver} 字，删掉标红的部分再${editing ? "保存到闲鱼" : "发布"}`)
+      return
+    }
     try {
       await flush()
       const done = await publish.mutateAsync(force)
@@ -797,6 +805,11 @@ function EditableDraft({
   }
 
   const lacks = missing(draft, form)
+  // 发布按钮旁边说为什么还不能点
+  const blockers = [
+    ...(lacks.length ? [`还差：${lacks.join("、")}`] : []),
+    ...(descOver > 0 ? [`描述超出 ${descOver} 字`] : []),
+  ]
   const busy = publish.isPending
   const labelBusy = recommend.isPending || choose.isPending || busy
 
@@ -899,22 +912,30 @@ function EditableDraft({
           htmlFor="draft-desc"
           required
           hintId="draft-desc-hint"
-          hint="标题由闲鱼从描述里截。写清楚品牌型号、成色、来源，输入或粘贴的 emoji 会自动去除"
+          hint={`标题由闲鱼从描述里截。写清楚品牌型号、成色、来源；最多 ${MAX_DESC} 字，超出的标红，删掉才能${editing ? "保存" : "发布"}。输入或粘贴的 emoji 会自动去除`}
         >
           <div className="relative">
-            <Textarea
+            <LimitTextarea
               id="draft-desc"
               value={form.description}
-              maxLength={MAX_DESC}
+              limit={MAX_DESC}
               rows={6}
               disabled={busy}
               placeholder="描述一下宝贝的品牌型号、货品来源…"
-              aria-describedby="draft-desc-hint"
+              aria-invalid={descOver > 0 || undefined}
+              aria-describedby="draft-desc-hint draft-desc-count"
               onChange={(e) => update({ description: stripEmoji(e.target.value) })}
-              className="min-h-36 pb-6"
+              className="min-h-36 resize-y pb-6"
             />
-            <span className="pointer-events-none absolute right-2.5 bottom-1.5 text-xs text-muted-foreground tabular-nums">
-              {form.description.length}/{MAX_DESC}
+            <span
+              id="draft-desc-count"
+              className={cn(
+                "pointer-events-none absolute right-2.5 bottom-1.5 text-xs tabular-nums",
+                descOver > 0 ? "font-medium text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {descOver > 0 && `超出 ${descOver} 字 · `}
+              {descCount}/{MAX_DESC}
             </span>
           </div>
         </Field>
@@ -1108,8 +1129,8 @@ function EditableDraft({
             {saveState}
           </span>
           <div className="flex-1" />
-          {lacks.length > 0 && (
-            <span className="text-xs text-muted-foreground">还差：{lacks.join("、")}</span>
+          {blockers.length > 0 && (
+            <span className="text-xs text-muted-foreground">{blockers.join("；")}</span>
           )}
           <Button variant="ghost" onClick={() => setDeleting(true)} disabled={busy}>
             {editing ? <Undo2Icon /> : <Trash2Icon />}
@@ -1117,7 +1138,9 @@ function EditableDraft({
           </Button>
           <Button
             onClick={() => void runPublish()}
-            disabled={busy || lacks.length > 0 || invalid || draft.unsupported.length > 0}
+            disabled={
+              busy || lacks.length > 0 || invalid || descOver > 0 || draft.unsupported.length > 0
+            }
           >
             {busy ? <Loader2Icon className="animate-spin" /> : editing ? <SaveIcon /> : <SendIcon />}
             {editing ? (busy ? "保存中…" : "保存到闲鱼") : busy ? "发布中…" : "发布到闲鱼"}

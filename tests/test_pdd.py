@@ -111,7 +111,8 @@ def test_draft_text():
     assert "- 12KG升级强劲新蓝光洗护【强动力桶自洁+加厚玻璃款】" in lines
 
 
-def test_draft_text_fits_xianyu_limit():
+def test_draft_text_keeps_every_line_over_xianyu_limit():
+    """超过闲鱼的字数上限也不去掉行，发布页把超出的标红让卖家自己删。"""
     data = payload()
     sku = data["goods"]["skus"][0]
     data["goods"]["skus"] = [
@@ -119,8 +120,11 @@ def test_draft_text_fits_xianyu_limit():
         for i in range(100)
     ]
     text = draft_text(parse(data))
-    assert len(text) <= MAX_DESC
+    assert len(text) > MAX_DESC
     assert text.startswith("中国扬子集团洗衣机") and "品牌：YANGZI/扬子" in text
+    lines = text.splitlines()
+    assert lines[-1] == "- " + "款式99" * 10
+    assert len([line for line in lines if line.startswith("- 款式")]) == 100
 
 
 class FakeCdn:

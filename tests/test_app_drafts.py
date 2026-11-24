@@ -6,10 +6,10 @@ import pytest
 from fakes import POI_HOME, UNB, png
 from PIL import Image
 
-from app.drafts import DraftNotFoundError, DraftService
+from app.drafts import MAX_DRAFT_DESC, DraftNotFoundError, DraftService
 from app.images import ImageStore, normalize
 from app.items import ItemService, PriceGuardError
-from xianyu_core.publish import PublishBlockedError
+from xianyu_core.publish import MAX_DESC, PublishBlockedError
 
 
 def run(coro):
@@ -138,6 +138,22 @@ def test_new_and_saved_drafts_remove_emoji(service):
     assert service.get(UNB, draft.id).description == draft.description
 
 
+def test_description_over_xianyu_limit_is_kept(service):
+    """超过闲鱼字数上限的描述照样存，不截，让卖家自己删；长得离谱的才不收。"""
+    long = "宜家落地灯\n" + "好" * MAX_DESC
+    draft = service.create(UNB, long)
+    assert draft.description == long
+    draft = fill(service, draft, description=long + "再多一句")
+    assert service.get(UNB, draft.id).description == long + "再多一句"
+    most = "好" * MAX_DRAFT_DESC
+    assert fill(service, draft, description=most).description == most
+    with pytest.raises(ValueError, match=f"最多存 {MAX_DRAFT_DESC} 字"):
+        fill(service, draft, description="好" * (MAX_DRAFT_DESC + 1))
+    with pytest.raises(ValueError, match=f"最多存 {MAX_DRAFT_DESC} 字"):
+        service.create(UNB, "好" * (MAX_DRAFT_DESC + 1))
+    assert service.get(UNB, draft.id).description == most
+
+
 def test_old_draft_is_cleaned_before_checks_and_publish(service, database, platform):
     draft = ready(service)
     database.execute("UPDATE drafts SET description = %s WHERE id = %s", ("灯✅\n包邮🚚", draft.id))
@@ -230,6 +246,21 @@ def test_recommend_then_choose_keeps_selection(service, platform):
     assert run(service.recommend(UNB, draft.id)).category["catName"] == "台灯"
 
 
+def test_recommend_uses_only_what_fits_on_xianyu(service, platform):
+    """描述超过字数上限时推荐照样能用，只拿前 MAX_DESC 个字去推荐，选项改了再推荐也一样。"""
+    draft = service.create(UNB)
+    long = "宜家落地灯，九成新\n" + "好" * MAX_DESC
+    fill(service, draft, description=long)
+    draft = run(service.recommend(UNB, draft.id))
+    assert draft.category["catName"] == "落地灯"
+    run(service.choose(UNB, draft.id, "-10000", ["126858404"]))
+    sent = [data for api, data in platform.calls if api.endswith("property.recommend")]
+    assert len(sent) == 2
+    for data in sent:
+        assert data["description"] == data["title"] == long[:MAX_DESC]
+    assert service.get(UNB, draft.id).description == long
+
+
 def test_addresses_put_last_used_first(service):
     addresses = run(service.addresses(UNB))
     assert [a["name"] for a in addresses] == ["光谷苑", "万达广场"]
@@ -308,6 +339,26 @@ def test_local_checks_happen_before_any_request(service, platform):
     calls = len(platform.calls)
     assert service.get(UNB, draft.id).error is None
     assert calls == len(platform.calls)
+
+
+def test_over_limit_description_is_stopped_before_any_request(service, platform, items):
+    """描述超出闲鱼的字数上限时发布在本地就拦下：不查限制、不查违禁词、不传图、不记失败。"""
+    draft = service.create(UNB)
+    service.add_image(UNB, draft.id, png())
+    draft = fill(service, draft, description="宜家落地灯，九成新")
+    run(service.recommend(UNB, draft.id))
+    fill(service, draft, description="宜家落地灯" + "好" * MAX_DESC)
+    calls = len(platform.calls)
+    with pytest.raises(ValueError, match=f"最多 {MAX_DESC} 个字，现在超出 5 个字"):
+        run(service.publish(UNB, draft.id))
+    assert len(platform.calls) == calls
+    assert (platform.uploads, platform.published) == ([], [])
+    assert service.get(UNB, draft.id).error is None
+    assert items.history(UNB) == []
+
+    # 删到上限以内就能发
+    fill(service, draft, description="好" * MAX_DESC)
+    assert run(service.publish(UNB, draft.id)).item_id == "9001"
 
 
 @pytest.mark.parametrize(
@@ -411,6 +462,21 @@ def test_submit_edit_checks_before_requesting(service, platform, items):
     assert platform.items["1001"]["price"] == 358
     [op] = items.history(UNB)
     assert op.detail == {"draft_id": draft.id, "fields": ["价格"], "from": 35800, "to": 358}
+
+
+def test_over_limit_edit_is_stopped_before_any_request(service, platform, items):
+    """编辑草稿的描述超出字数上限时，保存到闲鱼也在本地拦下，不查违禁词、不提交。"""
+    draft = run(service.edit_item(UNB, "1001"))
+    long = "洗衣机" + "好" * MAX_DESC
+    draft = service.update(UNB, draft.id, **edit_form(draft, description=long))
+    assert len(draft.description) == MAX_DESC + 3
+    calls = len(platform.calls)
+    with pytest.raises(ValueError, match="现在超出 3 个字"):
+        run(service.publish(UNB, draft.id))
+    assert len(platform.calls) == calls
+    assert (platform.edited, platform.uploads) == ([], [])
+    assert service.get(UNB, draft.id).error is None
+    assert items.history(UNB) == []
 
 
 def test_failed_edit_is_logged_and_can_retry(service, platform, items):
@@ -566,6 +632,19 @@ def test_relist_sold_item_with_edits_and_new_category(service, platform, items):
     assert body["itemPriceDTO"] == {"priceInCent": "120000"}
     assert body["itemCatDTO"]["catName"] == "台灯"
     assert body["userRightsProtocols"][0]["serviceCode"] == "SVC"  # 换了分类，服务重新查
+
+
+def test_over_limit_relist_is_stopped_before_any_request(service, platform, items):
+    run(items.sync(UNB))
+    run(items.downshelf(UNB, "1001"))
+    draft = run(service.relist_item(UNB, "1001"))
+    service.update(UNB, draft.id, **edit_form(draft, description="好" * (MAX_DESC + 1)))
+    calls, ops = len(platform.calls), len(items.history(UNB))
+    with pytest.raises(ValueError, match="现在超出 1 个字"):
+        run(service.publish(UNB, draft.id))
+    assert len(platform.calls) == calls
+    assert (platform.published, platform.uploads) == ([], [])
+    assert len(items.history(UNB)) == ops
 
 
 def test_relist_keeps_post_template_from_app(service, platform, items):

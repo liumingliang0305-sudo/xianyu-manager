@@ -344,7 +344,7 @@ def check_desc(desc: str) -> None:
     if not desc.strip():
         raise ValueError("描述不能为空")
     if len(desc) > MAX_DESC:
-        raise ValueError(f"描述最多 {MAX_DESC} 个字")
+        raise ValueError(f"描述最多 {MAX_DESC} 个字，现在超出 {len(desc) - MAX_DESC} 个字")
     if _EMOJI.search(desc):
         raise ValueError("描述里不能有 emoji，网页端发布不让用")
 

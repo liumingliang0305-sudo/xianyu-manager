@@ -480,7 +480,7 @@ def test_draft_reuses_saved_images_and_delete_preserves_shared_files(client, tmp
     assert draft["description"].startswith(strip_emoji(source["title"]))
     assert strip_emoji(draft["description"]) == draft["description"]
     assert client.get(f"/api/sources/{source_id}").json()["content"] == source["content"]
-    assert len(draft["description"]) <= MAX_DESC
+    assert draft["description"] == strip_emoji(f"{source['title']}\n\n{source['content']}")
     assert len(draft["images"]) == 9
     assert draft["images"][0]["sha"] == source["images"][0]["sha"]
     image_path = tmp_path / "images" / f"{source['cover_sha']}.jpg"
@@ -489,6 +489,22 @@ def test_draft_reuses_saved_images_and_delete_preserves_shared_files(client, tmp
     assert client.get(f"/api/accounts/{UNB}/drafts/{draft['id']}").status_code == 200
     assert client.delete(f"/api/accounts/{UNB}/drafts/{draft['id']}").status_code == 200
     assert not image_path.exists()
+
+
+def test_draft_keeps_long_source_text_for_seller_to_trim(client, source_server):
+    """正文超过闲鱼的字数上限也整段放进草稿，不截；发布时才拦。"""
+    paragraphs = "".join(f"<p>第{i}间：两床一卫，带露台，可住四人。</p>" for i in range(150))
+    source_server.pages["shop.example"] = (
+        f"<html><head><title>山间民宿</title></head><body><article>{paragraphs}</article></body></html>"
+    )
+    source = client.post("/api/sources", json={"url": "https://shop.example/stay"}).json()["source"]
+    assert source["content_length"] > MAX_DESC
+    response = client.post(f"/api/accounts/{UNB}/sources/{source['source_id']}/draft")
+    assert response.status_code == 200, response.text
+    draft = response.json()
+    assert draft["description"] == f"{source['title']}\n\n{source['content']}"
+    assert draft["description"].endswith("第149间：两床一卫，带露台，可住四人。")
+    assert len(draft["description"]) > MAX_DESC
 
 
 def test_source_chat_context_is_framed_refreshed_and_deleted_independently(

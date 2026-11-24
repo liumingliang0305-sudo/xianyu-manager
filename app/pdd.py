@@ -33,7 +33,7 @@ import httpx
 
 from app.db import Database, Row
 from app.images import ImageStore, drop_unused
-from xianyu_core.publish import MAX_DESC, MAX_IMAGES
+from xianyu_core.publish import MAX_IMAGES
 
 log = logging.getLogger(__name__)
 
@@ -197,7 +197,10 @@ def parse(payload: dict[str, Any]) -> PddGoods:
 
 
 def draft_text(goods: PddGoods) -> str:
-    """建发布草稿时的描述：标题、商品参数、可选的规格。超过闲鱼的字数上限时从后面去掉几行。"""
+    """建发布草稿时的描述：标题、商品参数、可选的规格。
+
+    超过闲鱼的字数上限也全部留着，发布页把超出的部分标红，卖家自己挑着删。
+    """
     lines = [goods.title]
     if goods.properties:
         lines.append("")
@@ -212,9 +215,7 @@ def draft_text(goods: PddGoods) -> str:
         for key, values in options.items():
             lines += ["", f"可选{key}："]
             lines += [f"- {value}" for value in values]
-    while len("\n".join(lines)) > MAX_DESC and len(lines) > 1:
-        lines.pop()
-    return "\n".join(lines).strip()[:MAX_DESC]
+    return "\n".join(lines).strip()
 
 
 class PddService:

@@ -539,6 +539,16 @@ def test_draft_errors(client, platform):
     sha = client.get(url).json()["images"][0]["sha"]
     address = {"city": "深圳", "divisionId": 1, "gps": "1,2", "poiId": "p"}
     form = {"description": "台灯", "price": "10", "images": [sha], "address": address}
+    # 超出闲鱼字数上限的描述照样存，发布时本地就拦下，不请求平台、不记失败
+    long = "台灯" + "好" * 1500
+    assert client.put(url, json={**form, "description": long}).json()["description"] == long
+    calls = len(platform.calls)
+    resp = client.post(f"{url}/publish")
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    assert resp.json()["message"] == "描述最多 1500 个字，现在超出 2 个字"
+    assert len(platform.calls) == calls and client.get(url).json()["error"] is None
+    resp = client.put(url, json={**form, "description": "好" * 60001})
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
     client.put(url, json=form)
     client.post(f"{url}/recommend")
     platform.bad_words.append("台灯")
