@@ -1028,7 +1028,7 @@ def create_app(
     async def save_item_stats(
         request: Request, account_id: str, item_id: str, body: ItemStatsIn
     ) -> dict[str, Any]:
-        """存浏览器插件拿到的想要、浏览、收藏数，不请求闲鱼。返回更新后的本地记录。"""
+        """存浏览器插件拿到的想要、浏览、收藏数，记下拿到的时间（stats_at），不请求闲鱼。返回更新后的本地记录。"""
         record = items(request).save_stats(account(request, account_id), item_id, body.item)
         return asdict(record)
 

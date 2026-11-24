@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
 import { draftKeys } from "@/features/publish/queries"
 import { api, errorMessage, type Draft, type Item } from "@/lib/api"
@@ -53,21 +53,27 @@ export function useSyncItems(account: string) {
   })
 }
 
+/** 存好了浏览、收藏的一件换进本地列表的缓存，表格里这一行马上变，不用等重新读 */
+export function putItemInList(client: QueryClient, account: string, saved: Item) {
+  client.setQueryData<{ items: Item[]; last_synced_at: number | null }>(
+    itemKeys.list(account),
+    (old) =>
+      old && { ...old, items: old.items.map((it) => (it.item_id === saved.item_id ? saved : it)) },
+  )
+}
+
 /**
  * 刷新一件商品的想要、浏览、收藏：请浏览器插件在 Chrome 里打开它的闲鱼页面拿（一件几秒），
- * 拿到了存到后台，列表里的这一件跟着换。浏览、收藏只有买家看的商品详情里有，后台自己不去拿
+ * 拿到了存到后台，列表里的这一件跟着换。浏览、收藏只有买家看的商品详情里有，后台自己不去拿。
+ * 是人点的，人在跟前：要验证时插件把页面切到前面，刚过完滑块再点也不用等那一分钟（resume）
  */
 export function useRefreshItemStats(account: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: async (itemId: string) =>
-      api.saveItemStats(account, itemId, await fetchItemDetailViaExtension(itemId)),
+      api.saveItemStats(account, itemId, await fetchItemDetailViaExtension(itemId, { resume: true })),
     onSuccess: (saved) => {
-      client.setQueryData<{ items: Item[]; last_synced_at: number | null }>(
-        itemKeys.list(account),
-        (old) =>
-          old && { ...old, items: old.items.map((it) => (it.item_id === saved.item_id ? saved : it)) },
-      )
+      putItemInList(client, account, saved)
       void client.invalidateQueries({ queryKey: itemKeys.list(account) })
     },
   })
@@ -77,7 +83,7 @@ export function useRefreshItemStats(account: string) {
 export function statsErrorMessage(error: unknown): string {
   if (!(error instanceof ExtensionError)) return errorMessage(error)
   if (error.code === "validate")
-    return "闲鱼要验证：在 Chrome 里那个闲鱼商品页面上过一下滑块，过一分钟再点「刷新浏览/收藏」"
+    return "闲鱼要验证：在 Chrome 里那个闲鱼商品页面上过一下滑块，再点「刷新浏览/收藏」"
   return error.message
 }
 

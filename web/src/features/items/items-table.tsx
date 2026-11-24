@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Item } from "@/lib/api"
 import { count, itemState, itemUrl, yuan } from "@/lib/format"
 
@@ -43,6 +44,46 @@ export type ItemActionKind =
   | "relist-edit"
 
 type OnAction = (kind: ItemActionKind, item: Item) => void
+
+// 表头上悬停（或者 Tab 到）时说这几个数从哪来：浏览、收藏同步时拿不到，没拿过的是 -
+const STAT_HINTS = {
+  want: '同步时从主页列表的"N人想要"读；没人想要时列表里没有，插件拿浏览、收藏时一起补上',
+  browse: "只在闲鱼商品页里有：浏览器插件在你的 Chrome 里打开商品页拿，没拿过的是 -。列表上面能刷新",
+  collect: "和浏览一样，由浏览器插件在你的 Chrome 里打开商品页拿，没拿过的是 -",
+}
+
+function StatHead({ label, hint }: { label: string; hint: string }) {
+  return (
+    <TableHead className="text-right">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            tabIndex={0}
+            className="cursor-help rounded-sm underline decoration-dotted underline-offset-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{hint}</TooltipContent>
+      </Tooltip>
+    </TableHead>
+  )
+}
+
+/** 浏览数那一格：插件正在拿这一件时前面转个圈 */
+function BrowseCell({ value, loading }: { value: number | null; loading: boolean }) {
+  return (
+    <TableCell className="text-right tabular-nums">
+      {loading && (
+        <Loader2Icon
+          className="mr-1 inline size-3.5 animate-spin align-[-2px] text-muted-foreground"
+          aria-label="正在拿浏览、收藏"
+        />
+      )}
+      {count(value)}
+    </TableCell>
+  )
+}
 
 /** 只加有数的；全是空的才显示"-"。没刷新过浏览、收藏的商品不能把合计变成空 */
 function total(items: Item[], key: "want_count" | "browse_count" | "collect_count"): string {
@@ -129,18 +170,21 @@ function ItemCell({ item, onAction }: { item: Item; onAction: OnAction }) {
   )
 }
 
-/** 宽屏是表格，最后一行是合计；768px 以下换成两行的列表，字段挪到第二行，不丢。relisting 是正在重新上架的商品 */
+/**
+ * 宽屏是表格，最后一行是合计；768px 以下换成两行的列表，字段挪到第二行，不丢。relisting 是正在重新上架的商品，
+ * statsLoading 是浏览器插件正在拿浏览、收藏的商品（浏览、收藏从哪来在表头的提示和列表上面那行说）
+ */
 export function ItemsTable({
   items,
   onAction,
   relisting,
+  statsLoading,
 }: {
   items: Item[]
   onAction: OnAction
   relisting?: string | null
+  statsLoading?: string | null
 }) {
-  // 在售商品没有浏览、收藏时提示一句从哪来；已卖出的不提示
-  const missingStats = items.some((it) => itemState(it) === "online" && it.browse_count == null)
   return (
     <>
       <div className="hidden md:block">
@@ -150,9 +194,9 @@ export function ItemsTable({
               <TableHead className="w-full min-w-72">商品</TableHead>
               <TableHead className="text-right">售价</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead className="text-right">想要</TableHead>
-              <TableHead className="text-right">浏览</TableHead>
-              <TableHead className="text-right">收藏</TableHead>
+              <StatHead label="想要" hint={STAT_HINTS.want} />
+              <StatHead label="浏览" hint={STAT_HINTS.browse} />
+              <StatHead label="收藏" hint={STAT_HINTS.collect} />
               <TableHead>
                 <span className="sr-only">操作</span>
               </TableHead>
@@ -171,7 +215,7 @@ export function ItemsTable({
                   <StateBadge state={itemState(item)} />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{count(item.want_count)}</TableCell>
-                <TableCell className="text-right tabular-nums">{count(item.browse_count)}</TableCell>
+                <BrowseCell value={item.browse_count} loading={statsLoading === item.item_id} />
                 <TableCell className="text-right tabular-nums">{count(item.collect_count)}</TableCell>
                 <TableCell>
                   <div className="flex items-center justify-end gap-1">
@@ -222,11 +266,6 @@ export function ItemsTable({
               <TableRow>
                 <TableCell className="font-normal whitespace-normal text-muted-foreground">
                   合计 {items.length} 件
-                  {missingStats && (
-                    <span className="ml-2 text-xs">
-                      浏览、收藏不随同步更新，点开商品「刷新浏览/收藏」才有
-                    </span>
-                  )}
                 </TableCell>
                 <TableCell />
                 <TableCell />

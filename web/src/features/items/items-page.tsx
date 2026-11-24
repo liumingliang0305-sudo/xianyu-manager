@@ -20,6 +20,9 @@ import { ConfirmItemDialog } from "./confirm-dialog"
 import { ItemDetailSheet } from "./item-detail-sheet"
 import { ItemsTable, type ItemActionKind } from "./items-table"
 import { OpsList } from "./ops-list"
+// 浏览、收藏的刷新单独放在 stats-*，和这页别的操作分开
+import { StatsBar } from "./stats-bar"
+import { useStatsRefresh } from "./stats-refresh"
 import { PriceDialog } from "./price-dialog"
 import { useItemOps, useItems, useRelist, useSyncItems } from "./queries"
 
@@ -34,7 +37,7 @@ const TABS: { value: Tab; label: string }[] = [
 
 /**
  * 同步只翻主页上的商品列表。浏览、收藏不在列表里：以前同步时逐个调买家看的商品详情接口来补，
- * 那个接口从后台调会被闲鱼要求验证，现在在商品详情里用浏览器插件一件一件刷新。
+ * 那个接口从后台调会被闲鱼要求验证，现在由浏览器插件在 Chrome 里拿（列表上面的 StatsBar，自动、手动都在那）。
  * `running`：后台正在同步商品（自动的、或者别的页面点的），按钮先不让点
  */
 function SyncControls({
@@ -72,6 +75,9 @@ export function ItemsPage() {
   useAutoSyncVisit(account, ["items"])
   const syncing = useSyncJob(account, "items")?.running ?? false
   const items = useItems(account)
+  // 正在拿浏览、收藏的那一件，表格里那一格转圈
+  const stats = useStatsRefresh()
+  const statsLoading = stats.account === account ? stats.current : null
   const ops = useItemOps(account)
   const [tab, setTab] = useUrlParam<Tab>("status", "online", TABS.map((t) => t.value))
   const [search, setSearch] = useState("")
@@ -151,7 +157,15 @@ export function ItemsPage() {
         {query ? `「${search.trim()}」没有匹配的商品` : `没有${TABS.find((t) => t.value === tab)?.label}的商品`}
       </EmptyState>
     )
-  else body = <ItemsTable items={visible} onAction={onAction} relisting={relisting} />
+  else
+    body = (
+      <ItemsTable
+        items={visible}
+        onAction={onAction}
+        relisting={relisting}
+        statsLoading={statsLoading}
+      />
+    )
 
   return (
     <div className="flex flex-col gap-6">
@@ -178,7 +192,7 @@ export function ItemsPage() {
           }))}
         />
         <Card className="gap-0 py-0">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
             <SearchInput
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -191,6 +205,7 @@ export function ItemsPage() {
                 {visible.length} / {inTab.length} 件
               </span>
             )}
+            <StatsBar account={account} items={items.data?.items} syncing={syncing} />
           </div>
           {body}
         </Card>

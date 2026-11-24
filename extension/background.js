@@ -8,6 +8,7 @@
 //    这里在后台标签页里打开这件商品的闲鱼页面，用页面自己的请求库拿（goofish.js），关掉标签页，
 //    结果交回页面，页面自己存。
 //    一次只开一个，两件之间停一会儿；闲鱼要验证（滑块）时把那个标签页留着、切过去，让人过一下。
+//    页面自动刷新时（quiet）不抢前台：要验证就关掉标签页，交给页面提示人去点手动刷新。
 
 import { fetchGoofishItemDetail } from "./goofish.js"
 import {
@@ -224,13 +225,18 @@ function waitForLoad(tabId) {
 
 let validateUntil = 0
 
-/** 开一个后台标签页打开商品页，在页面里拿详情，拿完关掉。要验证时标签页留着、切过去 */
-async function fetchItemDetail(itemId) {
+/**
+ * 开一个后台标签页打开商品页，在页面里拿详情，拿完关掉。要验证时标签页留着、切过去。
+ * quiet：页面自动刷新时要的，要验证时不切过去、标签页也关掉（人不在跟前，别突然抢前台）；
+ * resume：人在页面上点了「继续」，说已经过了滑块，不用再等验证后的那一分钟
+ */
+async function fetchItemDetail(itemId, { quiet = false, resume = false } = {}) {
   if (!isItemId(itemId)) return { error: "invalid", message: "商品 ID 不对" }
+  if (resume) validateUntil = 0
   if (Date.now() < validateUntil) {
     return {
       error: "validate",
-      message: "闲鱼刚要求验证：先在 Chrome 里那个闲鱼页面上过一下滑块，过一分钟再点「拉详情」",
+      message: "闲鱼刚要求验证：先在 Chrome 里那个闲鱼页面上过一下滑块，过一分钟再试",
     }
   }
   let tab = null
@@ -246,9 +252,11 @@ async function fetchItemDetail(itemId) {
     })
     const result = injection?.result ?? { error: "failed", message: "闲鱼页面上没跑起来，再试一次" }
     if (result.error === "validate") {
-      keep = true
       validateUntil = Date.now() + VALIDATE_PAUSE_MS
-      await chrome.tabs.update(tab.id, { active: true }).catch(() => {})
+      if (!quiet) {
+        keep = true
+        await chrome.tabs.update(tab.id, { active: true }).catch(() => {})
+      }
     }
     return result
   } catch (error) {
@@ -261,8 +269,8 @@ async function fetchItemDetail(itemId) {
 // 一件一件来：页面一下子要好几件时排队
 let detailQueue = Promise.resolve()
 
-function queueItemDetail(itemId) {
-  const run = detailQueue.then(() => fetchItemDetail(itemId))
+function queueItemDetail(itemId, options) {
+  const run = detailQueue.then(() => fetchItemDetail(itemId, options))
   detailQueue = run.then(() => sleep(DETAIL_GAP_MS))
   return run
 }
@@ -281,7 +289,10 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     return true
   }
   if (message?.type === "fetch-item-detail") {
-    queueItemDetail(String(message.itemId)).then(reply)
+    queueItemDetail(String(message.itemId), {
+      quiet: message.quiet === true,
+      resume: message.resume === true,
+    }).then(reply)
     return true
   }
   return false

@@ -9,7 +9,7 @@
 （docs/protocol-notes.md#看别人的商品详情）。所以：
 - 看商品的描述、图片、库存（`fetch_detail`）用卖家自己的编辑页接口 editDetail；
 - 浏览数、收藏数只有 pc.detail 里有，由浏览器插件在用户自己的 Chrome 里拿到、页面转交过来存
-  （`save_stats`），同步时不再逐个拉。
+  （`save_stats`，记下拿到的时间 `stats_at`，商品页按它挑旧了的自动再拿），同步时不再逐个拉。
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ class ItemRecord:
     want_count: int | None
     browse_count: int | None
     collect_count: int | None
+    stats_at: float | None  # 上次存插件拿来的想要、浏览、收藏数的时间，没拿过是 None
     on_platform: bool
     first_seen_at: float
     synced_at: float
@@ -178,7 +179,7 @@ class ItemService:
         return form
 
     def save_stats(self, account_id: str, item_id: str, item: dict[str, Any]) -> ItemRecord:
-        """存浏览器插件从商品页拿到的想要、浏览、收藏数，不请求闲鱼。返回更新后的本地记录。
+        """存浏览器插件从商品页拿到的想要、浏览、收藏数，记下拿到的时间，不请求闲鱼。返回更新后的本地记录。
 
         `item` 是 pc.detail 返回的 itemDO（插件挑过字段，见 extension/goofish.js）。只取三个数，
         里面没有的那个留着本地原来的。格式不对、本地没有这个商品抛 ValueError。
@@ -192,9 +193,9 @@ class ItemService:
             row = self._db.execute(
                 "UPDATE items SET want_count = COALESCE(%s, want_count),"
                 " browse_count = COALESCE(%s, browse_count),"
-                " collect_count = COALESCE(%s, collect_count)"
+                " collect_count = COALESCE(%s, collect_count), stats_at = %s"
                 " WHERE account_id = %s AND item_id = %s RETURNING *",
-                (want, browse, collect, account_id, item_id),
+                (want, browse, collect, time.time(), account_id, item_id),
             ).fetchone()
         if row is None:
             raise ValueError(f"本地没有商品 {item_id}，先同步一次")
@@ -333,7 +334,11 @@ class ItemService:
         return result
 
     def _upsert(self, account_id: str, card: ItemCard, now: float) -> None:
-        """列表里的一条写进本地库。浏览数、收藏数列表里没有，已经存过的不动。"""
+        """列表里的一条写进本地库。浏览数、收藏数列表里没有，已经存过的不动。
+
+        想要人数列表里只有"N人想要"的标签，没人想要时没有标签（解析出来是 None），这时留着插件
+        拿来的数（比如 0），不冲成空。
+        """
         self._db.execute(
             """
             INSERT INTO items (account_id, item_id, title, price_cent, status, category_id,
@@ -345,7 +350,7 @@ class ItemService:
                 status = excluded.status,
                 category_id = excluded.category_id,
                 pic_url = excluded.pic_url,
-                want_count = excluded.want_count,
+                want_count = COALESCE(excluded.want_count, items.want_count),
                 on_platform = true,
                 synced_at = excluded.synced_at
             """,

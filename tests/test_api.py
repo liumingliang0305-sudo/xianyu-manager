@@ -45,6 +45,7 @@ def test_accounts_and_sync_then_list(client):
     by_id = {it["item_id"]: it for it in body["items"]}
     assert by_id["1001"]["price_cent"] == 35800
     assert by_id["1001"]["browse_count"] is None  # 浏览、收藏同步时不拉
+    assert by_id["1001"]["stats_at"] is None
     assert [it["item_id"] for it in client.get(items_url("?status=1")).json()["items"]] == ["1002"]
 
 
@@ -73,6 +74,7 @@ def test_item_stats_from_the_extension(client, platform):
     saved = client.post(items_url("/1001/stats"), json={"item": item}).json()
     assert (saved["want_count"], saved["browse_count"], saved["collect_count"]) == (5, 100, 2)
     assert (saved["item_id"], saved["price_cent"]) == ("1001", 35800)
+    assert saved["stats_at"] > 0  # 页面按它看数旧没旧
     [listed] = [it for it in client.get(items_url()).json()["items"] if it["item_id"] == "1001"]
     assert listed == saved
     assert len(platform.calls) == sent  # 不请求闲鱼

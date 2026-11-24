@@ -102,6 +102,8 @@ export interface Item {
   want_count: number | null
   browse_count: number | null
   collect_count: number | null
+  /** 上次存插件拿来的想要、浏览、收藏的时间（秒），没拿过是 null */
+  stats_at: number | null
   on_platform: boolean
   first_seen_at: number
   synced_at: number
