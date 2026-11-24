@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
+import { draftKeys } from "@/features/publish/queries"
 import {
   api,
   ApiError,
@@ -10,11 +11,14 @@ import {
   type AgentEvent,
   type AgentChatList,
   type AgentMessage,
+  type Draft,
 } from "@/lib/api"
 
 export const agentKeys = {
   list: ["agent-chats"] as const,
   detail: (chatId: number) => ["agent-chats", chatId] as const,
+  /** 把回复放进新草稿时能带的图；货源变了刷新对话列表时跟着刷新 */
+  images: (chatId: number) => ["agent-chats", chatId, "images"] as const,
 }
 
 export function useAgentChats() {
@@ -53,6 +57,28 @@ export function useDeleteAgentChat() {
       client.setQueryData<AgentChatList>(agentKeys.list, (old) =>
         old ? { ...old, chats: old.chats.filter((c) => c.id !== chatId) } : old,
       )
+    },
+  })
+}
+
+/** 把回复放进新草稿时能带的图（对话带的货源里下载好的）和默认带的那几张 */
+export function useAgentChatImages(chatId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: agentKeys.images(chatId),
+    queryFn: () => api.agentChatImages(chatId),
+    enabled,
+  })
+}
+
+/** 把回复当描述在选的账号建一个发布草稿，建好放进发布页的列表缓存 */
+export function useDraftFromChat(chatId: number) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { account: string; description: string; images?: string[] }) =>
+      api.draftFromAgentChat(v.account, chatId, { description: v.description, images: v.images }),
+    onSuccess: (draft, v) => {
+      client.setQueryData<Draft[]>(draftKeys.list(v.account), (old) => (old ? [draft, ...old] : old))
+      void client.invalidateQueries({ queryKey: draftKeys.list(v.account) })
     },
   })
 }

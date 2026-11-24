@@ -314,6 +314,7 @@ class FakeSources:
         self.requests = []
         self.logins = []
         self.image = png()
+        self.distinct = False  # True 时每个图片地址回一张不同的图（默认都是同一张）
         self.pages = {
             "shop.example": "<html><head><title>山间民宿</title></head><body>"
             '<article><p>两间卧室</p><img src="/room.jpg"></article></body></html>'
@@ -345,9 +346,10 @@ class FakeSources:
             "bdn.135editor.com",
         ):
             self.downloads.append(url)
+            image = png(size=(40 + len(self.downloads), 30)) if self.distinct else self.image
             return httpx.Response(
                 404 if url in self.broken else 200,
-                content=self.image,
+                content=image,
                 headers={"content-type": "image/png"},
             )
         raise AssertionError(f"unexpected request: {url}")
@@ -517,6 +519,37 @@ def test_source_chat_context_is_framed_refreshed_and_deleted_independently(
     send(client, chat["id"], "继续")
     assert "第三方货源已经被卖家删掉" in model.calls[-1][0]
     assert "<third_party_source source_id=" not in model.calls[-1][0]
+
+
+def test_reply_from_a_source_chat_makes_a_draft_with_the_sources_images(client, source_server):
+    source_server.distinct = True
+    source_server.broken.add(parse_article(article_html(), URL).images[1].url)
+    source = imported(client)
+    downloaded = [img["sha"] for img in source["images"] if img["sha"]]
+    assert len(downloaded) == 47
+    chat = client.post("/api/agent/chats", json={"source_id": source["source_id"]}).json()
+
+    found = client.get(f"/api/agent/chats/{chat['id']}/images").json()
+    assert [img["sha"] for img in found["images"]] == downloaded  # 没下载下来的那张不在里面
+    assert {(img["origin"], img["kind"]) for img in found["images"]} == {("source", "正文图")}
+    assert found["selected"] == downloaded[:9]
+
+    text = "民宿" * 1000
+    path = f"/api/accounts/{UNB}/agent/chats/{chat['id']}/draft"
+    draft = client.post(path, json={"description": text}).json()
+    assert draft["description"] == text and len(text) > MAX_DESC  # 不截断
+    assert [img["sha"] for img in draft["images"]] == downloaded[:9]
+    assert draft["pdd_goods_id"] is None
+    picked = downloaded[-2:]
+    again = client.post(path, json={"description": text, "images": picked}).json()
+    assert [img["sha"] for img in again["images"]] == picked
+
+    # 货源删掉以后对话里没有能带的图了，已经建好的草稿里的图还在
+    client.delete(f"/api/sources/{source['source_id']}")
+    found = client.get(f"/api/agent/chats/{chat['id']}/images").json()
+    assert found == {"images": [], "selected": []}
+    image = client.get(f"/api/accounts/{UNB}/drafts/{draft['id']}/images/{downloaded[0]}")
+    assert image.status_code == 200
 
 
 def test_shared_source_image_is_kept_until_last_source_is_removed(client, tmp_path):

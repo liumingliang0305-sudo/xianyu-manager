@@ -4,6 +4,8 @@ import { api, draftImage, type Draft, type DraftForm } from "@/lib/api"
 
 export const draftKeys = {
   list: (account: string) => ["drafts", account] as const,
+  /** 还没发布（提交）的，编辑商品的草稿也在里面；在 list 底下，刷新 list 时跟着刷新 */
+  pending: (account: string) => ["drafts", account, "pending"] as const,
   /** 编辑一个已有商品的草稿，不在上面的列表里 */
   edit: (account: string, itemId: string) => ["edit-draft", account, itemId] as const,
   image: (account: string, sha: string) => ["draft-image", account, sha] as const,
@@ -167,6 +169,31 @@ export function usePublish(account: string, draft: Draft) {
       client.invalidateQueries({ queryKey: draftKeys.list(account) })
       client.invalidateQueries({ queryKey: ["items", account] })
       client.invalidateQueries({ queryKey: ["item-ops", account] })
+    },
+  })
+}
+
+/** 还没发布（提交）的草稿，编辑商品的也在里面：AI 助手把回复放进已有草稿时从这里选 */
+export function usePendingDrafts(account: string | null) {
+  return useQuery({
+    queryKey: draftKeys.pending(account ?? ""),
+    queryFn: () => api.pendingDrafts(account!),
+    enabled: !!account,
+  })
+}
+
+/**
+ * 只换草稿的描述（AI 助手的回复），别的不动。换完放进缓存再刷新列表，
+ * 跳到发布页、编辑商品页时表单拿到的就是新描述。
+ */
+export function useReplaceDescription() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { account: string; draftId: number; description: string }) =>
+      api.setDraftDescription(v.account, v.draftId, v.description),
+    onSuccess: (draft, v) => {
+      putDraft(client, v.account, draft)
+      void client.invalidateQueries({ queryKey: draftKeys.list(v.account) })
     },
   })
 }

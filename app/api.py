@@ -46,6 +46,9 @@
   一件暂存和一个提示词模板，
   POST .../chats/{id}/messages 发一条，回复用 Server-Sent Events 一段段推回来（delta），
   完了推 done，出错推 error；一轮完整收到了才存。模型没配好时 503 agent_unavailable。
+  回复（卖家删改过的）可以放进发布草稿：PUT .../drafts/{id}/description 替换没发布的草稿的描述，
+  POST /api/accounts/{id}/agent/chats/{chat_id}/draft 新建一个，图只能是对话带的货源里下载好的
+  （GET .../chats/{id}/images 列出能带哪些、默认带哪些）。都不截断、不请求闲鱼。
 - 提示词模板（app/prompt_templates.py）：/api/prompt-templates 增删改查，按用户保存。
 - 问题反馈（app/feedback.py）：POST /api/feedback 谁都能提交，GET /api/feedback 看自己提交的；
   截图先一张张 POST /api/feedback/images（请求体就是图片文件），提交时带上返回的 sha。
@@ -331,6 +334,16 @@ class AgentChatIn(BaseModel):
 
 class AgentMessageIn(BaseModel):
     text: str
+
+
+class AgentDraftIn(BaseModel):
+    description: str  # AI 的回复，卖家可能删改过；超过闲鱼字数上限也照存，在发布页改
+    # 带哪几张图（sha，按顺序，最多 9 张），只能是对话带的货源里下载好的；不给是默认的那几张
+    images: list[str] | None = None
+
+
+class DescriptionIn(BaseModel):
+    description: str
 
 
 class SourceImportIn(BaseModel):
@@ -1307,9 +1320,39 @@ def create_app(
             headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
         )
 
+    @authed.get("/api/agent/chats/{chat_id}/images")
+    async def agent_chat_images(request: Request, chat_id: int) -> dict[str, Any]:
+        """把回复放进新草稿时能带的图（对话带的货源里下载好的）和默认带的那几张（selected）。"""
+        found = agent(request).draft_images(request.state.user.id, chat_id)
+        return {"images": [asdict(img) for img in found.images], "selected": found.selected}
+
+    @authed.post("/api/accounts/{account_id}/agent/chats/{chat_id}/draft")
+    async def draft_from_agent_chat(
+        request: Request, account_id: str, chat_id: int, body: AgentDraftIn
+    ) -> dict[str, Any]:
+        """把 AI 的回复当描述，在这个账号建一个发布草稿，图是对话带的货源里下载好的。
+
+        描述去掉 emoji，不截断；只带暂存的同行商品、什么都没带的对话建出来没有图。不请求闲鱼。
+        """
+        account_id = account(request, account_id)
+        found = agent(request).draft_images(request.state.user.id, chat_id)
+        images = found.pick(body.images)
+        draft = drafts(request).create(
+            account_id,
+            _reply_text(body.description),
+            images=[DraftImage(img.sha, img.width, img.height) for img in images],
+            pdd_goods_id=found.pdd_goods_id,
+        )
+        return _draft(draft)
+
     @authed.get("/api/accounts/{account_id}/drafts")
-    async def list_drafts(request: Request, account_id: str) -> dict[str, Any]:
-        return {"drafts": [_draft(d) for d in drafts(request).list(account(request, account_id))]}
+    async def list_drafts(
+        request: Request, account_id: str, pending: bool = False
+    ) -> dict[str, Any]:
+        """发布页的草稿。`pending=true` 只要还没发布、提交的，编辑商品的草稿也在里面。"""
+        service, account_id = drafts(request), account(request, account_id)
+        found = service.pending(account_id) if pending else service.list(account_id)
+        return {"drafts": [_draft(d) for d in found]}
 
     @authed.post("/api/accounts/{account_id}/drafts")
     async def create_draft(request: Request, account_id: str) -> dict[str, Any]:
@@ -1335,6 +1378,16 @@ def create_app(
             image_order=body.images,
             address=body.address,
         )
+        return _draft(draft)
+
+    @authed.put("/api/accounts/{account_id}/drafts/{draft_id}/description")
+    async def set_draft_description(
+        request: Request, account_id: str, draft_id: int, body: DescriptionIn
+    ) -> dict[str, Any]:
+        """只换描述，别的不动（AI 助手的回复放进已有的草稿）。去掉 emoji，不截断；
+        已经发布、提交到闲鱼的草稿不能改。"""
+        account_id = account(request, account_id)
+        draft = drafts(request).set_description(account_id, draft_id, _reply_text(body.description))
         return _draft(draft)
 
     @authed.delete("/api/accounts/{account_id}/drafts/{draft_id}")
@@ -1837,6 +1890,14 @@ def _agent_chat(
 def _pdd_images(goods: PddGoods) -> dict[str, int]:
     total = len({img.url for img in goods.all_images()})
     return {"saved": total - goods.missing(), "total": total}
+
+
+def _reply_text(text: str) -> str:
+    """要放进草稿描述的回复：去掉 emoji 和首尾空白，不截断。"""
+    text = strip_emoji(text).strip()
+    if not text:
+        raise ValueError("要放进草稿的文字是空的")
+    return text
 
 
 def _yuan_or_none(value: str | None) -> int | None:
