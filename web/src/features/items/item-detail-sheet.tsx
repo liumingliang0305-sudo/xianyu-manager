@@ -1,4 +1,5 @@
 import { ExternalLinkIcon, Loader2Icon, RefreshCwIcon } from "lucide-react"
+import { useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -13,11 +14,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { errorMessage, type Item } from "@/lib/api"
 import { useExtension } from "@/lib/extension"
-import { count, itemState, itemUrl, yuan } from "@/lib/format"
+import { count, itemState, itemUrl, timeAgo, yuan } from "@/lib/format"
 
 import { ItemThumb, StateBadge } from "./item-bits"
 import { OpsList } from "./ops-list"
 import { statsErrorMessage, useItemDetail, useItemOps, useRefreshItemStats } from "./queries"
+import { ExtensionHelpDialog } from "./stats-bar"
+import { clearAutoPause } from "./stats-refresh"
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -28,32 +31,40 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** 浏览、收藏从哪来的说明，装了浏览器插件的带一个刷新按钮 */
+/** 浏览、收藏从哪来、什么时候拿的，装了浏览器插件的带一个刷新按钮，没装的能看怎么装 */
 function StatsSource({
   extension,
+  statsAt,
   refreshing,
   onRefresh,
 }: {
   extension: boolean
+  statsAt: number | null
   refreshing: boolean
   onRefresh: () => void
 }) {
-  let text = "浏览、收藏不随同步更新，由插件在你的 Chrome 里打开一次这件商品的闲鱼页面拿"
+  const [help, setHelp] = useState(false)
+  let text = statsAt
+    ? `浏览、收藏是${timeAgo(statsAt)}由插件从你的 Chrome 里拿的，不随同步更新`
+    : "浏览、收藏不随同步更新，由插件在你的 Chrome 里打开一次这件商品的闲鱼页面拿"
   if (refreshing) text = "正在从你的 Chrome 里拿想要、浏览、收藏，一件几秒…"
-  else if (!extension)
-    text =
-      "浏览、收藏不随同步更新。装上浏览器插件（0.4.0 以上）、在插件里填好这个后台的地址，就能从你的 Chrome 里拿"
+  else if (!extension) text = "浏览、收藏不随同步更新，要装浏览器插件，由它从你的 Chrome 里拿"
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-dashed px-3 py-2.5">
       <p className="min-w-0 flex-1 text-xs text-muted-foreground" aria-live="polite">
         {text}
       </p>
-      {extension && (
+      {extension ? (
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
           {refreshing ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
           {refreshing ? "刷新中…" : "刷新浏览/收藏"}
         </Button>
+      ) : (
+        <Button variant="outline" size="sm" onClick={() => setHelp(true)}>
+          怎么装
+        </Button>
       )}
+      {help && <ExtensionHelpDialog onClose={() => setHelp(false)} />}
     </div>
   )
 }
@@ -84,7 +95,10 @@ export function ItemDetailSheet({
 
   const refreshStats = () =>
     stats.mutate(item.item_id, {
-      onSuccess: () => toast.success("想要、浏览、收藏已刷新"),
+      onSuccess: () => {
+        clearAutoPause() // 拿到了，说明闲鱼那边不用验证了，自动刷新接着跑
+        toast.success("想要、浏览、收藏已刷新")
+      },
       onError: (error) =>
         toast.error(`浏览、收藏没刷新成：${statsErrorMessage(error)}`, { duration: 8000 }),
     })
@@ -143,7 +157,12 @@ export function ItemDetailSheet({
               <Stat label="收藏" value={count(item.collect_count)} />
             </div>
             {live && (
-              <StatsSource extension={extension} refreshing={stats.isPending} onRefresh={refreshStats} />
+              <StatsSource
+                extension={extension}
+                statsAt={item.stats_at}
+                refreshing={stats.isPending}
+                onRefresh={refreshStats}
+              />
             )}
           </div>
 

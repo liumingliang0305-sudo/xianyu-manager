@@ -55,7 +55,8 @@ class FakePlatform:
 
     def __init__(self, items, orders=None):
         # item_id → {"title", "price": 分, "status", "post": editDetail 的邮费（可选）,
-        #            "sku": 多规格（可选）, "desc": 描述（可选，没有就用标题）}
+        #            "sku": 多规格（可选）, "desc": 描述（可选，没有就用标题）,
+        #            "want": 列表里"N人想要"标签的数（可选，没人想要时平台不给标签）}
         self.items = items
         # order_id → {"item_id", "status": 状态文字, "price": 分, "post": 运费分, "created": 毫秒,
         #             "bought": 当前账号是买家（可选）}
@@ -183,6 +184,7 @@ class FakePlatform:
                     "itemStatus": it["status"],
                     "priceInfo": {"price": str(it["price"] / 100)},
                     "picInfo": {"picUrl": ""},
+                    "itemLabelDataVO": {"labelData": _want_label(it.get("want"))},
                 }
             }
             for item_id, it in self.items.items()
@@ -465,6 +467,13 @@ class FakePlatform:
         order["price"] = int(data["modifyFee"])
         order["post"] = int(data["newTransportFee"])
         return {}
+
+
+def _want_label(want: int | None) -> dict:
+    """主页列表里的"N人想要"标签，结构和 test_item.py 的 card() 一样；没人想要时没有。"""
+    if not want:
+        return {}
+    return {"r3": {"tagList": [{"data": {"type": "text", "content": f"{want}人想要"}}]}}
 
 
 # ---- 发布 ----

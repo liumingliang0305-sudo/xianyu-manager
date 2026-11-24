@@ -3,7 +3,8 @@
 // （见 goofish.js），结果再 postMessage 回页面，页面自己存到管理后台。
 // 只在插件里填的管理后台地址上注入（background.js 的 registerBridge），只认同一个页面自己发的消息。
 //
-// 页面发：{ source: "xym-admin", type: "fetch-item-detail", id, itemId }，{ source: "xym-admin", type: "ping" }
+// 页面发：{ source: "xym-admin", type: "fetch-item-detail", id, itemId, quiet?, resume? }，{ source: "xym-admin", type: "ping" }
+//        quiet 是页面自动刷新、resume 是人说已经过了滑块（0.5.0 起，见 background.js 的 fetchItemDetail）
 // 回页面：{ source: "xym-extension", type: "item-detail", id, result }，{ source: "xym-extension", type: "ready", version }
 ;(() => {
   const version = chrome.runtime.getManifest().version
@@ -25,7 +26,12 @@
     const done = (result) => reply({ type: "item-detail", id: message.id, result })
     try {
       chrome.runtime
-        .sendMessage({ type: "fetch-item-detail", itemId: String(message.itemId) })
+        .sendMessage({
+          type: "fetch-item-detail",
+          itemId: String(message.itemId),
+          quiet: message.quiet === true,
+          resume: message.resume === true,
+        })
         .then((result) => done(result ?? { error: "failed", message: "插件后台没有回结果" }))
         .catch((error) => done({ error: "failed", message: `插件后台没回应：${error.message}` }))
     } catch {

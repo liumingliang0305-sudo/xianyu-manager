@@ -99,6 +99,32 @@ def test_save_stats_stores_counts_and_sync_keeps_them(service, platform):
     assert (item.browse_count, item.collect_count) == (120, 2)
 
 
+def test_save_stats_records_when_counts_were_fetched(service, platform, monkeypatch):
+    """记下插件拿到计数的时间，商品页按它挑旧了的再拿；同步不动它。"""
+    run(service.sync(UNB))
+    assert service.get(UNB, "1001").stats_at is None  # 没拿过
+
+    monkeypatch.setattr("app.items.time.time", lambda: 1_800_000_000.0)
+    assert service.save_stats(UNB, "1001", stats_item()).stats_at == 1_800_000_000.0
+    monkeypatch.undo()
+
+    run(service.sync(UNB))
+    assert service.get(UNB, "1001").stats_at == 1_800_000_000.0
+    assert service.get(UNB, "1002").stats_at is None
+
+
+def test_sync_keeps_want_count_when_list_has_no_want_label(service, platform):
+    """没人想要时主页列表里没有"N人想要"标签：插件拿来的 0 不能被同步冲成空（页面上又变回 -）。"""
+    run(service.sync(UNB))
+    service.save_stats(UNB, "1001", stats_item(wantCnt=0))
+    run(service.sync(UNB))
+    assert service.get(UNB, "1001").want_count == 0
+
+    platform.items["1001"]["want"] = 3  # 有人想要了，列表里有标签，以列表的为准
+    run(service.sync(UNB))
+    assert service.get(UNB, "1001").want_count == 3
+
+
 @pytest.mark.parametrize(
     "item",
     [

@@ -101,6 +101,7 @@ items = Table(
     Column("want_count", Integer),
     Column("browse_count", Integer),  # 浏览、收藏是浏览器插件从商品页拿来的，没拿过是 NULL
     Column("collect_count", Integer),
+    Column("stats_at", Double),  # 上次存插件拿来的想要、浏览、收藏数的时间，没拿过是 NULL
     # 最近一次同步时还在主页列表里
     Column("on_platform", Boolean, nullable=False, server_default=text("true")),
     Column("first_seen_at", Double, nullable=False),
