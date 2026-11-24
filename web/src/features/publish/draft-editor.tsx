@@ -59,6 +59,7 @@ import {
   putDraft,
   useAddImage,
   useAddresses,
+  useCheckWords,
   useChooseLabel,
   useDeleteDraft,
   usePlaces,
@@ -67,12 +68,18 @@ import {
   useRemoveImage,
   useSaveDraft,
 } from "./queries"
+import { WordCheck, type PlatformState } from "./word-check"
 
 const MAX_IMAGES = 9
 /** 闲鱼的描述最多多少字（和 xianyu_core/publish.py 一样按码点数）。超出的标红，不截，删到这么多才能发 */
 const MAX_DESC = 1500
 /** 停止输入多久以后自动保存 */
 const SAVE_DELAY_MS = 800
+/**
+ * 描述保存好以后再等多久查平台违禁词。本地词表随保存一起查（不请求闲鱼）；平台检查算读接口的限流，
+ * 所以等描述真停下来：打字时一直在改、不查，停手 0.8 秒保存，再过这么久没改才查，同一段描述只查一次
+ */
+const WORDS_DELAY_MS = 2000
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/bmp"
 /** 与 xianyu_core/publish.py 一致，去掉 emoji 及其组合符，保留普通数字、中文和单位。 */
 const EMOJI = /[#*0-9]\uFE0F?\u20E3|[\u00A9\u00AE\u203C\u2049\u2122\u2139\u2194-\u2199\u21A9-\u21AA\u231A-\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA\u24C2\u25AA-\u25AB\u25B6\u25C0\u25FB-\u25FE\u2600-\u27BF\u2934-\u2935\u2B00-\u2BFF\u3030\u303D\u3297\u3299\u{1F000}-\u{1FAFF}]/gu
@@ -693,6 +700,9 @@ function EditableDraft({
   const recommend = useRecommend(account, draft.id)
   const choose = useChooseLabel(account, draft.id)
   const publish = usePublish(account, draft)
+  const checkWords = useCheckWords(account, draft.id)
+  // 平台检查没跑的原因，只对当时那段描述有效
+  const [skipped, setSkipped] = useState<{ description: string; reason: string } | null>(null)
 
   const errors = priceErrors(form)
   const invalid = Object.keys(errors).length > 0
@@ -741,6 +751,25 @@ function EditableDraft({
     }, SAVE_DELAY_MS)
     return () => clearTimeout(timer)
   }, [form, dirty, invalid, flush])
+
+  // 描述保存好了、还没按它查过平台，停一会儿再查。查完（或者没跑）needed 不变就不会再触发
+  const wordsNeeded = draft.platform_words.needed
+  const savedDescription = draft.description
+  const runCheckWords = checkWords.mutate
+  const checkNow = useCallback(
+    (force: boolean) =>
+      runCheckWords(force, {
+        onSuccess: ({ skipped }) =>
+          setSkipped(skipped ? { description: savedDescription, reason: skipped } : null),
+      }),
+    [runCheckWords, savedDescription],
+  )
+  const publishing = publish.isPending
+  useEffect(() => {
+    if (!wordsNeeded || dirty || publishing) return
+    const timer = setTimeout(() => checkNow(false), WORDS_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [wordsNeeded, dirty, publishing, checkNow])
 
   const update = (patch: Partial<FormState>) => {
     setForm((f) => ({ ...f, ...patch }))
@@ -811,6 +840,14 @@ function EditableDraft({
     ...(descOver > 0 ? [`描述超出 ${descOver} 字`] : []),
   ]
   const busy = publish.isPending
+  const descDirty = form.description !== draft.description
+  let platformState: PlatformState = { kind: "idle" }
+  if (descDirty) platformState = { kind: "typing" }
+  else if (checkWords.isPending) platformState = { kind: "checking" }
+  else if (checkWords.isError) platformState = { kind: "failed", error: errorMessage(checkWords.error) }
+  else if (skipped && skipped.description === draft.description)
+    platformState = { kind: "skipped", reason: skipped.reason }
+  else if (draft.platform_words.needed) platformState = { kind: "waiting" }
   const labelBusy = recommend.isPending || choose.isPending || busy
 
   // 编辑时自动保存只是暂存在后台，点"保存到闲鱼"才改到闲鱼上，用词上分开
@@ -938,6 +975,7 @@ function EditableDraft({
               {descCount}/{MAX_DESC}
             </span>
           </div>
+          <WordCheck draft={draft} state={platformState} onRecheck={() => checkNow(true)} />
         </Field>
 
         <Field
