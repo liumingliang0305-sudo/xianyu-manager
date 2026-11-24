@@ -524,6 +524,33 @@ def test_relist_item_directly(client, platform):
     assert items["9001"]["status"] == 0
     [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
     assert (op["action"], op["item_id"]) == ("relist", "9001")
+    assert items["1002"]["web_blocked"] is None
+
+
+def test_relist_of_web_unsupported_item(client, platform):
+    """图书这类网页端发不了的：说清楚去 App，不留草稿，商品列表里这件带上原因。"""
+    client.post(items_url("/sync"), json={})
+    platform.items["1002"]["desc"] = "考研数学 图书 全套"
+    resp = client.post(items_url("/1002/relist"), json={"publish": True})
+    assert (resp.status_code, resp.json()["code"]) == (409, "web_unsupported")
+    reason = resp.json()["message"]
+    assert "闲鱼 App" in reason and "FAIL_BIZ" not in reason
+    assert client.get(drafts_url()).json() == {"drafts": []}
+    assert platform.published == []
+    items = {it["item_id"]: it for it in client.get(items_url()).json()["items"]}
+    assert (items["1002"]["web_blocked"], items["1001"]["web_blocked"]) == (reason, None)
+    [op] = client.get(f"/api/accounts/{UNB}/item-ops").json()["ops"]
+    assert (op["action"], op["ok"], op["detail"]["from_item"]) == ("relist", False, "1002")
+
+    # 推荐没查出来、平台发布时才拒的也一样（草稿留着，原因记在上面）
+    platform.items["1002"]["desc"] = "平板"
+    platform.fail["mtop.idle.pc.idleitem.publish"] = (
+        "FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布"
+    )
+    resp = client.post(items_url("/1002/relist"), json={"publish": True})
+    assert (resp.status_code, resp.json()["code"]) == (409, "web_unsupported")
+    [draft] = client.get(drafts_url()).json()["drafts"]
+    assert draft["error"] == resp.json()["message"]
 
 
 def test_draft_errors(client, platform):

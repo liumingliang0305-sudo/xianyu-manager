@@ -586,6 +586,8 @@ def recommend_result(data):
     if "充电宝" in data["description"]:
         cert = {"propertyId": "230186843", "propertyName": "3C证书编号"}
         cards.append({"cardType": "7001", "cardData": cert})
+    if "图书" in data["description"]:  # 图书的卡片是普通卡片，带 isBook
+        cards.append({"cardType": "20401", "cardData": {"propertyName": "书名", "isBook": "true"}})
     predicted = {"catId": 50025403, "catName": "落地灯", "channelCatId": 126858403}
     return {"cardList": cards, "categoryPredictResult": predicted, "result": "OKAY"}
 

@@ -11,7 +11,8 @@
 6. 点发布：表单值转成请求体调 publish，返回新商品的 itemId。
 
 推荐结果里有不是普通选项的卡片（比如要填 3C 证书编号）或者是图书时，网页端提示
-"当前分类不支持网页端发布"，这里也一样不发。
+"当前分类不支持网页端发布"，这里也一样不发。没在本地拦下来的，发布、编辑接口回
+FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT，抛 WebUnsupportedError（mtop.py 里认的）。
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from xianyu_core.errors import XianyuError
+from xianyu_core.errors import PublishBlockedError, XianyuError
 from xianyu_core.item import PUBLISH_SOURCE, SPM_PUBLISH, unique_code
 from xianyu_core.mtop import MtopClient
 
@@ -77,10 +78,6 @@ _EMOJI = re.compile(
 def strip_emoji(text: str) -> str:
     """去掉网页端发布不接受的 emoji，正文、换行和普通数字保持原样。"""
     return _EMOJI.sub("", text)
-
-
-class PublishBlockedError(XianyuError):
-    """平台不让发：账号被限制发布、描述里有违禁词。"""
 
 
 @dataclass

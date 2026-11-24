@@ -10,6 +10,9 @@
 - 看商品的描述、图片、库存（`fetch_detail`）用卖家自己的编辑页接口 editDetail；
 - 浏览数、收藏数只有 pc.detail 里有，由浏览器插件在用户自己的 Chrome 里拿到、页面转交过来存
   （`save_stats`），同步时不再逐个拉。
+
+闲鱼说网页端发布、编辑不了的商品（图书这类分类，WebUnsupportedError）：那次改动的记录上标
+`web_unsupported`，列表里这件商品带上原因（`web_blocked`），页面就不再让点重新上架、编辑。
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Any, TypeVar
 
 from app.accounts import Accounts
 from app.db import Database, Row
+from xianyu_core.errors import WebUnsupportedError
 from xianyu_core.item import ItemApi, ItemCard, ItemForm, cent_to_yuan
 
 T = TypeVar("T")
@@ -31,6 +35,8 @@ ONLINE = 0
 # pc.detail 的 itemDO 里的想要、浏览、收藏数，顺序和 save_stats 里一致
 STAT_KEYS = ("wantCnt", "browseCnt", "collectCnt")
 MAX_COUNT = 2**31 - 1  # 库里是 integer
+# 改动记录 detail 里的标记：平台说这个商品网页端发布、编辑不了
+WEB_UNSUPPORTED = "web_unsupported"
 
 
 class PriceGuardError(ValueError):
@@ -63,6 +69,9 @@ class ItemRecord:
     on_platform: bool
     first_seen_at: float
     synced_at: float
+    # 闲鱼说这个商品网页端发布、编辑不了时，那次的原因（从改动记录里看，见 `web_blocked`）。
+    # 只有 list 填，别的地方是 None
+    web_blocked: str | None = None
 
     @classmethod
     def from_row(cls, row: Row) -> ItemRecord:
@@ -153,7 +162,34 @@ class ItemService:
         if not include_gone:
             sql += " AND on_platform"
         sql += " ORDER BY status, first_seen_at DESC"
-        return [ItemRecord.from_row(r) for r in self._db.execute(sql, args)]
+        records = [ItemRecord.from_row(r) for r in self._db.execute(sql, args)]
+        blocked = self.web_blocked(account_id)
+        for record in records:
+            record.web_blocked = blocked.get(record.item_id)
+        return records
+
+    def web_blocked(self, account_id: str) -> dict[str, str]:
+        """闲鱼说网页端发布、编辑不了的商品 → 原因。不请求平台。
+
+        从改动记录里看：重新上架（算在照着抄的那个商品上）、编辑、改价被平台以网页端不支持拒了，
+        记录上有 WEB_UNSUPPORTED 标记；这个商品后来又有成功的重新上架、编辑、改价就不算了。
+        """
+        rows = self._db.execute(
+            """
+            SELECT DISTINCT ON (target) target, ok, error FROM (
+                SELECT id, ok, error,
+                       CASE WHEN action = 'relist' THEN detail::jsonb ->> 'from_item'
+                            ELSE item_id END AS target
+                FROM item_ops
+                WHERE account_id = %s AND action IN ('relist', 'edit', 'price')
+                  AND (ok OR (detail::jsonb ->> %s) = 'true')
+            ) ops
+            WHERE target <> ''
+            ORDER BY target, id DESC
+            """,
+            (account_id, WEB_UNSUPPORTED),
+        )
+        return {row["target"]: row["error"] or "" for row in rows if not row["ok"]}
 
     def get(self, account_id: str, item_id: str) -> ItemRecord | None:
         row = self._db.execute(
@@ -327,6 +363,8 @@ class ItemService:
         try:
             result = await op
         except Exception as exc:
+            if isinstance(exc, WebUnsupportedError):
+                detail = {**detail, WEB_UNSUPPORTED: True}
             self.log_op(account_id, item_id, action, detail, error=str(exc) or type(exc).__name__)
             raise
         self.log_op(account_id, item_id, action, detail, error=None)

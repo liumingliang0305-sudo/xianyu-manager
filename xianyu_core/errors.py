@@ -36,6 +36,18 @@ class MtopError(XianyuError):
     """其他 mtop 业务错误。"""
 
 
+class PublishBlockedError(XianyuError):
+    """平台不让发：账号被限制发布、描述里有违禁词。"""
+
+
+class WebUnsupportedError(PublishBlockedError):
+    """这个商品网页端发布、编辑不了，平台让去闲鱼 App（图书这类分类）。
+
+    发布、编辑接口回 FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT 时抛。
+    和违禁词不同，改描述、重试都没用。
+    """
+
+
 class QRLoginError(XianyuError):
     """扫码登录失败：取码失败、二维码过期、用户取消、平台持续报错等。"""
 

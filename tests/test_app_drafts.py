@@ -9,6 +9,7 @@ from PIL import Image
 from app.drafts import DraftNotFoundError, DraftService
 from app.images import ImageStore, normalize
 from app.items import ItemService, PriceGuardError
+from xianyu_core.errors import WebUnsupportedError
 from xianyu_core.publish import PublishBlockedError
 
 
@@ -490,7 +491,15 @@ def test_relist_copies_item_into_publish_draft(service, platform, items):
     assert draft.address["poiName"] == "某广场"
     assert draft.current_labels() == [{"name": "成色", "value": "几乎全新"}]
     assert [d.id for d in service.list(UNB)] == [draft.id]  # 在发布页的列表里
-    assert [api for api, _ in platform.calls[calls:]] == ["mtop.idle.pc.idleitem.editDetail"]
+    # 拉表单，再照原来的标签、类目推荐一次，查这个分类网页端能不能发；推荐结果不存
+    assert [api for api, _ in platform.calls[calls:]] == [
+        "mtop.idle.pc.idleitem.editDetail",
+        "mtop.taobao.idle.kgraph.property.recommend",
+    ]
+    _, data = platform.calls[-1]
+    assert [label["text"] for label in data["selectedList"]] == ["洗衣机", "几乎全新"]
+    assert (data["catId"], data["description"]) == ("50025413", "洗衣机")
+    assert draft.cards == []
 
     calls = len(platform.calls)
     assert run(service.relist_item(UNB, "1001")).id == draft.id  # 接着改，不再请求平台
@@ -597,3 +606,94 @@ def test_failed_relist_is_logged_and_can_retry(service, platform, items):
 
     del platform.fail["mtop.idle.pc.idleitem.publish"]
     assert run(service.publish(UNB, draft.id)).item_id == "9001"
+
+
+# ---- 网页端发不了的商品 ----
+
+WEB_UNSUPPORTED = "FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布"
+
+
+def test_relist_of_book_is_refused_before_any_draft_or_write(service, platform, items):
+    run(items.sync(UNB))
+    platform.items["1002"]["desc"] = "考研数学 图书 全套"
+    message = "网页端发不了（要填书名），请到闲鱼 App 里重新上架"
+    with pytest.raises(WebUnsupportedError, match=message):
+        run(service.relist_item(UNB, "1002"))
+
+    assert service.list(UNB) == []  # 不建草稿
+    assert platform.published == []
+    assert [api for api, _ in platform.calls][-2:] == [
+        "mtop.idle.pc.idleitem.editDetail",
+        "mtop.taobao.idle.kgraph.property.recommend",
+    ]
+    [op] = items.history(UNB)
+    assert (op.action, op.ok, op.item_id) == ("relist", False, "")
+    assert op.detail == {"price": 140000, "from_item": "1002", "web_unsupported": True}
+    # 记住了：商品列表里这件带上原因，别的不受影响
+    listed = {it.item_id: it.web_blocked for it in items.list(UNB)}
+    assert listed == {"1001": None, "1002": op.error}
+
+
+def test_recommend_failure_does_not_block_relist(service, platform, items):
+    platform.fail["mtop.taobao.idle.kgraph.property.recommend"] = "FAIL_BIZ_X::推荐服务忙"
+    draft = run(service.relist_item(UNB, "1002"))
+    assert draft.relist_item_id == "1002"
+    assert items.history(UNB) == []
+
+
+def test_platform_refusing_relist_is_a_clear_error_and_remembered(service, platform, items):
+    """推荐没查出来、发布时平台才说网页端发不了：说清楚去 App，草稿和原因留着，商品记下来。"""
+    run(items.sync(UNB))
+    draft = run(service.relist_item(UNB, "1002"))
+    platform.fail["mtop.idle.pc.idleitem.publish"] = WEB_UNSUPPORTED
+    with pytest.raises(WebUnsupportedError, match="闲鱼 App") as exc_info:
+        run(service.publish(UNB, draft.id))
+    reason = str(exc_info.value)
+    assert "FAIL_BIZ" not in reason
+
+    assert service.get(UNB, draft.id).error == reason
+    [op] = items.history(UNB)
+    assert (op.action, op.ok, op.detail["from_item"], op.detail["web_unsupported"]) == (
+        "relist",
+        False,
+        "1002",
+        True,
+    )
+    assert {it.item_id: it.web_blocked for it in items.list(UNB)}["1002"] == reason
+
+    # 别的原因失败的不算；后来真的发出去了（比如平台改了规矩）就不再记着
+    platform.fail["mtop.idle.pc.idleitem.publish"] = "FAIL_BIZ_X::类目不对"
+    with pytest.raises(Exception, match="类目不对"):
+        run(service.publish(UNB, draft.id))
+    assert items.web_blocked(UNB) == {"1002": reason}
+    del platform.fail["mtop.idle.pc.idleitem.publish"]
+    run(service.publish(UNB, draft.id))
+    assert items.web_blocked(UNB) == {}
+
+
+def test_platform_refusing_edit_is_remembered(service, platform, items):
+    run(items.sync(UNB))
+    draft = run(service.edit_item(UNB, "1001"))
+    service.update(UNB, draft.id, **edit_form(draft, description="洗衣机 九成新"))
+    platform.fail["mtop.idle.pc.idleitem.edit"] = WEB_UNSUPPORTED
+    with pytest.raises(WebUnsupportedError):
+        run(service.publish(UNB, draft.id))
+
+    assert "闲鱼 App" in service.get(UNB, draft.id).error  # 编辑草稿留着，原因记在上面
+    [op] = items.history(UNB, "1001")
+    assert (op.action, op.ok, op.detail["web_unsupported"]) == ("edit", False, True)
+    assert items.web_blocked(UNB) == {"1001": op.error}
+
+
+def test_platform_refusing_price_change_is_remembered(platform, items):
+    run(items.sync(UNB))
+    platform.fail["mtop.idle.pc.idleitem.edit"] = WEB_UNSUPPORTED
+    with pytest.raises(WebUnsupportedError):
+        run(items.change_price(UNB, "1001", 30000))
+    [op] = items.history(UNB, "1001")
+    assert op.detail == {"from": 35800, "to": 30000, "web_unsupported": True}
+    assert set(items.web_blocked(UNB)) == {"1001"}
+
+    del platform.fail["mtop.idle.pc.idleitem.edit"]
+    run(items.change_price(UNB, "1001", 30000))
+    assert items.web_blocked(UNB) == {}

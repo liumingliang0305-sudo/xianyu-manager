@@ -9,12 +9,14 @@ import {
   SquarePenIcon,
   Trash2Icon,
 } from "lucide-react"
+import type { ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -27,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Item } from "@/lib/api"
 import { count, itemState, itemUrl, yuan } from "@/lib/format"
 
@@ -50,8 +53,29 @@ function total(items: Item[], key: "want_count" | "browse_count" | "collect_coun
   return values.length === 0 ? "-" : count(values.reduce((a, b) => a + b, 0))
 }
 
+/**
+ * 闲鱼说网页端发不了的商品（图书这类分类）：在原来按钮的位置说一句去 App，
+ * 悬停或 Tab 到这里看那次闲鱼给的原因
+ */
+function AppOnly({ reason, children }: { reason: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="rounded-md px-2 py-1 text-xs whitespace-nowrap text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
   const editable = itemState(item) === "online"
+  const blocked = !!item.web_blocked
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -73,7 +97,8 @@ function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
         {editable && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => onAction("edit", item)}>
+            {blocked && <DropdownMenuLabel className="font-normal">只能在 App 里编辑</DropdownMenuLabel>}
+            <DropdownMenuItem disabled={blocked} onSelect={() => onAction("edit", item)}>
               <SquarePenIcon />
               编辑商品
             </DropdownMenuItem>
@@ -90,11 +115,12 @@ function ItemMenu({ item, onAction }: { item: Item; onAction: OnAction }) {
         {!editable && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => onAction("relist", item)}>
+            {blocked && <DropdownMenuLabel className="font-normal">只能在 App 里上架</DropdownMenuLabel>}
+            <DropdownMenuItem disabled={blocked} onSelect={() => onAction("relist", item)}>
               <ArchiveRestoreIcon />
               重新上架
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => onAction("relist-edit", item)}>
+            <DropdownMenuItem disabled={blocked} onSelect={() => onAction("relist-edit", item)}>
               <SquarePenIcon />
               编辑后上架
             </DropdownMenuItem>
@@ -181,11 +207,17 @@ export function ItemsTable({
                           <PencilIcon />
                           改价
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => onAction("edit", item)}>
-                          <SquarePenIcon />
-                          编辑
-                        </Button>
+                        {item.web_blocked ? (
+                          <AppOnly reason={item.web_blocked}>只能在 App 里编辑</AppOnly>
+                        ) : (
+                          <Button variant="outline" size="sm" onClick={() => onAction("edit", item)}>
+                            <SquarePenIcon />
+                            编辑
+                          </Button>
+                        )}
                       </>
+                    ) : item.web_blocked ? (
+                      <AppOnly reason={item.web_blocked}>只能在 App 里上架</AppOnly>
                     ) : (
                       <>
                         <Button

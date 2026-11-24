@@ -97,6 +97,15 @@ App 里让原商品回到在售的接口没抓过，不猜接口名去调（写�
 🔍 还没在线上试过：下架、卖掉的商品 `editDetail` 拿不拿得到，`publish` 收不收 editDetail 格式的图片（多了 `imgPath`、
 `templateIndex` 这些字段），以第一次实测为准。
 
+**网页端发不了的商品**：2026-11 用户反馈（issue #13），重新上架一本已卖出的书（考研教材），`publish` 返回
+`FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布`。错误码里是 PUBLISH_OR_EDIT，
+按字面 `edit`（编辑、改价）也会这样回，还没碰到过。这和发布页"当前分类不支持网页端发布"是同一回事
+（见下面"类目推荐"），只是重新上架照抄原商品的标签，没走推荐，到最后一步才被平台拒。
+editDetail 里没找到能直接看出"网页端发不了"的字段，所以本系统新抄重新上架的草稿前，照原商品的描述、标签、类目
+推荐一次（和编辑页第一次推荐的写法一样，多一次"读"请求），推荐结果里有网页端发不了的卡片就不建草稿；
+推荐结果不存进草稿，请求体还是照原商品的。平台回这个错误码时 `xianyu_core/mtop.py` 抛 `WebUnsupportedError`
+（`PublishBlockedError` 的一种），接口返回 409 `web_unsupported`。
+
 ## 发布商品
 
 > 来源：2026-11-03 读网页端发布页（goofish.com/publish）xy-site 0.0.179 的 `p_publish-index.js`，并用已登录账号
@@ -115,7 +124,7 @@ App 里让原商品回到在售的接口没抓过，不猜接口名去调（写�
 | `mtop.taobao.idle.local.poi.get` ✅ | 1.0 | `{longitude, latitude}` | 发货地，带请求头 `EagleEye-UserData: spm-cnt=a21ybx`。见下 |
 | `mtop.idle.item.publish.service.cards.list` ✅ | 1.0 | `{cpvList, itemInfoJson, param}`（都是 JSON 字符串） | 这个分类能开的服务。`itemInfoJson` 里没有 `itemCatDTO` 时报 `PARAM_ILLEGAL::item cat info miss`。实测这个账号返回 `{supportService: false}`，没有服务 |
 | `mtop.taobao.idleitem.badwords.prepubcheck` ✅ | **2.0** | `{title: 描述, scene: "pcPublish", sessionId: 毫秒时间戳接 unb}` | 违禁词。`result` 为真时 `badWordAlertInfo.items[].words` 是命中的词，`forbidPublish` 为真不让发 |
-| `mtop.idle.pc.idleitem.publish` 🔍 | 1.0 | 和编辑一样，不带 itemId | 成功返回 `{itemId}`。`FAIL_BIZ_STRONG_VALID_VERIFY_INFO` 是要先做实人认证（网页端弹二维码） |
+| `mtop.idle.pc.idleitem.publish` 🔍 | 1.0 | 和编辑一样，不带 itemId | 成功返回 `{itemId}`。`FAIL_BIZ_STRONG_VALID_VERIFY_INFO` 是要先做实人认证（网页端弹二维码）；`FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT` 是这个商品网页端发不了（图书这类分类，见上面"重新上架"） |
 | `mtop.idle.idleitem.draft.edit` / `draft.publish` 🔍 | 1.0 | | 闲鱼自己的草稿箱，网页端只在"这个分类网页端不支持"时存进去、扫码去 App 接着发。本系统没用 |
 
 **传图** 🔍：`POST https://stream-upload.goofish.com/api/upload.api?floderId=0&appkey=fleamarket&_input_charset=utf-8`，
