@@ -142,7 +142,7 @@ from xianyu_core.errors import (
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.order import SOLD
-from xianyu_core.publish import MAX_DESC, MAX_IMAGES, PublishBlockedError, strip_emoji
+from xianyu_core.publish import MAX_IMAGES, PublishBlockedError, strip_emoji
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -988,7 +988,7 @@ def create_app(
         images = [img for img in source.images if img.sha][:MAX_IMAGES]
         draft = drafts(request).create(
             account_id,
-            strip_emoji(f"{source.title}\n\n{source.content}")[:MAX_DESC],
+            strip_emoji(f"{source.title}\n\n{source.content}"),
             images=[DraftImage(img.sha, img.width or 0, img.height or 0) for img in images],
         )
         return _draft(draft)

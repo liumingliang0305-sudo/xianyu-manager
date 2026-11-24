@@ -187,7 +187,8 @@ def test_payload_rejects_what_the_web_form_rejects(overrides, message):
 
 def test_check_desc_length():
     check_desc("好" * 1500)
-    with pytest.raises(ValueError, match="最多 1500"):
+    check_desc("𠀀" * 1500)  # 扩展区的字按一个字算，和发布页的计数一样
+    with pytest.raises(ValueError, match="最多 1500 个字，现在超出 1 个字"):
         check_desc("好" * 1501)
 
 

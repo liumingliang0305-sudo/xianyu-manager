@@ -130,3 +130,20 @@ export function orderUrl(orderId: string, side: OrderSide): string {
   const role = side === "bought" ? "buyer" : "seller"
   return `https://www.goofish.com/order-detail?orderId=${orderId}&role=${role}`
 }
+
+/**
+ * 按字数：一个 Unicode 码点算一个字，和后台（Python 的 len）一样。扩展区的生僻字在 JS 里是两个
+ * UTF-16 单元（`.length` 是 2），这里也只算一个。`cut` 是第 limit 个字之后在字符串里的下标，
+ * 没超过时是字符串的长度。
+ */
+export function countChars(text: string, limit: number): { count: number; cut: number } {
+  let count = 0
+  let index = 0
+  let cut = text.length
+  for (const char of text) {
+    if (count === limit) cut = index
+    count++
+    index += char.length
+  }
+  return { count, cut }
+}

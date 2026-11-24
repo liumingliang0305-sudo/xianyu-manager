@@ -10,6 +10,9 @@
 origin 改，表单里没有的（数量、服务……）原样带回。提交记进 item_ops，action 是 edit。
 编辑草稿不在发布页的列表里。
 
+描述不截断：超过闲鱼的字数上限（MAX_DESC）也照样存（照货源建草稿时正文整段带过来），发布页把超出的
+部分标红让卖家自己删；发布、提交编辑时在本地就拦下，不请求平台。推荐分类只拿前 MAX_DESC 个字去推荐。
+
 重新上架（`relist_item`）：网页端没有让下架、卖掉的商品回到在售的接口，这里是照原商品再发一个新商品。
 建草稿和编辑一样拿一次 editDetail 存进 origin，草稿在发布页的列表里，改好了发布。
 请求体照 origin 拼，和编辑的一样（原来的图不重传，属性、服务、App 里设的运费模板原样带上），
@@ -39,6 +42,7 @@ from xianyu_core.item import (
 from xianyu_core.publish import (
     CATEGORY,
     KEEP_POST,
+    MAX_DESC,
     MAX_IMAGES,
     NORMAL_CARD,
     POST_MODES,
@@ -60,6 +64,9 @@ from xianyu_core.publish import (
 
 ADDRESS_KEYS = ("area", "city", "divisionId", "gps", "poiId", "poiName", "prov")
 TITLE_LENGTH = 30  # 发布后先记进商品表的标题取描述的前多少个字，同步时换成平台截的
+# 草稿描述最多存多少字。闲鱼只收 MAX_DESC 字，多出来的留给卖家自己删；这个上限只防误贴一大段，
+# 比第三方货源的正文（app/source_parsers.py 最多 5 万字）加标题长，照货源建草稿时不用截
+MAX_DRAFT_DESC = 60000
 # 编辑提交时比较的几块请求体 → 改动记录里的名字
 EDIT_FIELDS = {
     "itemTextDTO": "描述",
@@ -232,7 +239,7 @@ class DraftService:
             " created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 account_id,
-                strip_emoji(description),
+                _description(description),
                 _images_json(images),
                 last["address"] if last else None,
                 pdd_goods_id,
@@ -276,7 +283,7 @@ class DraftService:
             " post_mode = %s, post_price_cent = %s, take_self = %s, images = %s, address = %s,"
             " updated_at = %s WHERE id = %s",
             (
-                strip_emoji(description),
+                _description(description),
                 price_cent,
                 orig_price_cent,
                 post_mode,
@@ -329,7 +336,12 @@ class DraftService:
     # ---- 要请求平台的 ----
 
     async def recommend(self, account_id: str, draft_id: int) -> Draft:
-        """按描述推荐分类和属性。已经推荐过的，带上之前的选择一起推荐（和网页端一样）。"""
+        """按描述推荐分类和属性。已经推荐过的，带上之前的选择一起推荐（和网页端一样）。
+
+        描述超过闲鱼的字数上限时只拿前 MAX_DESC 个字推荐（改选项再推荐也是，见 `_recommend`）：
+        网页端的描述最多这么长，平台不会收到比网页端长的描述；卖什么写在开头，推荐主要看开头。
+        超出的部分不挡推荐，卖家可以先定分类再慢慢删。
+        """
         draft = self._editable(account_id, draft_id)
         if not draft.description.strip():
             raise ValueError("先写描述再推荐分类")
@@ -659,8 +671,9 @@ class DraftService:
         if draft.origin and not cards:
             labels = draft.origin.get("itemLabelExtList") or []
         async with self._accounts.mtop(draft.account_id) as mtop:
+            # 超过闲鱼字数上限的描述只拿前面这些字推荐，见 recommend
             result = await PublishApi(mtop).recommend(
-                draft.description,
+                draft.description[:MAX_DESC],
                 cards,
                 labels=labels,
                 category=draft.category if labels is not None else None,
@@ -719,6 +732,14 @@ def _comparable(key: str, value: Any) -> Any:
 
 def _images_json(images: list[DraftImage]) -> str:
     return json.dumps([asdict(img) for img in images])
+
+
+def _description(text: str) -> str:
+    """要存的描述：去掉 emoji。超过闲鱼的字数上限也存，只挡住长得离谱的。"""
+    text = strip_emoji(text)
+    if len(text) > MAX_DRAFT_DESC:
+        raise ValueError(f"描述最多存 {MAX_DRAFT_DESC} 字，闲鱼上最多 {MAX_DESC} 字")
+    return text
 
 
 def _clean_address(address: dict[str, Any]) -> dict[str, Any]:
