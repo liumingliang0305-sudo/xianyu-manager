@@ -311,7 +311,7 @@ class DraftService:
         self._editable(account_id, draft_id)
         self._db.execute(
             "UPDATE drafts SET description = %s, updated_at = %s WHERE id = %s",
-            (strip_emoji(description), time.time(), draft_id),
+            (_description(description), time.time(), draft_id),
         )
         return self.get(account_id, draft_id)
 
