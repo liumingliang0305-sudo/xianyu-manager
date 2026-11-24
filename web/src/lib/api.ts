@@ -543,6 +543,8 @@ export interface PddGoodsSummary {
 
 export interface PddImage {
   url: string
+  /** 后台存的图片编号，建草稿挑图时用；还没下载下来是 null */
+  sha: string | null
   width: number | null
   height: number | null
   /** 已经下载到后台（建草稿用的是下载下来的） */
@@ -563,6 +565,8 @@ export interface PddSku {
   on_sale: boolean
   /** 规格图，没有是空串 */
   thumb: string
+  /** 规格图在后台存的编号，没有规格图或者没下载下来是 null */
+  thumb_sha: string | null
 }
 
 export interface PddGoods extends PddGoodsSummary {
@@ -1338,11 +1342,14 @@ export const api = {
   deletePddGoods: (goodsId: string) =>
     request<{ ok: true }>(`/pdd/goods/${encodeURIComponent(goodsId)}`, { method: "DELETE" }),
 
-  /** 照拼多多货源在这个账号建一个发布草稿（描述、主图），价格这些在发布页填。不请求闲鱼 */
-  draftFromPdd: (account: string, goodsId: string) =>
+  /**
+   * 照拼多多货源在这个账号建一个发布草稿，价格这些在发布页填。不请求闲鱼。
+   * images 是挑的图（sha，按顺序，1–9 张，主图、详情图、规格图都行）；不传是下载下来的主图
+   */
+  draftFromPdd: (account: string, goodsId: string, images?: string[]) =>
     request<Draft>(
       `/accounts/${encodeURIComponent(account)}/pdd/${encodeURIComponent(goodsId)}/draft`,
-      { method: "POST" },
+      { method: "POST", body: images ? JSON.stringify({ images }) : undefined },
     ),
 
   sources: () => request<{ sources: SourceSummary[] }>("/sources").then((r) => r.sources),
@@ -1367,10 +1374,11 @@ export const api = {
   deleteSource: (sourceId: string) =>
     request<{ ok: true }>(`/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" }),
 
-  draftFromSource: (account: string, sourceId: string) =>
+  /** 照第三方货源建发布草稿。images 是挑的图（sha，按顺序，1–9 张）；不传是下载下来的前 9 张 */
+  draftFromSource: (account: string, sourceId: string, images?: string[]) =>
     request<Draft>(
       `/accounts/${encodeURIComponent(account)}/sources/${encodeURIComponent(sourceId)}/draft`,
-      { method: "POST" },
+      { method: "POST", body: images ? JSON.stringify({ images }) : undefined },
     ),
 
   /** 问题反馈：mine 自己提交的；all 所有人的，只有管理员能看，新提交的在前 */

@@ -11,7 +11,7 @@
 同一个商品再导入一次是更新（下载过的图不再下）。
 
 图片（主图、详情图、规格图）导入时下载到 data/images（app/images.py，和草稿共用，
-同一张图只存一份），建草稿时直接用；视频只记地址，不下载。拼多多的图片、视频地址不用登录也能下载。
+同一张图只存一份），建草稿时直接用（用户挑哪几张，默认是主图）；视频只记地址，不下载。拼多多的图片、视频地址不用登录也能下载。
 只下载拼多多自己 CDN 上的地址（*.pddpic.com、*.yangkeduo.com），别的地址直接丢掉。
 """
 
@@ -23,7 +23,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -32,6 +32,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from app.db import Database, Row
+from app.drafts import pick_images
 from app.images import ImageStore, drop_unused
 from xianyu_core.publish import MAX_IMAGES
 
@@ -300,8 +301,11 @@ class PddService:
         )
         drop_unused(self._db, self._images, goods.shas())
 
-    def draft_images(self, goods: PddGoods) -> list[PddImage]:
-        """建草稿用的图：下载下来的主图，最多 9 张。"""
+    def draft_images(self, goods: PddGoods, shas: Sequence[str] | None = None) -> list[PddImage]:
+        """建草稿用的图。`shas` 是用户挑的（主图、详情图、规格图都行），按挑的顺序；
+        不传是下载下来的主图，最多 9 张。"""
+        if shas is not None:
+            return pick_images(goods.all_images(), shas)
         return [img for img in goods.images if img.sha][:MAX_IMAGES]
 
     def _find(self, user_id: int, goods_id: str) -> PddGoods | None:

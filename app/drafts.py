@@ -25,8 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from app.accounts import Accounts
 from app.db import Database, Row
@@ -89,6 +90,35 @@ class DraftImage:
     width: int
     height: int
     url: str | None = None  # 传到闲鱼以后的地址，还没传是 None
+
+
+class SavedImage(Protocol):
+    """货源里的一张图（拼多多、第三方货源）：下载下来以后有 sha 和宽高，没下载下来 sha 是 None。"""
+
+    sha: str | None
+    width: int | None
+    height: int | None
+
+
+def pick_images[T: SavedImage](images: Iterable[T], shas: Sequence[str]) -> list[T]:
+    """照货源建草稿时用户挑的图：按挑的顺序返回货源里的那几张。
+
+    要 1–9 张、不能重复，每张都得是这个货源下载下来的图（同一张图在货源里出现几次算一张）。
+    不合要求抛 ValueError（接口返回 400）。
+    """
+    if not shas:
+        raise ValueError("至少选一张图片")
+    if len(shas) > MAX_IMAGES:
+        raise ValueError(f"最多选 {MAX_IMAGES} 张图片")
+    if len(set(shas)) != len(shas):
+        raise ValueError("同一张图片选了两次")
+    saved: dict[str, T] = {}
+    for img in images:
+        if img.sha:
+            saved.setdefault(img.sha, img)
+    if any(sha not in saved for sha in shas):
+        raise ValueError("选的图片不在这个货源里，或者还没下载下来，刷新一下再选")
+    return [saved[sha] for sha in shas]
 
 
 @dataclass

@@ -12,14 +12,17 @@ import json
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 
 import httpx
 
 from app.db import Database, Row
+from app.drafts import pick_images
 from app.images import MAX_BYTES, ImageStore, drop_unused
 from app.source_parsers import Detection, SourceImage, detect, parse
 from app.webpage import fetch, public_client
+from xianyu_core.publish import MAX_IMAGES
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +56,12 @@ class Source:
 
     def missing(self) -> int:
         return sum(not img.sha for img in self.images)
+
+    def draft_images(self, shas: Sequence[str] | None = None) -> list[SourceImage]:
+        """建草稿用的图。`shas` 是用户挑的，按挑的顺序；不传是下载下来的前 9 张。"""
+        if shas is not None:
+            return pick_images(self.images, shas)
+        return [img for img in self.images if img.sha][:MAX_IMAGES]
 
     def images_json(self) -> str:
         return json.dumps([asdict(img) for img in self.images], ensure_ascii=False)

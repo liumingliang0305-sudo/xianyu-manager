@@ -77,10 +77,12 @@ export function useDeleteSource() {
   })
 }
 
+/** 照第三方货源建发布草稿，images 是挑的图（sha，按顺序）；货源没有下载下来的图时不传 */
 export function useDraftFromSource(account: string | null) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.draftFromSource(account!, id),
+    mutationFn: ({ id, images }: { id: string; images?: string[] }) =>
+      api.draftFromSource(account!, id, images),
     onSuccess: () => {
       if (account) void client.invalidateQueries({ queryKey: draftKeys.list(account) })
     },

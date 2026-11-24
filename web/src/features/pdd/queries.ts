@@ -44,11 +44,12 @@ export function useDeletePddGoods() {
   })
 }
 
-/** 照货源在当前账号建发布草稿；建好以后发布页的草稿列表要重新拉 */
+/** 照货源在当前账号建发布草稿，images 是挑的图（sha，按顺序）；建好以后发布页的草稿列表要重新拉 */
 export function useDraftFromPdd(account: string | null) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (goodsId: string) => api.draftFromPdd(account!, goodsId),
+    mutationFn: ({ goodsId, images }: { goodsId: string; images: string[] }) =>
+      api.draftFromPdd(account!, goodsId, images),
     onSuccess: () => {
       if (account) void client.invalidateQueries({ queryKey: draftKeys.list(account) })
     },

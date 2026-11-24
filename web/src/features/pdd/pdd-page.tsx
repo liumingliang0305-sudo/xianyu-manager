@@ -36,6 +36,7 @@ import { errorMessage, type Account, type PddGoodsSummary } from "@/lib/api"
 import { count, dateTime, timeAgo } from "@/lib/format"
 
 import { DeletePddDialog } from "./delete-dialog"
+import { PddDraftPicker } from "./draft-picker"
 import { PddDetailSheet } from "./pdd-detail-sheet"
 import { PddThumb } from "./pdd-bits"
 import { priceRange } from "./pdd-format"
@@ -110,16 +111,19 @@ export function PddPage() {
   const [search, setSearch] = useState("")
   const [openId, setOpenId] = useOpenGoods()
   const [removing, setRemoving] = useState<PddGoodsSummary | null>(null)
+  // 正在挑图建草稿的货源
+  const [picking, setPicking] = useState<string | null>(null)
   const { accounts, account } = useAccount()
   const draft = useDraftFromPdd(account)
   const fetchImages = useFetchPddImages()
   const navigate = useNavigate()
 
   const current = accounts.find((a) => a.id === account)
-  const makeDraft = (goodsId: string) => {
+  const makeDraft = (goodsId: string, images: string[]) => {
     if (!account || draft.isPending) return
-    draft.mutate(goodsId, {
+    draft.mutate({ goodsId, images }, {
       onSuccess: (d) => {
+        setPicking(null)
         toast.success(`已在「${current ? accountName(current) : account}」建好草稿，填上价格就能发`)
         navigate(`/publish?draft=${d.id}`)
       },
@@ -134,7 +138,7 @@ export function PddPage() {
           : toast.error(`还有 ${r.total - r.saved} 张没下载下来，过一会儿再试`),
       onError: (error) => toast.error(`下载图片失败：${errorMessage(error)}`),
     })
-  const drafting = draft.isPending ? draft.variables : null
+  const drafting = draft.isPending ? draft.variables.goodsId : null
   const fetching = fetchImages.isPending ? fetchImages.variables : null
 
   const all = useMemo(() => goods.data ?? [], [goods.data])
@@ -230,7 +234,7 @@ export function PddPage() {
                     variant="outline"
                     size="sm"
                     disabled={!account || drafting === g.goods_id}
-                    onClick={() => makeDraft(g.goods_id)}
+                    onClick={() => setPicking(g.goods_id)}
                   >
                     {drafting === g.goods_id ? (
                       <Loader2Icon className="animate-spin" />
@@ -282,11 +286,20 @@ export function PddPage() {
           goodsId={openId}
           summary={all.find((g) => g.goods_id === openId)}
           onClose={() => setOpenId(null)}
-          onDraft={() => makeDraft(openId)}
+          onDraft={() => setPicking(openId)}
           drafting={drafting === openId}
           canDraft={!!account}
           onFetchImages={() => refetchImages(openId)}
           fetching={fetching === openId}
+        />
+      )}
+      {picking && (
+        <PddDraftPicker
+          goodsId={picking}
+          accountName={current ? accountName(current) : (account ?? "")}
+          pending={draft.isPending}
+          onConfirm={(images) => makeDraft(picking, images)}
+          onClose={() => setPicking(null)}
         />
       )}
       {removing && (
