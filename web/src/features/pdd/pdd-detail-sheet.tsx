@@ -99,7 +99,7 @@ function Body({
       </div>
       <p className="-mt-3 text-xs text-muted-foreground">
         {canDraft
-          ? "草稿建在当前账号上：描述是标题、参数和可选规格，图是下面的主图（最多 9 张），价格到发布页填。"
+          ? "草稿建在当前账号上：描述是标题、参数和可选规格，图下一步挑（最多 9 张，默认是主图），价格到发布页填。"
           : "还没有闲鱼账号，先在账号矩阵里添加一个才能建草稿。"}
         {goods.missing_images > 0 && ` 还有 ${goods.missing_images} 张图没下载到后台。`}
       </p>

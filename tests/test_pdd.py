@@ -288,6 +288,68 @@ def test_draft_from_goods(client, plugin, tmp_path):
     assert image_files(tmp_path) == []
 
 
+def test_draft_with_picked_images(client, plugin):
+    client.post("/api/pdd/goods", json=payload(), headers=plugin)
+    goods = client.get(f"/api/pdd/goods/{GOODS_ID}").json()
+    main = goods["images"]
+    detail = goods["detail_images"]
+    thumb = goods["skus"][0]["thumb_sha"]
+    assert thumb and all(img["sha"] for img in main + detail)
+    # 详情图、规格图也能挑，按挑的顺序
+    picked = [detail[2]["sha"], thumb, main[1]["sha"]]
+    resp = client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", json={"images": picked})
+    assert resp.status_code == 200, resp.text
+    draft = resp.json()
+    assert draft["pdd_goods_id"] == GOODS_ID
+    assert [img["sha"] for img in draft["images"]] == picked
+    # 宽高是货源里记的
+    assert (draft["images"][0]["width"], draft["images"][0]["height"]) == (
+        detail[2]["width"],
+        detail[2]["height"],
+    )
+    # 不带请求体还是原来的：下载下来的主图
+    resp = client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft")
+    assert [img["sha"] for img in resp.json()["images"]] == [img["sha"] for img in main]
+    resp = client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", json={})
+    assert [img["sha"] for img in resp.json()["images"]] == [img["sha"] for img in main]
+
+
+@pytest.mark.parametrize(
+    ("pick", "message"),
+    [
+        (lambda shas: [], "至少选一张"),
+        (lambda shas: shas[:1] * 10, "最多选 9 张"),
+        (lambda shas: [shas[0], shas[1], shas[0]], "选了两次"),
+        (lambda shas: [shas[0], "a" * 64], "不在这个货源里"),
+    ],
+)
+def test_draft_rejects_bad_picks(client, plugin, pick, message):
+    client.post("/api/pdd/goods", json=payload(), headers=plugin)
+    goods = client.get(f"/api/pdd/goods/{GOODS_ID}").json()
+    shas = [img["sha"] for img in goods["images"]]
+    resp = client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", json={"images": pick(shas)})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "invalid"
+    assert message in resp.json()["message"]
+    assert client.get(f"/api/accounts/{UNB}/drafts").json()["drafts"] == []
+
+
+def test_draft_rejects_images_no_longer_downloaded(client, plugin, cdn):
+    client.post("/api/pdd/goods", json=payload(), headers=plugin)
+    stale = client.get(f"/api/pdd/goods/{GOODS_ID}").json()["images"][1]
+    # 页面还开着，这期间商品页上的这张图换过一次、这次没下载下来
+    data = payload()
+    data["goods"]["topGallery"].pop(1)
+    client.post("/api/pdd/goods", json=data, headers=plugin)
+    cdn.broken.add(stale["url"])
+    client.post("/api/pdd/goods", json=payload(), headers=plugin)
+    assert client.get(f"/api/pdd/goods/{GOODS_ID}").json()["images"][1]["sha"] is None
+
+    resp = client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", json={"images": [stale["sha"]]})
+    assert resp.status_code == 400
+    assert "还没下载下来" in resp.json()["message"]
+
+
 def test_draft_needs_downloaded_images(client, plugin, cdn):
     cdn.broken.update(media_url(img["url"]) for img in PAYLOAD["goods"]["topGallery"])
     client.post("/api/pdd/goods", json=payload(), headers=plugin)
@@ -310,6 +372,13 @@ def test_goods_belong_to_the_importing_user(client, plugin, database_url):
         client.post(f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", headers=other).status_code == 404
     )
     assert len(client.get("/api/pdd/goods").json()["goods"]) == 1
+    # 账号转给了别人，别人挑图建草稿也找不到这个货源
+    shas = [img["sha"] for img in client.get(f"/api/pdd/goods/{GOODS_ID}").json()["images"]]
+    add_user(database_url, username="other", accounts=[UNB])
+    resp = client.post(
+        f"/api/accounts/{UNB}/pdd/{GOODS_ID}/draft", json={"images": shas[:1]}, headers=other
+    )
+    assert (resp.status_code, resp.json()["code"]) == (404, "pdd_goods_not_found")
 
 
 def test_missing_goods_is_404(client):

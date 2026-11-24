@@ -39,6 +39,7 @@ import { errorMessage, type SourceSummary } from "@/lib/api"
 import { count, dateTime, timeAgo } from "@/lib/format"
 
 import { DeleteSourceDialog } from "./delete-dialog"
+import { SourceDraftPicker } from "./draft-picker"
 import { ImportSourceDialog } from "./import-dialog"
 import { useDraftFromSource, useFetchSourceImages, useSources } from "./queries"
 import { SourceDetailSheet } from "./source-detail-sheet"
@@ -49,6 +50,8 @@ export function SourcesPage() {
   const [search, setSearch] = useState("")
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<SourceSummary | null>(null)
+  // 正在挑图建草稿的货源
+  const [picking, setPicking] = useState<string | null>(null)
   const [params, setParams] = useSearchParams()
   const openId = params.get("source")
   const open = (id: string | null) =>
@@ -93,15 +96,29 @@ export function SourcesPage() {
       },
     )
   }
-  const makeDraft = (id: string) => {
+  const makeDraft = (id: string, images?: string[]) => {
     if (!account || draft.isPending) return
-    draft.mutate(id, {
-      onSuccess: (result) => {
-        toast.success("已建好草稿，描述和前 9 张已保存图片已带入，请核对后填写价格")
-        navigate(`/publish?draft=${result.id}`)
+    draft.mutate(
+      { id, images },
+      {
+        onSuccess: (result) => {
+          setPicking(null)
+          toast.success(
+            images
+              ? `已建好草稿，描述和选的 ${images.length} 张图已带入，请核对后填写价格`
+              : "已建好草稿，描述已带入；货源没有保存下来的图片，请在发布页加图",
+          )
+          navigate(`/publish?draft=${result.id}`)
+        },
+        onError: (error) => toast.error(`建草稿失败：${errorMessage(error)}`),
       },
-      onError: (error) => toast.error(`建草稿失败：${errorMessage(error)}`),
-    })
+    )
+  }
+  // 先挑图；一张保存下来的图都没有时没得挑，直接建（草稿先不带图）
+  const startDraft = (id: string) => {
+    const summary = all.find((source) => source.source_id === id)
+    if (summary && summary.image_count === summary.missing_images) makeDraft(id)
+    else setPicking(id)
   }
   const refetchImages = (id: string) => {
     if (fetchImages.isPending) return
@@ -225,7 +242,7 @@ export function SourcesPage() {
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         disabled={!account || draft.isPending}
-                        onSelect={() => makeDraft(source.source_id)}
+                        onSelect={() => startDraft(source.source_id)}
                       >
                         <SquarePenIcon />
                         建发布草稿
@@ -308,11 +325,19 @@ export function SourcesPage() {
           onClose={() => open(null)}
           onChat={() => chat(openId)}
           chatting={createChat.isPending}
-          onDraft={() => makeDraft(openId)}
+          onDraft={() => startDraft(openId)}
           drafting={draft.isPending}
           canDraft={!!account}
           onFetchImages={() => refetchImages(openId)}
           fetching={fetchImages.isPending}
+        />
+      )}
+      {picking && (
+        <SourceDraftPicker
+          sourceId={picking}
+          pending={draft.isPending}
+          onConfirm={(images) => makeDraft(picking, images)}
+          onClose={() => setPicking(null)}
         />
       )}
       {removing && (

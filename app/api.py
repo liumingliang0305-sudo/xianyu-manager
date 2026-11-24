@@ -34,11 +34,11 @@
   同步开始、结束都通过消息的推送流发一条 sync 事件。
 - 拼多多货源（app/pdd.py）：浏览器插件在拼多多商品页上读出商品推到 POST /api/pdd/goods，
   按用户存（不跟闲鱼账号走），图片下载到本机；POST /api/accounts/{id}/pdd/{goods_id}/draft
-  照它在这个账号建一个发布草稿。
+  照它在这个账号建一个发布草稿，请求体 {"images": [sha, ...]} 是挑的图和顺序，不带是主图前 9 张。
 - 第三方货源（app/sources.py）：POST /api/sources/detect 识别链接属于哪个网站、该用哪个
   解析方案，GET /api/sources/parsers 列出可手动选的方案；POST /api/sources 按识别或手动选的
   方案提取正文和图片，按用户保存，GET /api/sources/{source_id} 查看详情，本地图片鉴权后读取；
-  可建草稿或带进 AI 对话。
+  可建草稿（挑图和拼多多一样）或带进 AI 对话。
 - 搜索暂存（app/stash.py）：搜索页上点「暂存」把搜索结果里的一条存下来（POST /api/search/stash），
   按用户存、名下账号共用。商品详情后台不拉（pc.detail 看别人的商品一调就要滑块），浏览器插件在用户
   自己的 Chrome 里拿到交给页面，页面发到 POST /api/search/stash/{item_id}/detail。都不请求闲鱼。
@@ -142,7 +142,7 @@ from xianyu_core.errors import (
 from xianyu_core.guard import Block, Guard
 from xianyu_core.item import yuan_to_cent
 from xianyu_core.order import SOLD
-from xianyu_core.publish import MAX_DESC, MAX_IMAGES, PublishBlockedError, strip_emoji
+from xianyu_core.publish import MAX_DESC, PublishBlockedError, strip_emoji
 from xianyu_core.search import SearchQuery
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -270,6 +270,11 @@ class PddImportIn(BaseModel):
     # 拼多多商品页 store.initDataObj 里插件挑出来的字段（见 extension/pdd.js）
     goods: dict[str, Any]
     mall: dict[str, Any] | None = None
+
+
+class DraftFromIn(BaseModel):
+    # 照货源建草稿时挑的图（sha），按顺序，1–9 张；不传是默认的那几张
+    images: list[str] | None = None
 
 
 class OrderPriceIn(BaseModel):
@@ -924,13 +929,16 @@ def create_app(
         return {"ok": True}
 
     @authed.post("/api/accounts/{account_id}/pdd/{goods_id}/draft")
-    async def draft_from_pdd(request: Request, account_id: str, goods_id: str) -> dict[str, Any]:
+    async def draft_from_pdd(
+        request: Request, account_id: str, goods_id: str, body: DraftFromIn | None = None
+    ) -> dict[str, Any]:
         """照拼多多货源在这个账号建一个发布草稿：描述是标题、商品参数和可选的规格，
-        图片是下载下来的主图（最多 9 张），价格、邮费、分类在发布页填。不请求闲鱼。"""
+        图片是请求体里挑的那几张（主图、详情图、规格图都行，按挑的顺序），没挑是下载下来的主图，
+        都最多 9 张；价格、邮费、分类在发布页填。不请求闲鱼。"""
         account_id = account(request, account_id)
         service = pdd(request)
         goods = service.get(request.state.user.id, goods_id)
-        images = service.draft_images(goods)
+        images = service.draft_images(goods, body.images if body else None)
         if not images:
             raise ValueError("主图还没下载下来，先在货源里点「重新下载图片」")
         draft = drafts(request).create(
@@ -981,11 +989,13 @@ def create_app(
 
     @authed.post("/api/accounts/{account_id}/sources/{source_id}/draft")
     async def draft_from_source(
-        request: Request, account_id: str, source_id: str
+        request: Request, account_id: str, source_id: str, body: DraftFromIn | None = None
     ) -> dict[str, Any]:
+        """照第三方货源建发布草稿：描述是标题和正文，图片是请求体里挑的（按挑的顺序，最多 9 张），
+        没挑是下载下来的前 9 张。不请求闲鱼。"""
         account_id = account(request, account_id)
         source = sources(request).get(request.state.user.id, source_id)
-        images = [img for img in source.images if img.sha][:MAX_IMAGES]
+        images = source.draft_images(body.images if body else None)
         draft = drafts(request).create(
             account_id,
             strip_emoji(f"{source.title}\n\n{source.content}")[:MAX_DESC],
@@ -1706,7 +1716,8 @@ def _draft(draft: Draft) -> dict[str, Any]:
 def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
     """拼多多货源给页面的样子。
 
-    图片给拼多多 CDN 上的地址（页面直接显示），`saved` 是下载到本机没有。
+    图片给拼多多 CDN 上的地址（页面直接显示），`saved` 是下载到本机没有，
+    `sha` 是本机存的编号（建草稿挑图时用），没下载是 None。
     """
     body: dict[str, Any] = {
         "goods_id": goods.goods_id,
@@ -1729,7 +1740,13 @@ def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
         return body
 
     def image(img: PddImage) -> dict[str, Any]:
-        return {"url": img.url, "width": img.width, "height": img.height, "saved": bool(img.sha)}
+        return {
+            "url": img.url,
+            "sha": img.sha,
+            "width": img.width,
+            "height": img.height,
+            "saved": bool(img.sha),
+        }
 
     return {
         **body,
@@ -1748,6 +1765,7 @@ def _pdd_goods(goods: PddGoods, *, detail: bool = False) -> dict[str, Any]:
                 "quantity": sku.quantity,
                 "on_sale": sku.on_sale,
                 "thumb": sku.thumb.url if sku.thumb else "",
+                "thumb_sha": sku.thumb.sha if sku.thumb else None,
             }
             for sku in goods.skus
         ],

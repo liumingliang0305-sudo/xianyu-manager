@@ -489,6 +489,47 @@ def test_draft_reuses_saved_images_and_delete_preserves_shared_files(client, tmp
     assert not image_path.exists()
 
 
+def test_draft_with_picked_images_in_order(client, source_server, database_url):
+    first = parse_article(article_html(), URL).images[0].url
+    source_server.broken.add(first)
+    source = imported(client)
+    source_id = source["source_id"]
+    # 补下载的那张换一张不一样的图，好分出顺序
+    source_server.broken.clear()
+    source_server.image = png(color="blue", size=(100, 50))
+    source = client.post(f"/api/sources/{source_id}/images").json()
+    blue, red = source["images"][0]["sha"], source["images"][1]["sha"]
+    assert blue != red
+    path = f"/api/accounts/{UNB}/sources/{source_id}/draft"
+
+    response = client.post(path, json={"images": [red, blue]})
+    assert response.status_code == 200, response.text
+    assert [(img["sha"], img["width"], img["height"]) for img in response.json()["images"]] == [
+        (red, 80, 60),
+        (blue, 100, 50),
+    ]
+    # 不带请求体还是原来的：下载下来的前 9 张
+    images = client.post(path).json()["images"]
+    assert [img["sha"] for img in images] == [blue] + [red] * 8
+
+    for picked, message in [
+        ([], "至少选一张"),
+        ([red] * 10, "最多选 9 张"),
+        ([red, red], "选了两次"),
+        ([red, "b" * 64], "不在这个货源里"),
+    ]:
+        response = client.post(path, json={"images": picked})
+        assert response.status_code == 400 and response.json()["code"] == "invalid"
+        assert message in response.json()["message"]
+    assert len(client.get(f"/api/accounts/{UNB}/drafts").json()["drafts"]) == 2
+
+    # 账号转给了别人，别人挑图建草稿也找不到这个货源
+    add_user(database_url, username="other", accounts=[UNB])
+    sign_in(client, username="other")
+    response = client.post(path, json={"images": [red]})
+    assert (response.status_code, response.json()["code"]) == (404, "source_not_found")
+
+
 def test_source_chat_context_is_framed_refreshed_and_deleted_independently(
     client, source_server, model
 ):
