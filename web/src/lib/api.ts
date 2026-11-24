@@ -799,6 +799,26 @@ export interface AgentChatList {
   unavailable: string
 }
 
+/** 对话带的货源里已经下载到后台的一张图，把回复放进新草稿时可以带上 */
+export interface AgentChatImage {
+  sha: string
+  width: number
+  height: number
+  /** 在原网站上的地址：拼多多的 CDN、第三方网页上的 */
+  url: string
+  /** pdd 拼多多货源，source 第三方货源 */
+  origin: "pdd" | "source"
+  /** 主图、详情图、规格图、正文图 */
+  kind: string
+}
+
+/** 把回复放进新草稿时能带的图（同一张只出现一次）。暂存的同行商品的图不在里面 */
+export interface AgentChatImages {
+  images: AgentChatImage[]
+  /** 默认带的（sha），和照货源建草稿一样：拼多多的主图，没有就是第三方货源的图，最多 9 张 */
+  selected: string[]
+}
+
 /** 回复的推送：一段段的字（delta），完了是 done，调模型出错是 error（这一轮不存） */
 export type AgentEvent =
   | { type: "delta"; text: string }
@@ -1239,6 +1259,17 @@ export const api = {
 
   getDraft: (account: string, draftId: number) => request<Draft>(`${draftsPath(account)}/${draftId}`),
 
+  /** 还没发布（提交）的草稿，编辑商品的也在里面，最近改过的在前 */
+  pendingDrafts: (account: string) =>
+    request<{ drafts: Draft[] }>(`${draftsPath(account)}?pending=true`).then((r) => r.drafts),
+
+  /** 只换描述，别的不动；去掉 emoji，不截断。已经发布、提交的草稿不能换 */
+  setDraftDescription: (account: string, draftId: number, description: string) =>
+    request<Draft>(`${draftsPath(account)}/${draftId}/description`, {
+      method: "PUT",
+      body: JSON.stringify({ description }),
+    }),
+
   /** 保存表单，整个提交 */
   updateDraft: (account: string, draftId: number, form: DraftForm) =>
     request<Draft>(`${draftsPath(account)}/${draftId}`, {
@@ -1405,6 +1436,19 @@ export const api = {
 
   deleteAgentChat: (chatId: number) =>
     request<{ ok: true }>(`/agent/chats/${chatId}`, { method: "DELETE" }),
+
+  /** 把回复放进新草稿时能带的图和默认带的那几张 */
+  agentChatImages: (chatId: number) => request<AgentChatImages>(`/agent/chats/${chatId}/images`),
+
+  /**
+   * 把回复当描述，在这个账号建一个发布草稿。images 是带哪几张图（按顺序，最多 9 张），
+   * 只能是 agentChatImages 里的；不给是默认的那几张。去掉 emoji，不截断，不请求闲鱼
+   */
+  draftFromAgentChat: (account: string, chatId: number, body: { description: string; images?: string[] }) =>
+    request<Draft>(`/accounts/${encodeURIComponent(account)}/agent/chats/${chatId}/draft`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   orderOps: (account: string, orderId?: string) =>
     request<{ ops: OrderOp[] }>(

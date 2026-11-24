@@ -7,11 +7,14 @@ from fastapi.testclient import TestClient
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from test_pdd import GOODS_ID, payload
+from test_pdd import GOODS_ID, FakeCdn, payload
 from test_stash import card
 
 from app.agent import AgentService
 from app.api import create_app
+from app.pdd import PddGoods, PddImage
+from app.sources import Source, SourceImage
+from xianyu_core.credential import Credential
 from xianyu_core.guard import Guard
 
 CHATS = "/api/agent/chats"
@@ -41,9 +44,11 @@ def model():
 
 
 def make_client(tmp_path, accounts, platform, database_url, agent_model):
+    cdn = FakeCdn()  # 拼多多的每张图都不一样
+
     def route(request: httpx.Request) -> httpx.Response:
         if request.url.host.endswith("pddpic.com"):
-            return httpx.Response(200, content=png())
+            return cdn(request)
         return platform(request)
 
     app = create_app(
@@ -349,6 +354,193 @@ def test_create_validates_the_template(client, database_url):
     resp = client.post(CHATS, json={"template_id": tpl["id"]})
     assert (resp.status_code, resp.json()["code"]) == (404, "prompt_template_not_found")
     assert client.get(CHATS).json()["chats"] == []
+
+
+# ---- 回复放进发布草稿 ----
+
+
+def chat_draft(client, chat_id, account=UNB, **body):
+    return client.post(f"/api/accounts/{account}/agent/chats/{chat_id}/draft", json=body)
+
+
+def chat_images(client, chat_id):
+    resp = client.get(f"{CHATS}/{chat_id}/images")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_reply_becomes_a_new_draft_with_the_goods_images(client):
+    chat = client.post(CHATS, json={"pdd_goods_id": GOODS_ID, "stash_item_id": "1001"}).json()
+    found = chat_images(client, chat["id"])
+    # 主图 3 张、详情图 2 张（第一张和主图是同一张）、规格图 3 张；同行商品的图不在里面
+    assert [(img["origin"], img["kind"]) for img in found["images"]] == (
+        [("pdd", "主图")] * 3 + [("pdd", "详情图")] * 2 + [("pdd", "规格图")] * 3
+    )
+    assert all("pddpic.com" in img["url"] for img in found["images"])
+    shas = [img["sha"] for img in found["images"]]
+    assert found["selected"] == shas[:3]  # 默认和照货源建草稿一样，是主图
+
+    # 不截断：超过闲鱼字数上限的也照存，去掉 emoji 和首尾空白
+    text = "\n扬子 10 公斤洗衣机，九成新🎉\n" + "字" * 1600 + "\n"
+    resp = chat_draft(client, chat["id"], description=text)
+    assert resp.status_code == 200, resp.text
+    draft = resp.json()
+    assert draft["description"] == "扬子 10 公斤洗衣机，九成新\n" + "字" * 1600
+    assert [img["sha"] for img in draft["images"]] == shas[:3]
+    assert all(img["url"] is None for img in draft["images"])  # 还没传到闲鱼
+    assert (draft["pdd_goods_id"], draft["edit_item_id"], draft["item_id"]) == (
+        GOODS_ID,
+        None,
+        None,
+    )
+    listed = client.get(f"/api/accounts/{UNB}/drafts").json()["drafts"]
+    assert [d["id"] for d in listed] == [draft["id"]]
+    image = client.get(f"/api/accounts/{UNB}/drafts/{draft['id']}/images/{shas[0]}")
+    assert image.status_code == 200 and image.content[:2] == b"\xff\xd8"
+
+    # 挑的图按挑的顺序，详情图、规格图也能挑；也可以一张都不带
+    picked = [shas[6], shas[1], shas[4]]
+    draft = chat_draft(client, chat["id"], description="洗衣机", images=picked).json()
+    assert [img["sha"] for img in draft["images"]] == picked
+    assert chat_draft(client, chat["id"], description="洗衣机", images=[]).json()["images"] == []
+
+
+def test_new_draft_only_takes_downloaded_images_of_the_chats_goods(client):
+    chat = client.post(CHATS, json={"pdd_goods_id": GOODS_ID}).json()
+    shas = [img["sha"] for img in chat_images(client, chat["id"])["images"]]
+    # 自己传到别的草稿里的图也不行
+    other = client.post(f"/api/accounts/{UNB}/drafts").json()
+    uploaded = client.post(
+        f"/api/accounts/{UNB}/drafts/{other['id']}/images", content=png(color="blue")
+    ).json()["images"][0]["sha"]
+    for images, message in [
+        ([shas[0], uploaded], "只能用这个对话带的货源里已经下载下来的图片"),
+        (["0" * 64], "只能用这个对话带的货源里已经下载下来的图片"),
+        ([shas[0], shas[0]], "同一张图片选了两次"),
+        (shas + shas[:2], "最多 9 张图片"),
+    ]:
+        resp = chat_draft(client, chat["id"], description="洗衣机", images=images)
+        assert (resp.status_code, resp.json()["code"], resp.json()["message"]) == (
+            400,
+            "invalid",
+            message,
+        )
+    resp = chat_draft(client, chat["id"], description=" 🎉\n ")
+    assert (resp.status_code, resp.json()["message"]) == (400, "要放进草稿的文字是空的")
+    # 一个草稿也没建出来
+    assert [d["id"] for d in client.get(f"/api/accounts/{UNB}/drafts").json()["drafts"]] == [
+        other["id"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "attachments", [{"stash_item_id": "1001"}, {}], ids=["stash_only", "nothing"]
+)
+def test_chats_without_own_goods_make_drafts_without_images(client, attachments):
+    """同行的商品是别人在闲鱼上卖的，图不能拿来用；什么都没带的也没有图。"""
+    chat = client.post(CHATS, json=attachments).json()
+    assert chat_images(client, chat["id"]) == {"images": [], "selected": []}
+    draft = chat_draft(client, chat["id"], description="九成新洗衣机").json()
+    assert (draft["description"], draft["images"], draft["pdd_goods_id"]) == (
+        "九成新洗衣机",
+        [],
+        None,
+    )
+    resp = chat_draft(client, chat["id"], description="洗衣机", images=["0" * 64])
+    assert resp.status_code == 400
+
+
+def test_deleted_goods_leave_no_images(client):
+    chat = client.post(CHATS, json={"pdd_goods_id": GOODS_ID}).json()
+    client.delete(f"/api/pdd/goods/{GOODS_ID}")
+    assert chat_images(client, chat["id"]) == {"images": [], "selected": []}
+    draft = chat_draft(client, chat["id"], description="洗衣机").json()
+    assert (draft["images"], draft["pdd_goods_id"]) == ([], None)
+
+
+class Found:
+    """只有一件的假货源服务：拿哪个都是它。"""
+
+    def __init__(self, item):
+        self.item = item
+
+    def get(self, user_id, key):
+        return self.item
+
+    def find(self, user_id, key):
+        return self.item
+
+
+def test_goods_main_images_are_the_default_when_a_chat_also_has_a_source(database, database_url):
+    a, b, c, d = (ch * 64 for ch in "abcd")
+    goods = PddGoods(
+        "g1",
+        "洗衣机",
+        images=[
+            PddImage("https://img.pddpic.com/1.jpg", a, 800, 800),
+            PddImage("https://img.pddpic.com/2.jpg"),  # 没下载下来
+        ],
+        detail_images=[
+            PddImage("https://img.pddpic.com/1.jpg", a, 800, 800),
+            PddImage("https://img.pddpic.com/3.jpg", b, 750, 1000),
+        ],
+    )
+    source = Source(
+        "s1",
+        "https://example.com/a",
+        "民宿",
+        "正文",
+        images=[
+            SourceImage("https://example.com/b.jpg", b, 750, 1000),  # 和拼多多的详情图是同一张
+            SourceImage("https://example.com/c.jpg", c, 640, None),
+            SourceImage("https://example.com/d.jpg"),
+        ],
+    )
+    user_id = add_user(database_url)
+    service = AgentService(database, Found(goods), None, None, sources=Found(source))  # type: ignore[arg-type]
+    chat = service.create(user_id, pdd_goods_id="g1", stash_item_id=None, source_id="s1")
+    found = service.draft_images(user_id, chat.id)
+    assert [(img.sha, img.origin, img.kind) for img in found.images] == [
+        (a, "pdd", "主图"),
+        (b, "pdd", "详情图"),
+        (c, "source", "正文图"),
+    ]
+    assert (found.images[2].width, found.images[2].height) == (640, 0)
+    assert (found.selected, found.pdd_goods_id) == ([a], "g1")
+    assert [img.sha for img in found.pick([c, a])] == [c, a]
+    with pytest.raises(ValueError, match="下载下来的图片"):
+        found.pick([d])
+
+    # 拼多多的主图一张都没下载下来时，默认是第三方货源的图
+    goods.images[0].sha = None
+    found = service.draft_images(user_id, chat.id)
+    assert [img.sha for img in found.images] == [a, b, c]  # a 还是详情图
+    assert found.selected == [b, c]
+
+
+def test_drafts_from_chats_belong_to_their_user(client, accounts, database_url):
+    chat = client.post(CHATS, json={"pdd_goods_id": GOODS_ID}).json()
+    mine = chat_draft(client, chat["id"], description="洗衣机").json()
+    Credential(cookies={"unb": "77", "_m_h5_tk": "tok_1"}).save(accounts.root / "77.json")
+    add_user(database_url, "other", accounts=["77"])
+    sign_in(client, "other")
+
+    # 别人的对话：拿不到图，也建不了草稿
+    assert client.get(f"{CHATS}/{chat['id']}/images").status_code == 404
+    resp = chat_draft(client, chat["id"], account="77", description="洗衣机")
+    assert (resp.status_code, resp.json()["code"]) == (404, "agent_chat_not_found")
+    # 别人的账号：建不了草稿，也换不了那边草稿的描述
+    own = client.post(CHATS, json={}).json()
+    resp = chat_draft(client, own["id"], description="洗衣机")
+    assert (resp.status_code, resp.json()["code"]) == (404, "account_not_found")
+    resp = client.put(
+        f"/api/accounts/{UNB}/drafts/{mine['id']}/description", json={"description": "改"}
+    )
+    assert (resp.status_code, resp.json()["code"]) == (404, "account_not_found")
+    assert client.get("/api/accounts/77/drafts").json()["drafts"] == []
+
+    sign_in(client)
+    assert client.get(f"/api/accounts/{UNB}/drafts/{mine['id']}").json()["description"] == "洗衣机"
 
 
 def test_without_a_model_chats_are_read_only(tmp_path, accounts, platform, database_url):

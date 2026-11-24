@@ -6,6 +6,7 @@ import {
   Loader2Icon,
   PlusIcon,
   SendHorizontalIcon,
+  SquarePenIcon,
   Trash2Icon,
 } from "lucide-react"
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react"
@@ -43,6 +44,7 @@ import { errorMessage, type AgentChat, type AgentChatSummary, type AgentMessage 
 import { chatTime, count, timeAgo, yuan } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+import { ApplyToDraftDialog } from "./apply-dialog"
 import { IconThumb } from "./icon-thumb"
 import { NewChatDialog } from "./new-chat-dialog"
 import { useAgentChat, useAgentChats, useAgentReply, useDeleteAgentChat, type PendingTurn } from "./queries"
@@ -158,36 +160,59 @@ function Attachment({
   )
 }
 
-function Bubble({ message, live }: { message: Pick<AgentMessage, "role" | "text">; live?: boolean }) {
+function Bubble({
+  message,
+  live,
+  latest,
+  onApply,
+}: {
+  message: Pick<AgentMessage, "role" | "text">
+  live?: boolean
+  /** 最新的一条回复：下面的操作一直显示，别的鼠标移上去才显示 */
+  latest?: boolean
+  /** 把这条回复用到发布草稿 */
+  onApply?: (text: string) => void
+}) {
   const mine = message.role === "user"
   const copy = () =>
     navigator.clipboard.writeText(message.text).then(
       () => toast.success("已复制"),
       () => toast.error("复制失败，手动选中文字复制"),
     )
+  const bubble = (
+    <div
+      className={cn(
+        "rounded-2xl px-3 py-2 text-sm leading-6 break-words whitespace-pre-wrap",
+        mine ? "max-w-[75%] rounded-br-md bg-brand text-brand-foreground" : "max-w-[85%] rounded-bl-md bg-muted",
+      )}
+    >
+      {message.text}
+      {live && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-foreground/60 align-[-2px]" aria-hidden />}
+    </div>
+  )
+  if (mine || live) {
+    return <div className={cn("flex", mine ? "justify-end" : "justify-start")}>{bubble}</div>
+  }
   return (
-    <div className={cn("group flex items-end gap-1.5", mine ? "justify-end" : "justify-start")}>
+    <div className="group flex flex-col items-start gap-1">
+      {bubble}
       <div
         className={cn(
-          "rounded-2xl px-3 py-2 text-sm leading-6 break-words whitespace-pre-wrap",
-          mine ? "max-w-[75%] rounded-br-md bg-brand text-brand-foreground" : "max-w-[85%] rounded-bl-md bg-muted",
+          "flex items-center gap-0.5 transition-opacity focus-within:opacity-100 group-hover:opacity-100",
+          !latest && "opacity-0",
         )}
       >
-        {message.text}
-        {live && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-foreground/60 align-[-2px]" aria-hidden />}
-      </div>
-      {!mine && !live && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => void copy()}
-          aria-label="复制这条回复"
-          title="复制"
-        >
+        <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => void copy()}>
           <CopyIcon />
+          复制
         </Button>
-      )}
+        {onApply && (
+          <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => onApply(message.text)}>
+            <SquarePenIcon />
+            用到草稿
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
@@ -254,15 +279,18 @@ function Messages({
   pending,
   onStarter,
   canSend,
+  onApply,
 }: {
   chat: AgentChat
   pending: PendingTurn | null
   onStarter: (text: string) => void
   canSend: boolean
+  onApply: (text: string) => void
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const messages = chat.messages
+  const latest = pending ? -1 : messages.findLastIndex((m) => m.role === "assistant")
 
   // 新消息、回复一段段出来时跟到底；往上翻着看的时候不打扰
   useLayoutEffect(() => {
@@ -302,7 +330,7 @@ function Messages({
           return (
             <div key={`${i}-${m.at}`} className="flex flex-col gap-2.5">
               {gap && <div className="pt-2 text-center text-xs text-muted-foreground">{chatTime(m.at)}</div>}
-              <Bubble message={m} />
+              <Bubble message={m} latest={i === latest} onApply={onApply} />
             </div>
           )
         })}
@@ -374,6 +402,8 @@ function ChatPanel({
   const reply = useAgentReply(summary.id)
   const [draft, setDraft] = useState("")
   const [deleting, setDeleting] = useState(false)
+  // 要用到发布草稿的那条回复
+  const [applying, setApplying] = useState<string | null>(null)
   const chat = detail.data
 
   const send = async (text: string) => {
@@ -402,6 +432,7 @@ function ChatPanel({
         pending={reply.pending}
         canSend={!unavailable && !reply.busy}
         onStarter={(text) => void send(text)}
+        onApply={setApplying}
       />
     )
   }
@@ -473,6 +504,7 @@ function ChatPanel({
         onSend={(text) => void send(text)}
       />
       {deleting && <DeleteChatDialog chat={summary} onClose={() => setDeleting(false)} onDeleted={onDeleted} />}
+      {applying != null && <ApplyToDraftDialog chat={summary} reply={applying} onClose={() => setApplying(null)} />}
     </div>
   )
 }

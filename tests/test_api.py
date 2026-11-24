@@ -550,6 +550,71 @@ def test_draft_errors(client, platform):
     assert client.get(drafts_url()).json() == {"drafts": []}
 
 
+def test_replace_only_the_description_of_a_draft(client, platform):
+    """AI 助手的回复放进已有的草稿：只换描述，图片、价格、发货地不动；不截断，去掉 emoji。"""
+    draft = client.post(drafts_url()).json()
+    url = drafts_url(f"/{draft['id']}")
+    sha = client.post(f"{url}/images", content=png()).json()["images"][0]["sha"]
+    [home, _] = client.get(f"/api/accounts/{UNB}/publish/addresses").json()["addresses"]
+    form = {"description": "台灯", "price": "49", "images": [sha], "address": home["address"]}
+    before = client.put(url, json=form).json()
+
+    text = "\n宜家落地灯🎉 九成新\n" + "字" * 1600 + "\n\n"
+    resp = client.put(f"{url}/description", json={"description": text})
+    assert resp.status_code == 200, resp.text
+    after = resp.json()
+    assert after["description"] == "宜家落地灯 九成新\n" + "字" * 1600
+    assert after["updated_at"] >= before["updated_at"]
+    unchanged = ("price_cent", "images", "address", "post_mode", "category")
+    assert {k: after[k] for k in unchanged} == {k: before[k] for k in unchanged}
+    assert client.get(url).json()["description"] == after["description"]
+
+    resp = client.put(f"{url}/description", json={"description": " 🎉 \n"})
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    resp = client.put(drafts_url("/999/description"), json={"description": "台灯"})
+    assert (resp.status_code, resp.json()["code"]) == (404, "draft_not_found")
+
+
+def test_pending_drafts_include_edit_drafts_until_submitted(client, platform):
+    client.post(items_url("/sync"), json={})
+    new = client.post(drafts_url()).json()
+    edit = client.post(items_url("/1001/edit")).json()
+    # 发布页的列表没有编辑草稿；还没发的列表都有，最近改过的在前
+    assert [d["id"] for d in client.get(drafts_url()).json()["drafts"]] == [new["id"]]
+    pending = client.get(drafts_url(), params={"pending": "true"}).json()["drafts"]
+    assert [d["id"] for d in pending] == [edit["id"], new["id"]]
+
+    url = drafts_url(f"/{edit['id']}")
+    draft = client.put(f"{url}/description", json={"description": "洗衣机 九成新"}).json()
+    assert (draft["description"], draft["price_cent"]) == ("洗衣机 九成新", edit["price_cent"])
+    draft = client.post(f"{url}/publish").json()
+    assert draft["item_id"] == "1001"
+    assert platform.items["1001"]["title"] == "洗衣机 九成新"
+    # 已经提交到闲鱼的不能再换，也不在还没发的列表里
+    resp = client.put(f"{url}/description", json={"description": "再改"})
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    assert "已经提交到闲鱼了" in resp.json()["message"]
+    pending = client.get(drafts_url(), params={"pending": "true"}).json()["drafts"]
+    assert [d["id"] for d in pending] == [new["id"]]
+
+
+def test_published_draft_description_cannot_be_replaced(client, platform):
+    draft = client.post(drafts_url()).json()
+    url = drafts_url(f"/{draft['id']}")
+    sha = client.post(f"{url}/images", content=png()).json()["images"][0]["sha"]
+    [home, _] = client.get(f"/api/accounts/{UNB}/publish/addresses").json()["addresses"]
+    form = {"description": "宜家落地灯", "price": "49", "images": [sha], "address": home["address"]}
+    client.put(url, json=form)
+    client.post(f"{url}/recommend")
+    assert client.post(f"{url}/publish").json()["item_id"] == "9001"
+
+    resp = client.put(f"{url}/description", json={"description": "换一段"})
+    assert (resp.status_code, resp.json()["code"]) == (400, "invalid")
+    assert "已经发布了" in resp.json()["message"]
+    assert client.get(url).json()["description"] == "宜家落地灯"
+    assert client.get(drafts_url(), params={"pending": "true"}).json()["drafts"] == []
+
+
 def test_other_users_cannot_see_drafts(client, database_url):
     draft = client.post(drafts_url()).json()
     add_user(database_url, "other")

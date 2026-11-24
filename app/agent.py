@@ -15,6 +15,10 @@
 对话按管理后台的用户存（agent_chats 表），消息历史存 PydanticAI 的原样（ModelMessagesTypeAdapter），
 下一轮原样带回去，模型的推理（加密的）也一起带回。一轮回复完整收到了才存；中途出错、页面关掉，这一轮整个不算。
 货源、暂存、模板每轮现读：重新导入、重新暂存、改过模板的，下一轮看到的就是新的；删掉了就告诉模型已经删了。
+
+回复写好了，卖家自己把它（删改以后）放进发布草稿：替换已有草稿的描述，或者新建一个草稿（app/api.py）。
+新建时能带的图只有对话带的拼多多、第三方货源里已经下载下来的（`AgentService.draft_images`），
+暂存的同行商品是别人在闲鱼上卖的，图不带。
 """
 
 from __future__ import annotations
@@ -52,13 +56,13 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model, infer_model
 
 from app.db import Database, Row
-from app.pdd import PddGoods, PddGoodsNotFoundError, PddService
+from app.pdd import PddGoods, PddGoodsNotFoundError, PddImage, PddService
 from app.prompt_templates import PromptTemplate, PromptTemplateService
-from app.sources import Source, SourceService
+from app.sources import Source, SourceImage, SourceService
 from app.stash import StashedItem, StashService
 from xianyu_core.clock import beijing_time
 from xianyu_core.item import cent_to_yuan
-from xianyu_core.publish import MAX_DESC
+from xianyu_core.publish import MAX_DESC, MAX_IMAGES
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +165,40 @@ def visible_messages(messages: list[ModelMessage]) -> list[ChatMessage]:
             if text:
                 shown.append(ChatMessage("assistant", text, message.timestamp.timestamp()))
     return shown
+
+
+@dataclass
+class ChatImage:
+    """对话带的货源里已经下载下来的一张图，把回复放进新草稿时可以带上。"""
+
+    sha: str
+    width: int
+    height: int
+    url: str  # 在原网站上的地址：拼多多的 CDN、第三方网页上的
+    origin: str  # pdd 拼多多货源，source 第三方货源
+    kind: str  # 主图、详情图、规格图、正文图
+
+
+@dataclass
+class ChatImages:
+    """把回复放进新草稿时能带的图（同一张只出现一次）和默认带哪几张。"""
+
+    images: list[ChatImage]
+    selected: list[str]  # 默认带的 sha，最多 MAX_IMAGES 张
+    pdd_goods_id: str | None  # 带的拼多多货源（还在的），新草稿记下照哪个货源建的
+
+    def pick(self, shas: list[str] | None) -> list[ChatImage]:
+        """卖家挑的图（按顺序），不挑是默认的。只能是这个对话带的货源里下载下来的。"""
+        if shas is None:
+            shas = self.selected
+        if len(shas) > MAX_IMAGES:
+            raise ValueError(f"最多 {MAX_IMAGES} 张图片")
+        if len(set(shas)) != len(shas):
+            raise ValueError("同一张图片选了两次")
+        by_sha = {img.sha: img for img in self.images}
+        if any(sha not in by_sha for sha in shas):
+            raise ValueError("只能用这个对话带的货源里已经下载下来的图片")
+        return [by_sha[sha] for sha in shas]
 
 
 @dataclass
@@ -391,6 +429,45 @@ class AgentService:
             return self._pdd.get(user_id, goods_id)
         except PddGoodsNotFoundError:
             return None
+
+    def draft_images(self, user_id: int, chat_id: int) -> ChatImages:
+        """把回复放进新草稿时能带的图：对话带的拼多多货源、第三方货源里已经下载下来的。
+        默认带的和照货源建草稿一样：拼多多的主图，没有就是第三方货源的图，都是前 9 张。
+
+        暂存的同行商品是别人在闲鱼上卖的，图不带；货源删掉了、图没下载下来的也没有。
+        """
+        chat = self.get(user_id, chat_id)
+        images: list[ChatImage] = []
+        seen: set[str] = set()
+
+        def add(img: PddImage | SourceImage, origin: str, kind: str) -> None:
+            if img.sha and img.sha not in seen:
+                seen.add(img.sha)
+                images.append(
+                    ChatImage(img.sha, img.width or 0, img.height or 0, img.url, origin, kind)
+                )
+
+        goods = self._goods(user_id, chat.pdd_goods_id)
+        if goods:
+            for img in goods.images:
+                add(img, "pdd", "主图")
+            for img in goods.detail_images:
+                add(img, "pdd", "详情图")
+            for sku in goods.skus:
+                if sku.thumb:
+                    add(sku.thumb, "pdd", "规格图")
+        source = (
+            self._sources.find(user_id, chat.source_id)
+            if self._sources and chat.source_id
+            else None
+        )
+        if source:
+            for img in source.images:
+                add(img, "source", "正文图")
+        main = [img.sha for img in goods.images if img.sha] if goods else []
+        others = [img.sha for img in source.images if img.sha] if source else []
+        selected = list(dict.fromkeys(main or others))[:MAX_IMAGES]
+        return ChatImages(images, selected, goods.goods_id if goods else None)
 
     def delete(self, user_id: int, chat_id: int) -> None:
         cursor = self._db.execute(

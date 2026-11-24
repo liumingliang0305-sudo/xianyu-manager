@@ -197,6 +197,15 @@ class DraftService:
         )
         return [Draft.from_row(r) for r in rows]
 
+    def pending(self, account_id: str) -> list[Draft]:
+        """还没发布（编辑的是还没提交）的草稿，编辑已有商品的也在里面，最近改过的在前。"""
+        rows = self._db.execute(
+            "SELECT * FROM drafts WHERE account_id = %s AND item_id IS NULL"
+            " ORDER BY updated_at DESC, id DESC",
+            (account_id,),
+        )
+        return [Draft.from_row(r) for r in rows]
+
     def get(self, account_id: str, draft_id: int) -> Draft:
         row = self._db.execute(
             "SELECT * FROM drafts WHERE account_id = %s AND id = %s", (account_id, draft_id)
@@ -287,6 +296,15 @@ class DraftService:
                 time.time(),
                 draft_id,
             ),
+        )
+        return self.get(account_id, draft_id)
+
+    def set_description(self, account_id: str, draft_id: int, description: str) -> Draft:
+        """只换描述，别的不动（把 AI 助手写的文案放进已有的草稿）。不截断，超过字数的在发布页改。"""
+        self._editable(account_id, draft_id)
+        self._db.execute(
+            "UPDATE drafts SET description = %s, updated_at = %s WHERE id = %s",
+            (strip_emoji(description), time.time(), draft_id),
         )
         return self.get(account_id, draft_id)
 
